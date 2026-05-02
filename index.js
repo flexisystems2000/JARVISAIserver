@@ -7,22 +7,91 @@ const {
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
 const express = require('express');
+const mongoose = require('mongoose');
 
 const app = express();
 const port = process.env.PORT || 3000;
-
 app.use(express.urlencoded({ extended: true }));
 
 // --- CONFIGURATION ---
 const OWNER_NUMBER = "2347051768946"; 
 const BOT_NAME = "JARVIS AI";
 const POWERED_BY = "Flexi Digital Academy";
+const MONGO_URI = "mongodb+srv://JarvisAI:flexisystems2000@cluster0.7g5odvt.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 
-// --- IN-MEMORY DATABASE & CACHE ---
-const warns = {}; 
-const floodTracker = {}; 
+// --- DATABASE SCHEMAS ---
+const WarnSchema = new mongoose.Schema({ userId: String, count: Number });
+const Warn = mongoose.model('Warn', WarnSchema);
+
+const QueueSchema = new mongoose.Schema({ 
+    jid: String, 
+    target: String, 
+    type: String, 
+    status: { type: String, default: 'pending' },
+    retries: { type: Number, default: 0 }
+});
+const Queue = mongoose.model('Queue', QueueSchema);
+
+// --- DATABASE CONNECTION ---
+mongoose.connect(MONGO_URI)
+    .then(() => console.log("✅ MongoDB Connected (Strict Admin Mode Active)"))
+    .catch(err => console.log("❌ DB Error:", err));
+
 const groupCache = new Map(); 
 let sock; 
+let isProcessing = false;
+
+// --- QUEUE ---
+async function processQueue() {
+    if (isProcessing) return;
+    isProcessing = true;
+    
+    let task = await Queue.findOne({ status: 'pending' });
+
+    while (task) {
+
+        if (!sock?.user) {
+            console.log("⏸️ Socket not ready, pausing queue...");
+            break;
+        }
+
+        try {
+            const code = await sock.groupInviteCode(task.jid);
+            const inviteLink = `https://chat.whatsapp.com/${code}`;
+            
+            await sock.sendMessage(task.target, { 
+                text: `Hello! You were invited to *${BOT_NAME}* group, but your privacy settings blocked the auto-add.\n\nJoin here: ${inviteLink}` 
+            });
+
+            await sock.sendMessage(task.jid, { 
+                text: "📥 Privacy block detected. Invite sent to DM successfully." 
+            });
+            
+            await Queue.deleteOne({ _id: task._id }); 
+
+        } catch (e) {
+            console.log("Queue Task Failed:", e);
+
+            if (task.retries < 3) {
+                await Queue.updateOne(
+                    { _id: task._id },
+                    { status: 'pending', $inc: { retries: 1 } }
+                );
+            } else {
+                await Queue.updateOne(
+                    { _id: task._id },
+                    { status: 'failed' }
+                );
+            }
+        }
+
+        task = await Queue.findOne({ status: 'pending' });
+
+        await new Promise(r => setTimeout(r, 400));
+    }
+
+    isProcessing = false;
+}
 
 async function startJARVIS() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -35,10 +104,8 @@ async function startJARVIS() {
         logger: pino({ level: 'silent' }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 10000, 
         emitOwnEvents: true,
-        generateHighQualityLinkPreview: true,
         syncFullHistory: false
     });
 
@@ -46,19 +113,20 @@ async function startJARVIS() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
+
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                console.log("🔄 Connection lost. Restarting engine...");
-                startJARVIS();
-            }
-        } else if (connection === 'open') {
-            console.log(`✅ ${BOT_NAME} is active for ${POWERED_BY}`);
+            if (shouldReconnect) startJARVIS();
+        } 
+        
+        else if (connection === 'open') {
+            console.log(`✅ ${BOT_NAME} Connected`);
+
+            processQueue();
+
             setInterval(() => {
-                if (sock.user) {
-                    sock.sendPresenceUpdate('available');
-                }
-            }, 60000); 
+                processQueue();
+            }, 3000);
         }
     });
 
@@ -74,7 +142,6 @@ async function startJARVIS() {
         const command = text.split(/ +/)[0];
         const args = text.split(/ +/).slice(1);
 
-        // --- TAG REACTION ---
         const botNumber = sock.user.id.split(':')[0];
         const mentions = m.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
         if (mentions.some(v => v.includes(botNumber)) || text.includes("jarvis")) {
@@ -91,118 +158,166 @@ async function startJARVIS() {
         }
 
         const admins = metadata.participants.filter(p => p.admin).map(p => p.id);
-        const isOwner = sender.includes(OWNER_NUMBER);
-        const isStaff = isOwner || admins.includes(sender);
+        const isStaff = sender.includes(OWNER_NUMBER) || admins.includes(sender);
 
         if (isStaff) {
-            // 1. ADD MEMBER (CRASH-PROOF DM VERSION)
+
             if (command === "!add") {
-                if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
+                if (!args[0]) return sock.sendMessage(jid, { text: "Provide a number!" });
+
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+
                 try {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    const response = await sock.groupParticipantsUpdate(jid, [target], "add");
-                    const status = response[0]?.status;
+                    const resp = await sock.groupParticipantsUpdate(jid, [target], "add");
 
-                    if (status === "200") {
-                        return sock.sendMessage(jid, { text: "✅ Student added successfully." });
-                    } else if (status === "403" || status === "408" || status === "409") {
-                        // Notify group FIRST to lock the session
-                        await sock.sendMessage(jid, { text: "⚠️ *Privacy Block!* Sending the link to their DM now..." });
+                    if (resp[0]?.status === "200") {
+                        return sock.sendMessage(jid, { text: "✅ Student added." });
+                    }
 
-                        // Background task for DM
-                        const handleDM = async () => {
-                            try {
-                                const code = await sock.groupInviteCode(jid);
-                                const inviteLink = `https://chat.whatsapp.com/${code}`;
-                                await sock.sendMessage(target, { 
-                                    text: `Hello! You were invited to *${metadata.subject}*.\n\n*Join here:* \n${inviteLink}`
-                                });
-                                // Using a small delay before group confirmation to prevent socket clash
-                                await new Promise(r => setTimeout(r, 1000));
-                                sock.sendMessage(jid, { text: "📥 *Status:* Invite sent to DM successfully." });
-                            } catch (dmErr) {
-                                console.log("DM_FAILED", dmErr);
-                            }
-                        };
-                        handleDM(); 
+                    if (["403", "408", "409"].includes(resp[0]?.status)) {
+                        await sock.sendMessage(jid, { 
+                            text: "⚠️ Privacy Block! Sending DM link via Queue..." 
+                        });
+
+                        const exists = await Queue.findOne({ jid, target, status: 'pending' });
+                        if (exists) return;
+
+                        await Queue.create({ jid, target, type: 'SEND_INVITE' });
+
+                        processQueue();
                         return;
-                    } else {
-                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
                     }
+
                 } catch (e) { 
-                    return sock.sendMessage(jid, { text: "❌ Error: System busy. Try again." }); 
+                    return sock.sendMessage(jid, { text: "❌ Error processing add." }); 
                 }
             }
 
-            // 2. KICK MEMBER
             if (command === "!kick") {
-                let target;
-                if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
-                    target = m.message.extendedTextMessage.contextInfo.mentionedJid[0];
-                } else if (m.message.extendedTextMessage?.contextInfo?.quotedMessage) {
-                    target = m.message.extendedTextMessage.contextInfo.participant;
-                } else if (args[0]) {
-                    target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
-                }
-                if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply with !kick" });
-                if (target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Cannot kick the Boss." });
+                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || 
+                             m.message.extendedTextMessage?.contextInfo?.participant ||
+                             (args[0] ? args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net" : null);
+                
+                if (!target || target.includes(OWNER_NUMBER)) return;
 
-                try {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    const response = await sock.groupParticipantsUpdate(jid, [target], "remove");
-                    if (response[0]?.status === "200") {
-                        return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
-                    } else {
-                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0]?.status || 'Unknown'}` });
-                    }
-                } catch (e) { 
-                    return sock.sendMessage(jid, { text: "❌ Error: Failed to kick." }); 
-                }
-            }
+                await sock.groupParticipantsUpdate(jid, [target], "remove");
 
-            // 3. GINFO
-            if (command === "!ginfo") {
-                try {
-                    let infoMetadata = await sock.groupMetadata(jid);
-                    let info = `*📂 ${BOT_NAME} REPORT*\n\n*Group:* ${infoMetadata.subject}\n*Members:* ${infoMetadata.participants.length}\n*Admins:* ${infoMetadata.participants.filter(p => p.admin).length}\n*Status:* Active 🟢`;
-                    return sock.sendMessage(jid, { text: info });
-                } catch (e) {
-                    return sock.sendMessage(jid, { text: "❌ Error fetching group info." });
-                }
+                return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
             }
-            return; 
         }
 
-        // --- RULES ---
         const punish = async (reason) => {
-            warns[sender] = (warns[sender] || 0) + 1;
-            if (warns[sender] >= 3) {
-                await sock.sendMessage(jid, { text: `🚫 @${sender.split('@')[0]} removed for violations.`, mentions: [sender] });
+            let userWarn = await Warn.findOne({ userId: sender });
+
+            if (!userWarn) userWarn = await Warn.create({ userId: sender, count: 0 });
+            
+            userWarn.count += 1;
+            await userWarn.save();
+
+            if (userWarn.count >= 3) {
+                await sock.sendMessage(jid, { 
+                    text: `🚫 @${sender.split('@')[0]} kicked for 3 strikes. Record cleared for fresh start.`, 
+                    mentions: [sender] 
+                });
+
                 await sock.groupParticipantsUpdate(jid, [sender], "remove");
-                delete warns[sender];
+
+                await Warn.deleteOne({ userId: sender });
+
             } else {
-                await sock.sendMessage(jid, { text: `⚠️ *STRIKE ${warns[sender]}/3*\n@${sender.split('@')[0]}\n*Reason:* ${reason}`, mentions: [sender] });
+                await sock.sendMessage(jid, { 
+                    text: `⚠️ *STRIKE ${userWarn.count}/3*\n@${sender.split('@')[0]}\n*Reason:* ${reason}`, 
+                    mentions: [sender] 
+                });
             }
         };
 
         const badWords = ["are you okay", "you are mad", "your mother", "your father", "rubbish", "ode", "mumu", "foolish"];
+
         if (badWords.some(word => text.includes(word))) {
-            await sock.sendMessage(jid, { delete: m.key });
+            await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
             return punish("Abusive language");
         }
 
         const hasLink = /https?:\/\/\S+|www\.\S+|wa\.me\/\S+/.test(text);
-        if (hasLink || (text.includes("status") && (text.includes("view") || text.includes("check")))) {
-            await sock.sendMessage(jid, { delete: m.key });
+
+        if (hasLink || (text.includes("status") && text.includes("view"))) {
+            await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
             return punish("Unauthorized links/ads");
         }
     });
 }
 
-// --- WEB DASHBOARD ---
+// --- NEW APIs ---
+app.get('/stats', async (req, res) => {
+    res.json({
+        groups: groupCache.size,
+        users: await Warn.countDocuments(),
+        pending: await Queue.countDocuments({ status: 'pending' }),
+        failed: await Queue.countDocuments({ status: 'failed' }),
+        bot: sock?.user ? "Online" : "Offline"
+    });
+});
+
+app.get('/queue', async (req, res) => {
+    res.json(await Queue.find().sort({ _id: -1 }).limit(10));
+});
+
+app.get('/clear-failed', async (req, res) => {
+    await Queue.deleteMany({ status: 'failed' });
+    res.send("Cleared");
+});
+
+// --- DASHBOARD ---
 app.get('/', (req, res) => {
-    res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${BOT_NAME}</title><style>body{background:#0f172a;color:white;text-align:center;padding:50px;font-family:sans-serif;}.card{background:#1e293b;padding:40px;border-radius:20px;border:1px solid #38bdf8;display:inline-block;max-width:400px;width:100%;}h1{color:#38bdf8;}input{padding:15px;margin:10px;width:80%;border-radius:10px;border:none;}button{background:#38bdf8;padding:15px;width:85%;border-radius:10px;font-weight:bold;cursor:pointer;}</style></head><body><div class="card"><h1>🤖 ${BOT_NAME}</h1><p>${POWERED_BY}</p><form action="/pair" method="POST"><input name="number" placeholder="234..." required /><button type="submit">Get Code</button></form></div></body></html>`);
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${BOT_NAME}</title>
+<style>
+body{background:#020617;color:white;text-align:center;padding:30px;font-family:sans-serif;}
+.card{background:#1e293b;padding:25px;border-radius:15px;border:1px solid #38bdf8;max-width:500px;margin:auto;}
+h1{color:#38bdf8;}
+input{padding:12px;margin:10px;width:80%;border-radius:8px;border:none;}
+button{background:#38bdf8;padding:12px;width:85%;border-radius:8px;font-weight:bold;cursor:pointer;}
+</style>
+</head>
+<body>
+
+<div class="card">
+<h1>🤖 ${BOT_NAME}</h1>
+<p>${POWERED_BY}</p>
+
+<form action="/pair" method="POST">
+<input name="number" placeholder="234..." required />
+<button type="submit">Get Code</button>
+</form>
+
+<div id="stats">Loading...</div>
+<div id="queue"></div>
+
+<button onclick="clearQ()">Clear Failed</button>
+</div>
+
+<script>
+async function load(){
+    const s = await fetch('/stats').then(r=>r.json());
+    document.getElementById('stats').innerHTML =
+    "Status: "+s.bot+"<br>Groups: "+s.groups+"<br>Users: "+s.users+"<br>Pending: "+s.pending+"<br>Failed: "+s.failed;
+
+    const q = await fetch('/queue').then(r=>r.json());
+    document.getElementById('queue').innerHTML = q.map(x=>"• "+x.target+" ("+x.status+")").join("<br>");
+}
+
+function clearQ(){ fetch('/clear-failed'); }
+
+setInterval(load,3000);
+load();
+</script>
+
+</body>
+</html>`);
 });
 
 app.post('/pair', async (req, res) => {
@@ -210,11 +325,9 @@ app.post('/pair', async (req, res) => {
     try {
         const code = await sock.requestPairingCode(number);
         res.send(`<body style="background:#0f172a;color:white;text-align:center;padding:100px;"><h1>CODE: ${code}</h1></body>`);
-    } catch (e) { res.send("<h1>Error - Session Busy</h1>"); }
+    } catch (e) { 
+        res.send("<h1>Error - Session Busy</h1>"); 
+    }
 });
 
-app.listen(port, "0.0.0.0", () => {
-    console.log(`🌐 Dashboard online on port ${port}`);
-    startJARVIS();
-});
-                            
+app.listen(port, () => startJARVIS());
