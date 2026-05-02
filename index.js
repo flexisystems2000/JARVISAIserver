@@ -99,31 +99,34 @@ async function startJARVIS() {
 
         // --- STAFF COMMANDS ---
         if (isStaff) {
-            // 1. ADD MEMBER (RUGGED VERSION WITH AUTO-INVITE)
+            // 1. ADD MEMBER (STABILIZED VERSION)
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 try {
+                    await new Promise(resolve => setTimeout(resolve, 500));
                     const response = await sock.groupParticipantsUpdate(jid, [target], "add");
-                    if (response[0].status === "200") {
+                    const status = response[0]?.status;
+
+                    if (status === "200") {
                         return sock.sendMessage(jid, { text: "✅ Student added successfully." });
-                    } else if (response[0].status === "403") {
-                        // Handle Privacy Settings by sending the invite link
+                    } else if (status === "403" || status === "408" || status === "409") {
                         const code = await sock.groupInviteCode(jid);
                         const inviteLink = `https://chat.whatsapp.com/${code}`;
                         return sock.sendMessage(jid, { 
-                            text: `⚠️ *Privacy Block!* \nI can't add @${target.split('@')[0]} directly due to their settings. \n\n*Please use this link to join:* \n${inviteLink}`,
+                            text: `⚠️ *Notice!* \nI can't add @${target.split('@')[0]} directly (Privacy/Status). \n\n*Please use this link to join:* \n${inviteLink}`,
                             mentions: [target]
                         });
                     } else {
-                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0].status}` });
+                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
                     }
                 } catch (e) { 
+                    console.error("ADD_ERROR:", e);
                     return sock.sendMessage(jid, { text: "❌ Error: Ensure I am an Admin and the number is correct." }); 
                 }
             }
 
-            // 2. KICK MEMBER (RUGGED VERSION)
+            // 2. KICK MEMBER (STABILIZED VERSION)
             if (command === "!kick") {
                 let target;
                 if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
@@ -137,13 +140,19 @@ async function startJARVIS() {
                 if (target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Cannot kick the Boss." });
 
                 try {
+                    // Small delay to stabilize connection
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
                     const response = await sock.groupParticipantsUpdate(jid, [target], "remove");
-                    if (response[0].status === "200") {
+                    const status = response[0]?.status; // Optional chaining prevents crashes
+
+                    if (status === "200") {
                         return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
                     } else {
-                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0].status}` });
+                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
                     }
                 } catch (e) { 
+                    console.error("KICK_ERROR:", e);
                     return sock.sendMessage(jid, { text: "❌ Error: Failed to kick. Check Admin status." }); 
                 }
             }
@@ -198,4 +207,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-                        
+        
