@@ -35,7 +35,7 @@ async function startJARVIS() {
         logger: pino({ level: 'silent' }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         // RUGGED CONNECTION FIXES
-        connectTimeoutMs: 60000,
+        connectTimeoutMs: 12000,
         defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 10000, 
         emitOwnEvents: true,
