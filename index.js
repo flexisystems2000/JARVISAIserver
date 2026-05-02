@@ -99,7 +99,7 @@ async function startJARVIS() {
 
         // --- STAFF COMMANDS ---
         if (isStaff) {
-            // 1. ADD MEMBER (RUGGED VERSION)
+            // 1. ADD MEMBER (RUGGED VERSION WITH AUTO-INVITE)
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
@@ -108,7 +108,13 @@ async function startJARVIS() {
                     if (response[0].status === "200") {
                         return sock.sendMessage(jid, { text: "✅ Student added successfully." });
                     } else if (response[0].status === "403") {
-                        return sock.sendMessage(jid, { text: "❌ Privacy settings prevent direct adding." });
+                        // Handle Privacy Settings by sending the invite link
+                        const code = await sock.groupInviteCode(jid);
+                        const inviteLink = `https://chat.whatsapp.com/${code}`;
+                        return sock.sendMessage(jid, { 
+                            text: `⚠️ *Privacy Block!* \nI can't add @${target.split('@')[0]} directly due to their settings. \n\n*Please use this link to join:* \n${inviteLink}`,
+                            mentions: [target]
+                        });
                     } else {
                         return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0].status}` });
                     }
@@ -192,4 +198,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-            
+                        
