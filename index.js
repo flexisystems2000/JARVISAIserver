@@ -140,11 +140,9 @@ async function startJARVIS() {
                 if (target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Cannot kick the Boss." });
 
                 try {
-                    // Small delay to stabilize connection
                     await new Promise(resolve => setTimeout(resolve, 500));
-                    
                     const response = await sock.groupParticipantsUpdate(jid, [target], "remove");
-                    const status = response[0]?.status; // Optional chaining prevents crashes
+                    const status = response[0]?.status;
 
                     if (status === "200") {
                         return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
@@ -157,9 +155,31 @@ async function startJARVIS() {
                 }
             }
 
+            // 3. GINFO (STABILIZED VERSION)
             if (command === "!ginfo") {
-                let info = `*📂 ${BOT_NAME} REPORT*\n\n*Group:* ${metadata.subject}\n*Members:* ${metadata.participants.length}\n*Admins:* ${admins.length}`;
-                return sock.sendMessage(jid, { text: info });
+                try {
+                    // Fresh fetch to avoid using empty cache
+                    let infoMetadata = await sock.groupMetadata(jid);
+                    
+                    if (!infoMetadata) {
+                        return sock.sendMessage(jid, { text: "❌ Metadata not ready. Please try again." });
+                    }
+
+                    let groupName = infoMetadata.subject || "Unknown Group";
+                    let memberCount = infoMetadata.participants?.length || 0;
+                    let adminCount = infoMetadata.participants?.filter(p => p.admin).length || 0;
+
+                    let info = `*📂 ${BOT_NAME} REPORT*\n\n` +
+                               `*Group:* ${groupName}\n` +
+                               `*Members:* ${memberCount}\n` +
+                               `*Admins:* ${adminCount}\n` +
+                               `*Status:* Active 🟢`;
+
+                    return sock.sendMessage(jid, { text: info });
+                } catch (e) {
+                    console.error("GINFO_ERROR:", e);
+                    return sock.sendMessage(jid, { text: "❌ Error fetching group info. Ensure I am in the group." });
+                }
             }
             return; 
         }
@@ -207,4 +227,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-        
+                
