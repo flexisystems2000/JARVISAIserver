@@ -35,7 +35,7 @@ async function startJARVIS() {
         logger: pino({ level: 'silent' }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         // RUGGED CONNECTION FIXES
-        connectTimeoutMs: 12000,
+        connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 10000, 
         emitOwnEvents: true,
@@ -99,15 +99,25 @@ async function startJARVIS() {
 
         // --- STAFF COMMANDS ---
         if (isStaff) {
+            // 1. ADD MEMBER (RUGGED VERSION)
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 try {
-                    await sock.groupParticipantsUpdate(jid, [target], "add");
-                    return sock.sendMessage(jid, { text: "✅ Student added successfully." });
-                } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed. Am I Admin?" }); }
+                    const response = await sock.groupParticipantsUpdate(jid, [target], "add");
+                    if (response[0].status === "200") {
+                        return sock.sendMessage(jid, { text: "✅ Student added successfully." });
+                    } else if (response[0].status === "403") {
+                        return sock.sendMessage(jid, { text: "❌ Privacy settings prevent direct adding." });
+                    } else {
+                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0].status}` });
+                    }
+                } catch (e) { 
+                    return sock.sendMessage(jid, { text: "❌ Error: Ensure I am an Admin and the number is correct." }); 
+                }
             }
 
+            // 2. KICK MEMBER (RUGGED VERSION)
             if (command === "!kick") {
                 let target;
                 if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
@@ -118,10 +128,18 @@ async function startJARVIS() {
                     target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 }
                 if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply to them with !kick" });
+                if (target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Cannot kick the Boss." });
+
                 try {
-                    await sock.groupParticipantsUpdate(jid, [target], "remove");
-                    return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
-                } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed to kick." }); }
+                    const response = await sock.groupParticipantsUpdate(jid, [target], "remove");
+                    if (response[0].status === "200") {
+                        return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
+                    } else {
+                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0].status}` });
+                    }
+                } catch (e) { 
+                    return sock.sendMessage(jid, { text: "❌ Error: Failed to kick. Check Admin status." }); 
+                }
             }
 
             if (command === "!ginfo") {
@@ -174,4 +192,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-                    
+            
