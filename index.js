@@ -45,6 +45,9 @@ async function startJARVIS() {
             if (shouldReconnect) startJARVIS();
         } else if (connection === 'open') {
             console.log(`✅ ${BOT_NAME} is active for ${POWERED_BY}`);
+            setInterval(() => {
+                if (sock.user) console.log("💓 JARVIS Heartbeat: Alive.");
+            }, 300000);
         }
     });
 
@@ -60,11 +63,10 @@ async function startJARVIS() {
         const command = text.split(/ +/)[0];
         const args = text.split(/ +/).slice(1);
 
-        // --- TAG REACTION LOGIC ---
-        const botNumber = sock.user.id.split(':')[0] + "@s.whatsapp.net";
-        const isMentioned = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(botNumber) || text.includes("jarvis");
-
-        if (isMentioned) {
+        // --- TAG REACTION ---
+        const botNumber = sock.user.id.split(':')[0];
+        const mentions = m.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+        if (mentions.some(v => v.includes(botNumber)) || text.includes("jarvis")) {
             await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
         }
 
@@ -81,17 +83,38 @@ async function startJARVIS() {
         const isOwner = sender.includes(OWNER_NUMBER);
         const isStaff = isOwner || admins.includes(sender);
 
+        // --- STAFF COMMANDS ---
         if (isStaff) {
+            // 1. ADD MEMBER
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 try {
                     await sock.groupParticipantsUpdate(jid, [target], "add");
                     return sock.sendMessage(jid, { text: "✅ Student added successfully." });
-                } catch (e) {
-                    return sock.sendMessage(jid, { text: "❌ Failed. Ensure I am Admin." });
-                }
+                } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed. Am I Admin?" }); }
             }
+
+            // 2. KICK MEMBER
+            if (command === "!kick") {
+                let target;
+                if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
+                    target = m.message.extendedTextMessage.contextInfo.mentionedJid[0];
+                } else if (m.message.extendedTextMessage?.contextInfo?.quotedMessage) {
+                    target = m.message.extendedTextMessage.contextInfo.participant;
+                } else if (args[0]) {
+                    target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+                }
+
+                if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply to them with !kick" });
+                
+                try {
+                    await sock.groupParticipantsUpdate(jid, [target], "remove");
+                    return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
+                } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed to kick." }); }
+            }
+
+            // 3. GROUP INFO
             if (command === "!ginfo") {
                 let info = `*📂 ${BOT_NAME} REPORT*\n\n*Group:* ${metadata.subject}\n*Members:* ${metadata.participants.length}\n*Admins:* ${admins.length}`;
                 return sock.sendMessage(jid, { text: info });
@@ -99,10 +122,11 @@ async function startJARVIS() {
             return; 
         }
 
+        // --- RULES FOR MEMBERS ---
         const punish = async (reason) => {
             warns[sender] = (warns[sender] || 0) + 1;
             if (warns[sender] >= 3) {
-                await sock.sendMessage(jid, { text: `🚫 @${sender.split('@')[0]} kicked for violations.`, mentions: [sender] });
+                await sock.sendMessage(jid, { text: `🚫 @${sender.split('@')[0]} removed for violations.`, mentions: [sender] });
                 await sock.groupParticipantsUpdate(jid, [sender], "remove");
                 delete warns[sender];
             } else {
@@ -111,89 +135,32 @@ async function startJARVIS() {
         };
 
         const badWords = ["are you okay", "you are mad", "your mother", "your father", "rubbish", "ode", "mumu", "foolish"];
-        const containsBadWord = badWords.some(word => text.includes(word));
-        
-        if (containsBadWord) {
+        if (badWords.some(word => text.includes(word))) {
             await sock.sendMessage(jid, { delete: m.key });
-            return punish("Abusive language/Insults");
+            return punish("Abusive language");
         }
 
         const hasLink = /https?:\/\/\S+|www\.\S+|wa\.me\/\S+/.test(text);
-        const isStatusAd = text.includes("status") && (text.includes("view") || text.includes("check"));
-
-        if (hasLink || isStatusAd) {
+        if (hasLink || (text.includes("status") && (text.includes("view") || text.includes("check")))) {
             await sock.sendMessage(jid, { delete: m.key });
-            return punish("Unauthorized links/Status ads");
-        }
-
-        const now = Date.now();
-        if (!floodTracker[sender]) floodTracker[sender] = [];
-        floodTracker[sender] = floodTracker[sender].filter(t => now - t < 10000);
-        floodTracker[sender].push(now);
-
-        if (floodTracker[sender].length > 5) {
-            await sock.sendMessage(jid, { delete: m.key });
-            return punish("Spamming/Flooding");
+            return punish("Unauthorized links/ads");
         }
     });
 }
 
-// --- WEB DASHBOARD (HTML + CSS INCLUDED) ---
+// --- WEB DASHBOARD ---
 app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>${BOT_NAME} | Dashboard</title>
-        <style>
-            body { background: #0f172a; color: white; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 50px 20px; }
-            .card { background: #1e293b; padding: 40px; border-radius: 20px; border: 1px solid #38bdf8; display: inline-block; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 400px; width: 100%; }
-            h1 { color: #38bdf8; margin-bottom: 10px; }
-            p { color: #94a3b8; margin-bottom: 30px; }
-            input { padding: 15px; margin: 10px 0; width: 90%; border-radius: 10px; border: none; background: #334155; color: white; font-size: 16px; }
-            button { background: #38bdf8; color: #0f172a; border: none; padding: 15px 30px; border-radius: 10px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; width: 100%; }
-            button:hover { background: #0ea5e9; transform: translateY(-2px); }
-            .status { margin-top: 20px; font-size: 14px; color: #4ade80; font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>🤖 ${BOT_NAME}</h1>
-            <p>Official Enforcer for ${POWERED_BY}</p>
-            <form action="/pair" method="POST">
-                <input name="number" placeholder="e.g. 2347051768946" required />
-                <button type="submit">Generate Pairing Code</button>
-            </form>
-            <div class="status">● System Online</div>
-        </div>
-    </body>
-    </html>
-    `);
+    res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${BOT_NAME}</title><style>body{background:#0f172a;color:white;text-align:center;padding:50px;font-family:sans-serif;}.card{background:#1e293b;padding:40px;border-radius:20px;border:1px solid #38bdf8;display:inline-block;max-width:400px;width:100%;}h1{color:#38bdf8;}input{padding:15px;margin:10px;width:80%;border-radius:10px;border:none;}button{background:#38bdf8;padding:15px;width:85%;border-radius:10px;font-weight:bold;cursor:pointer;}</style></head><body><div class="card"><h1>🤖 ${BOT_NAME}</h1><p>${POWERED_BY}</p><form action="/pair" method="POST"><input name="number" placeholder="234..." required /><button type="submit">Get Code</button></form></div></body></html>`);
 });
 
 app.post('/pair', async (req, res) => {
     const number = req.body.number.replace(/[^0-9]/g, '');
-    if (!number) return res.send("❌ Invalid Number");
     try {
         const code = await sock.requestPairingCode(number);
-        res.send(`
-            <body style="background: #0f172a; color: white; font-family: sans-serif; text-align: center; padding: 100px 20px;">
-                <div style="border: 2px solid #38bdf8; display: inline-block; padding: 50px; border-radius: 20px; background: #1e293b; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-                    <h2 style="color: #94a3b8;">YOUR PAIRING CODE</h2>
-                    <h1 style="font-size: 60px; letter-spacing: 12px; color: #38bdf8; margin: 20px 0;">${code}</h1>
-                    <p style="color: #4ade80;">Enter this on WhatsApp > Linked Devices > Link with Phone Number</p>
-                    <br>
-                    <a href="/" style="color: #38bdf8; text-decoration: none; font-weight: bold;">← Go Back</a>
-                </div>
-            </body>
-        `);
-    } catch (e) {
-        res.send("<h1 style='color:white; text-align:center;'>❌ Failed. Please Restart Render.</h1>");
-    }
+        res.send(`<body style="background:#0f172a;color:white;text-align:center;padding:100px;"><h1>CODE: ${code}</h1></body>`);
+    } catch (e) { res.send("<h1>Error</h1>"); }
 });
 
-app.listen(port, "0.0.0.0", () => console.log(`🌐 Dashboard online at port ${port}`));
+app.listen(port, "0.0.0.0", () => console.log(`🌐 Dashboard online`));
 startJARVIS();
                 
