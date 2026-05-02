@@ -33,7 +33,14 @@ async function startJARVIS() {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        // RUGGED CONNECTION FIXES
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000, 
+        emitOwnEvents: true,
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -42,12 +49,19 @@ async function startJARVIS() {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startJARVIS();
+            if (shouldReconnect) {
+                console.log("🔄 Connection lost. Restarting engine...");
+                startJARVIS();
+            }
         } else if (connection === 'open') {
             console.log(`✅ ${BOT_NAME} is active for ${POWERED_BY}`);
+            // Heartbeat to keep Render and WhatsApp synchronized
             setInterval(() => {
-                if (sock.user) console.log("💓 JARVIS Heartbeat: Alive.");
-            }, 300000);
+                if (sock.user) {
+                    sock.sendPresenceUpdate('available');
+                    console.log("💓 JARVIS Heartbeat: Active");
+                }
+            }, 60000); // Every minute
         }
     });
 
@@ -85,7 +99,6 @@ async function startJARVIS() {
 
         // --- STAFF COMMANDS ---
         if (isStaff) {
-            // 1. ADD MEMBER
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
@@ -95,7 +108,6 @@ async function startJARVIS() {
                 } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed. Am I Admin?" }); }
             }
 
-            // 2. KICK MEMBER
             if (command === "!kick") {
                 let target;
                 if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
@@ -105,16 +117,13 @@ async function startJARVIS() {
                 } else if (args[0]) {
                     target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 }
-
                 if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply to them with !kick" });
-                
                 try {
                     await sock.groupParticipantsUpdate(jid, [target], "remove");
                     return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
                 } catch (e) { return sock.sendMessage(jid, { text: "❌ Failed to kick." }); }
             }
 
-            // 3. GROUP INFO
             if (command === "!ginfo") {
                 let info = `*📂 ${BOT_NAME} REPORT*\n\n*Group:* ${metadata.subject}\n*Members:* ${metadata.participants.length}\n*Admins:* ${admins.length}`;
                 return sock.sendMessage(jid, { text: info });
@@ -158,9 +167,11 @@ app.post('/pair', async (req, res) => {
     try {
         const code = await sock.requestPairingCode(number);
         res.send(`<body style="background:#0f172a;color:white;text-align:center;padding:100px;"><h1>CODE: ${code}</h1></body>`);
-    } catch (e) { res.send("<h1>Error</h1>"); }
+    } catch (e) { res.send("<h1>Error - Session Busy</h1>"); }
 });
 
-app.listen(port, "0.0.0.0", () => console.log(`🌐 Dashboard online`));
-startJARVIS();
-                
+app.listen(port, "0.0.0.0", () => {
+    console.log(`🌐 Dashboard online on port ${port}`);
+    startJARVIS();
+});
+                    
