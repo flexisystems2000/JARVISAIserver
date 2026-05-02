@@ -99,7 +99,7 @@ async function startJARVIS() {
 
         // --- STAFF COMMANDS ---
         if (isStaff) {
-            // 1. ADD MEMBER (STABILIZED VERSION)
+            // 1. ADD MEMBER (DM REDIRECT VERSION)
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
@@ -111,12 +111,19 @@ async function startJARVIS() {
                     if (status === "200") {
                         return sock.sendMessage(jid, { text: "✅ Student added successfully." });
                     } else if (status === "403" || status === "408" || status === "409") {
+                        // First, notify the group of the privacy issue to prevent hang
+                        await sock.sendMessage(jid, { text: "⚠️ *Privacy Block!* I can't add this student directly. Sending invite link to their DM..." });
+
+                        // Get the group invite link
                         const code = await sock.groupInviteCode(jid);
                         const inviteLink = `https://chat.whatsapp.com/${code}`;
-                        return sock.sendMessage(jid, { 
-                            text: `⚠️ *Notice!* \nI can't add @${target.split('@')[0]} directly (Privacy/Status). \n\n*Please use this link to join:* \n${inviteLink}`,
-                            mentions: [target]
+                        
+                        // Send the link to the student's DM
+                        await sock.sendMessage(target, { 
+                            text: `Hello! I tried to add you to *${metadata.subject}*, but your privacy settings blocked me.\n\n*Please join using this link:* \n${inviteLink}`
                         });
+
+                        return sock.sendMessage(jid, { text: "📥 *Status:* Invite link has been successfully sent to their DM." });
                     } else {
                         return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
                     }
@@ -158,23 +165,18 @@ async function startJARVIS() {
             // 3. GINFO (STABILIZED VERSION)
             if (command === "!ginfo") {
                 try {
-                    // Fresh fetch to avoid using empty cache
                     let infoMetadata = await sock.groupMetadata(jid);
-                    
                     if (!infoMetadata) {
                         return sock.sendMessage(jid, { text: "❌ Metadata not ready. Please try again." });
                     }
-
                     let groupName = infoMetadata.subject || "Unknown Group";
                     let memberCount = infoMetadata.participants?.length || 0;
                     let adminCount = infoMetadata.participants?.filter(p => p.admin).length || 0;
-
                     let info = `*📂 ${BOT_NAME} REPORT*\n\n` +
                                `*Group:* ${groupName}\n` +
                                `*Members:* ${memberCount}\n` +
                                `*Admins:* ${adminCount}\n` +
                                `*Status:* Active 🟢`;
-
                     return sock.sendMessage(jid, { text: info });
                 } catch (e) {
                     console.error("GINFO_ERROR:", e);
@@ -227,4 +229,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-                
+        
