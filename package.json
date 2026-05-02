@@ -1,26 +1,16 @@
 {
-  "name": "jarvis-ai-flexi",
-  "version": "1.2.5",
-  "description": "JARVIS AI Enforcer with Pairing Dashboard for Flexi Digital Academy",
+  "name": "jarvis-bot",
+  "version": "1.0.0",
+  "description": "JARVIS AI for Flexi Digital Academy",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [
-    "whatsapp",
-    "bot",
-    "enforcer",
-    "flexi-digital-academy",
-    "baileys"
-  ],
-  "author": "FLEXI SYSTEMS",
-  "license": "ISC",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "@hapi/boom": "^10.0.1",
-    "express": "^4.18.2",
-    "pino": "^8.16.2",
+    "pino": "^8.19.0",
+    "express": "^4.18.3",
     "qrcode-terminal": "^0.12.0"
   }
 }
