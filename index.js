@@ -148,19 +148,37 @@ async function startJARVIS() {
             await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
         }
 
-        let metadata = groupCache.get(jid);
-        if (!metadata || (Date.now() - metadata.lastFetch > 600000)) { 
-            try {
+        // --- STABILIZED METADATA FETCH ---
+        let metadata;
+        try {
+            metadata = groupCache.get(jid);
+            if (!metadata || (Date.now() - metadata.lastFetch > 600000)) { 
                 metadata = await sock.groupMetadata(jid);
                 metadata.lastFetch = Date.now();
                 groupCache.set(jid, metadata);
-            } catch (e) { return; }
+            }
+        } catch (e) {
+            console.log("Metadata Error:", e);
+            // Fallback: If metadata fails, we still allow !add/!kick if user is owner
+            if (!sender.includes(OWNER_NUMBER)) return; 
         }
 
-        const admins = metadata.participants.filter(p => p.admin).map(p => p.id);
+        const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id);
         const isStaff = sender.includes(OWNER_NUMBER) || admins.includes(sender);
 
         if (isStaff) {
+
+            if (command === "!ginfo") {
+                try {
+                    let info = `*📂 ${BOT_NAME} REPORT*\n\n` +
+                               `*Group:* ${metadata?.subject || 'JAMB Portal'}\n` +
+                               `*Members:* ${metadata?.participants?.length || 'N/A'}\n` +
+                               `*Status:* Running 🟢`;
+                    return sock.sendMessage(jid, { text: info });
+                } catch (e) {
+                    return sock.sendMessage(jid, { text: "❌ System busy, try again." });
+                }
+            }
 
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Provide a number!" });
@@ -200,9 +218,12 @@ async function startJARVIS() {
                 
                 if (!target || target.includes(OWNER_NUMBER)) return;
 
-                await sock.groupParticipantsUpdate(jid, [target], "remove");
-
-                return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
+                try {
+                    await sock.groupParticipantsUpdate(jid, [target], "remove");
+                    return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
+                } catch (e) {
+                    return sock.sendMessage(jid, { text: "❌ Kick failed. Am I admin?" });
+                }
             }
         }
 
@@ -220,7 +241,7 @@ async function startJARVIS() {
                     mentions: [sender] 
                 });
 
-                await sock.groupParticipantsUpdate(jid, [sender], "remove");
+                await sock.groupParticipantsUpdate(jid, [sender], "remove").catch(() => {});
 
                 await Warn.deleteOne({ userId: sender });
 
@@ -302,12 +323,14 @@ button{background:#38bdf8;padding:12px;width:85%;border-radius:8px;font-weight:b
 
 <script>
 async function load(){
-    const s = await fetch('/stats').then(r=>r.json());
-    document.getElementById('stats').innerHTML =
-    "Status: "+s.bot+"<br>Groups: "+s.groups+"<br>Users: "+s.users+"<br>Pending: "+s.pending+"<br>Failed: "+s.failed;
+    try {
+        const s = await fetch('/stats').then(r=>r.json());
+        document.getElementById('stats').innerHTML =
+        "Status: "+s.bot+"<br>Groups: "+s.groups+"<br>Users: "+s.users+"<br>Pending: "+s.pending+"<br>Failed: "+s.failed;
 
-    const q = await fetch('/queue').then(r=>r.json());
-    document.getElementById('queue').innerHTML = q.map(x=>"• "+x.target+" ("+x.status+")").join("<br>");
+        const q = await fetch('/queue').then(r=>r.json());
+        document.getElementById('queue').innerHTML = q.map(x=>"• "+x.target+" ("+x.status+")").join("<br>");
+    } catch (e) {}
 }
 
 function clearQ(){ fetch('/clear-failed'); }
@@ -331,3 +354,4 @@ app.post('/pair', async (req, res) => {
 });
 
 app.listen(port, () => startJARVIS());
+            
