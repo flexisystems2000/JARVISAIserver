@@ -34,7 +34,9 @@ const QueueSchema = new mongoose.Schema({
 });
 const Queue = mongoose.model('Queue', QueueSchema);
 
-mongoose.connect(MONGO_URI).then(() => console.log("✅ MongoDB Connected"));
+mongoose.connect(MONGO_URI)
+    .then(() => console.log("✅ MongoDB Connected"))
+    .catch(err => console.log("❌ DB Error:", err));
 
 const groupCache = new Map();
 let sock;
@@ -42,36 +44,32 @@ let isProcessing = false;
 
 // --- RUGGED QUEUE (PREVENTS LOGOUTS) ---
 async function processQueue() {
-    if (isProcessing || !sock?.user) return;
+    if (isProcessing) return;
     isProcessing = true;
     try {
         let task = await Queue.findOne({ status: 'pending' });
         while (task) {
+            if (!sock?.user) break;
             try {
-                const groupMeta = await sock.groupMetadata(task.jid);
                 const code = await sock.groupInviteCode(task.jid);
+                const inviteLink = `https://chat.whatsapp.com/${code}`;
 
                 await sock.presenceSubscribe(task.target);
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 1000));
                 await sock.sendPresenceUpdate('composing', task.target);
-                await new Promise(r => setTimeout(r, 3000));
+                await new Promise(r => setTimeout(r, 1500));
 
                 await sock.sendMessage(task.target, {
-                    groupInviteMessage: {
-                        groupJid: task.jid,
-                        groupName: groupMeta.subject,
-                        inviteCode: code,
-                        caption: `Hello! JARVIS here. Your privacy blocked the group add. Join via the button below:`
-                    }
+                    text: `Hello! JARVIS here. Your privacy settings blocked the group add.\n\n*Join here:*\n${inviteLink}`
                 });
 
-                await sock.sendMessage(task.jid, { text: `📥 Invite sent to DM for @${task.target.split('@')[0]}`, mentions: [task.target] });
+                await sock.sendMessage(task.jid, { text: `📥 Invite sent to DM for ${task.target.split('@')[0]}` });
                 await Queue.deleteOne({ _id: task._id });
             } catch (e) {
                 await Queue.updateOne({ _id: task._id }, { status: 'failed' });
             }
-            await new Promise(r => setTimeout(r, 15000)); // 15s Safety Delay
             task = await Queue.findOne({ status: 'pending' });
+            await new Promise(r => setTimeout(r, 2000)); 
         }
     } finally { isProcessing = false; }
 }
@@ -89,34 +87,15 @@ async function startJARVIS() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // --- AUTO-GREETING (NEW STUDENT) ---
-    sock.ev.on('group-participants.update', async (anu) => {
-        if (anu.action === 'add') {
-            for (let num of anu.participants) {
-                const welcomeMsg = `👋 *Welcome to the group, @${num.split('@')[0]}!* 🎓\n\n` +
-                    `I am *${BOT_NAME}*. Please follow these rules:\n\n` +
-                    `📍 *GROUP RULES:*\n` +
-                    `- Posting links is strictly prohibited\n` +
-                    `- Avoid using stickers during lessons\n` +
-                    `- Stay on topic — no off-topic discussions during classes\n` +
-                    `- Do not tag this group in your status\n` +
-                    `- Engage actively; inactive members may be removed\n` +
-                    `- Feel free to invite friends preparing for SSCE or UTME\n\n` +
-                    `📢 *Official Channel:*\nhttps://whatsapp.com`;
-
-                await sock.sendMessage(anu.id, { text: welcomeMsg, mentions: [num] });
-            }
-        }
-    });
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            const statusCode = (lastDisconnect?.error instanceof Boom) ? lastDisconnect.error.output.statusCode : 0;
-            if (statusCode !== DisconnectReason.loggedOut) setTimeout(startJARVIS, 5000);
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) setTimeout(startJARVIS, 3000);
         } else if (connection === 'open') {
             console.log(`✅ ${BOT_NAME} Online`);
-            setInterval(processQueue, 30000);
+            processQueue();
+            setInterval(processQueue, 15000);
         }
     });
 
@@ -128,16 +107,34 @@ async function startJARVIS() {
         const sender = m.key.participant || m.key.remoteJid;
         const body = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || "";
         const text = body.toLowerCase().trim();
+        
+        // --- STAFF CHECK ---
         const isOwner = sender.includes(OWNER_NUMBER);
 
-        if (text.includes("jarvis")) await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
+        // React Logic
+        if (text.includes("jarvis")) {
+            await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
+        }
+
+        // Filter: Ignore DMs for non-owners
         if (!jid.endsWith('@g.us') && !isOwner) return;
 
-        let metadata = jid.endsWith('@g.us') ? (groupCache.get(jid) || await sock.groupMetadata(jid)) : {};
-        if (jid.endsWith('@g.us')) groupCache.set(jid, metadata);
+        // Metadata Guard
+        let metadata;
+        if (jid.endsWith('@g.us')) {
+            try {
+                metadata = groupCache.get(jid);
+                if (!metadata || Date.now() - (metadata.lastFetch || 0) > 600000) {
+                    metadata = await sock.groupMetadata(jid);
+                    metadata.lastFetch = Date.now();
+                    groupCache.set(jid, metadata);
+                }
+            } catch { metadata = { subject: "Group", participants: [] }; }
+        }
 
         const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id);
         const isStaff = isOwner || admins.includes(sender);
+        
         const command = text.split(/ +/)[0];
         const args = body.trim().split(/ +/).slice(1);
 
@@ -159,26 +156,33 @@ async function startJARVIS() {
 
         // --- COMMANDS ---
         if (isStaff) {
+            // !GINFO
+            if (command === "!ginfo") {
+                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} REPORT*\n\nGroup: ${metadata.subject}\nMembers: ${metadata.participants.length}\nStatus: Active 🟢` });
+            }
+
+            // !ADD
             if (command === "!add") {
                 let num = args[0]?.replace(/[^0-9]/g, '');
                 if (!num) return sock.sendMessage(jid, { text: "Oya, type the number." });
                 let jidTarget = num + "@s.whatsapp.net";
-                
-                const [exists] = await sock.onWhatsApp(jidTarget);
-                if (!exists) return sock.sendMessage(jid, { text: "❌ Not on WhatsApp." });
-
                 const resp = await sock.groupParticipantsUpdate(jid, [jidTarget], "add").catch(() => null);
-                if (!resp || resp[0]?.status === "403" || resp[0]?.status === "408") {
+                if (!resp || !resp[0] || resp[0].status.toString() !== "200") {
                     await Queue.create({ jid, target: jidTarget });
+                    processQueue();
                     return sock.sendMessage(jid, { text: `📨 Privacy detected. Sending invite to DM.` });
                 }
                 return sock.sendMessage(jid, { text: `✅ Added ${num}.` });
             }
 
+            // !KICK / !PROMOTE
             if (command === "!kick" || command === "!promote") {
-                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || m.message.extendedTextMessage?.contextInfo?.participant;
+                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || 
+                             m.message.extendedTextMessage?.contextInfo?.participant;
                 if (!target && args[0]) target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+                
                 if (!target || target.includes(OWNER_NUMBER)) return;
+
                 const action = command === "!kick" ? "remove" : "promote";
                 await sock.groupParticipantsUpdate(jid, [target], action).catch(() => {});
                 return sock.sendMessage(jid, { text: `✅ ${action.toUpperCase()} done.` });
@@ -188,25 +192,10 @@ async function startJARVIS() {
 }
 
 // --- UI ---
-app.get('/', (req, res) => {
-    res.send(`
-        <html><head><title>${BOT_NAME}</title><style>
-        body { font-family: sans-serif; background: #0f172a; color: white; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        .card { background: #1e293b; padding: 2rem; border-radius: 12px; text-align: center; width: 350px; box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
-        input { width: 100%; padding: 12px; margin: 15px 0; border-radius: 6px; border: none; background: #334155; color: white; text-align: center; }
-        button { width: 100%; padding: 12px; border: none; border-radius: 6px; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
-        h1 { color: #3b82f6; }
-        </style></head><body><div class="card"><h1>🤖 ${BOT_NAME}</h1><p>Pairing Panel</p>
-        <form method="POST" action="/pair"><input name="number" placeholder="234..." required /><button>GET CODE</button></form></div></body></html>
-    `);
-});
-
+app.get('/', (req, res) => { res.send(`<h1>🤖 ${BOT_NAME} UI</h1><form method="POST" action="/pair"><input name="number" placeholder="234..." /><button>Get Code</button></form>`); });
 app.post('/pair', async (req, res) => {
-    try {
-        const code = await sock.requestPairingCode(req.body.number.replace(/[^0-9]/g, ''));
-        res.send(`<body style="background:#0f172a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;"><div style="text-align:center;"><h1>CODE: <span style="color:#3b82f6;">${code}</span></h1><a href="/" style="color:gray;">Back</a></div></body>`);
-    } catch { res.send("Error. Ensure bot is not already connected."); }
+    const code = await sock.requestPairingCode(req.body.number.replace(/[^0-9]/g, ''));
+    res.send(`<h1>CODE: ${code}</h1>`);
 });
 
 app.listen(port, () => startJARVIS());
-                                       
