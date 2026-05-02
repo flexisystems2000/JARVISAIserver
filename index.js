@@ -34,7 +34,6 @@ async function startJARVIS() {
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
         browser: ["Ubuntu", "Chrome", "20.0.04"],
-        // RUGGED CONNECTION FIXES
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 0,
         keepAliveIntervalMs: 10000, 
@@ -55,13 +54,11 @@ async function startJARVIS() {
             }
         } else if (connection === 'open') {
             console.log(`✅ ${BOT_NAME} is active for ${POWERED_BY}`);
-            // Heartbeat to keep Render and WhatsApp synchronized
             setInterval(() => {
                 if (sock.user) {
                     sock.sendPresenceUpdate('available');
-                    console.log("💓 JARVIS Heartbeat: Active");
                 }
-            }, 60000); // Every minute
+            }, 60000); 
         }
     });
 
@@ -97,9 +94,8 @@ async function startJARVIS() {
         const isOwner = sender.includes(OWNER_NUMBER);
         const isStaff = isOwner || admins.includes(sender);
 
-        // --- STAFF COMMANDS ---
         if (isStaff) {
-            // 1. ADD MEMBER (DM REDIRECT VERSION)
+            // 1. ADD MEMBER (CRASH-PROOF DM VERSION)
             if (command === "!add") {
                 if (!args[0]) return sock.sendMessage(jid, { text: "Oya, provide the number! Example: !add 2348000000000" });
                 let target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
@@ -111,29 +107,35 @@ async function startJARVIS() {
                     if (status === "200") {
                         return sock.sendMessage(jid, { text: "✅ Student added successfully." });
                     } else if (status === "403" || status === "408" || status === "409") {
-                        // First, notify the group of the privacy issue to prevent hang
-                        await sock.sendMessage(jid, { text: "⚠️ *Privacy Block!* I can't add this student directly. Sending invite link to their DM..." });
+                        // Notify group FIRST to lock the session
+                        await sock.sendMessage(jid, { text: "⚠️ *Privacy Block!* Sending the link to their DM now..." });
 
-                        // Get the group invite link
-                        const code = await sock.groupInviteCode(jid);
-                        const inviteLink = `https://chat.whatsapp.com/${code}`;
-                        
-                        // Send the link to the student's DM
-                        await sock.sendMessage(target, { 
-                            text: `Hello! I tried to add you to *${metadata.subject}*, but your privacy settings blocked me.\n\n*Please join using this link:* \n${inviteLink}`
-                        });
-
-                        return sock.sendMessage(jid, { text: "📥 *Status:* Invite link has been successfully sent to their DM." });
+                        // Background task for DM
+                        const handleDM = async () => {
+                            try {
+                                const code = await sock.groupInviteCode(jid);
+                                const inviteLink = `https://chat.whatsapp.com/${code}`;
+                                await sock.sendMessage(target, { 
+                                    text: `Hello! You were invited to *${metadata.subject}*.\n\n*Join here:* \n${inviteLink}`
+                                });
+                                // Using a small delay before group confirmation to prevent socket clash
+                                await new Promise(r => setTimeout(r, 1000));
+                                sock.sendMessage(jid, { text: "📥 *Status:* Invite sent to DM successfully." });
+                            } catch (dmErr) {
+                                console.log("DM_FAILED", dmErr);
+                            }
+                        };
+                        handleDM(); 
+                        return;
                     } else {
                         return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
                     }
                 } catch (e) { 
-                    console.error("ADD_ERROR:", e);
-                    return sock.sendMessage(jid, { text: "❌ Error: Ensure I am an Admin and the number is correct." }); 
+                    return sock.sendMessage(jid, { text: "❌ Error: System busy. Try again." }); 
                 }
             }
 
-            // 2. KICK MEMBER (STABILIZED VERSION)
+            // 2. KICK MEMBER
             if (command === "!kick") {
                 let target;
                 if (m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
@@ -143,50 +145,36 @@ async function startJARVIS() {
                 } else if (args[0]) {
                     target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
                 }
-                if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply to them with !kick" });
+                if (!target) return sock.sendMessage(jid, { text: "Tag someone or reply with !kick" });
                 if (target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Cannot kick the Boss." });
 
                 try {
                     await new Promise(resolve => setTimeout(resolve, 500));
                     const response = await sock.groupParticipantsUpdate(jid, [target], "remove");
-                    const status = response[0]?.status;
-
-                    if (status === "200") {
+                    if (response[0]?.status === "200") {
                         return sock.sendMessage(jid, { text: "🚫 Removed by Staff." });
                     } else {
-                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${status || 'Unknown'}` });
+                        return sock.sendMessage(jid, { text: `❌ Failed. Status: ${response[0]?.status || 'Unknown'}` });
                     }
                 } catch (e) { 
-                    console.error("KICK_ERROR:", e);
-                    return sock.sendMessage(jid, { text: "❌ Error: Failed to kick. Check Admin status." }); 
+                    return sock.sendMessage(jid, { text: "❌ Error: Failed to kick." }); 
                 }
             }
 
-            // 3. GINFO (STABILIZED VERSION)
+            // 3. GINFO
             if (command === "!ginfo") {
                 try {
                     let infoMetadata = await sock.groupMetadata(jid);
-                    if (!infoMetadata) {
-                        return sock.sendMessage(jid, { text: "❌ Metadata not ready. Please try again." });
-                    }
-                    let groupName = infoMetadata.subject || "Unknown Group";
-                    let memberCount = infoMetadata.participants?.length || 0;
-                    let adminCount = infoMetadata.participants?.filter(p => p.admin).length || 0;
-                    let info = `*📂 ${BOT_NAME} REPORT*\n\n` +
-                               `*Group:* ${groupName}\n` +
-                               `*Members:* ${memberCount}\n` +
-                               `*Admins:* ${adminCount}\n` +
-                               `*Status:* Active 🟢`;
+                    let info = `*📂 ${BOT_NAME} REPORT*\n\n*Group:* ${infoMetadata.subject}\n*Members:* ${infoMetadata.participants.length}\n*Admins:* ${infoMetadata.participants.filter(p => p.admin).length}\n*Status:* Active 🟢`;
                     return sock.sendMessage(jid, { text: info });
                 } catch (e) {
-                    console.error("GINFO_ERROR:", e);
-                    return sock.sendMessage(jid, { text: "❌ Error fetching group info. Ensure I am in the group." });
+                    return sock.sendMessage(jid, { text: "❌ Error fetching group info." });
                 }
             }
             return; 
         }
 
-        // --- RULES FOR MEMBERS ---
+        // --- RULES ---
         const punish = async (reason) => {
             warns[sender] = (warns[sender] || 0) + 1;
             if (warns[sender] >= 3) {
@@ -229,4 +217,3 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`🌐 Dashboard online on port ${port}`);
     startJARVIS();
 });
-        
