@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 
 // State Persistence
 const warnings = new Map();
-const messageLog = new Map(); // ✅ Added for Anti-Spam
+const messageLog = new Map(); // ✅ Anti-Spam
 const badWords = ["stupid", "idiot", "scam", "fool"];
 
 // AI Config
@@ -25,6 +25,22 @@ const aiModel = genAI.getGenerativeModel({
 let sock;
 let pairingCode = "";
 let connectedNumber = "Not Connected";
+
+// ✅ FIXED TEXT EXTRACTOR
+const getText = (msg) => {
+    if (!msg.message) return "";
+    const m = msg.message;
+
+    return (
+        m.conversation ||
+        m.extendedTextMessage?.text ||
+        m.imageMessage?.caption ||
+        m.videoMessage?.caption ||
+        m.buttonsResponseMessage?.selectedButtonId ||
+        m.listResponseMessage?.singleSelectReply?.selectedRowId ||
+        ""
+    );
+};
 
 async function startJarvis(targetNumber = null) {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -52,23 +68,33 @@ async function startJarvis(targetNumber = null) {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
+
         if (connection === 'open') {
             connectedNumber = sock.user.id.split(':')[0];
             pairingCode = "";
         }
+
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) startJarvis(targetNumber);
         }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+
         const msg = messages[0];
-        if (!msg.key || msg.key.fromMe || !msg.message) return;
+
+        // ✅ FIXED SAFETY CHECK
+        if (!msg.message) return;
+        if (msg.key.fromMe) return;
 
         const jid = msg.key.remoteJid;
         const isGroup = jid.endsWith('@g.us');
         const sender = msg.key.participant || jid;
+
+        // ✅ USE FIXED EXTRACTOR
+        const text = getText(msg).toLowerCase();
 
         // 1. Anti-Status Mention
         if (msg.messageStubType === 204 || msg.messageStubType === 'GROUP_MENTIONED_IN_STATUS') {
@@ -81,35 +107,39 @@ async function startJarvis(targetNumber = null) {
             return;
         }
 
-        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
-
-        // 2. Anti-Spam (5 messages / 10 seconds)
+        // 2. Anti-Spam
         const now = Date.now();
         const userLogs = messageLog.get(sender) || [];
         const recentLogs = userLogs.filter(time => now - time < 10000);
         recentLogs.push(now);
         messageLog.set(sender, recentLogs);
-        if (recentLogs.length > 5) return await handleWarning(sock, jid, sender, "Spamming");
+
+        if (recentLogs.length > 5)
+            return await handleWarning(sock, jid, sender, "Spamming");
 
         // 3. Anti-Link & Bad Words
-        if (/https?:\/\/\S+/.test(text)) return await handleWarning(sock, jid, sender, "Anti-Link");
-        if (badWords.some(word => text.includes(word))) return await handleWarning(sock, jid, sender, "Abusive Language");
+        if (/https?:\/\/\S+/.test(text))
+            return await handleWarning(sock, jid, sender, "Anti-Link");
 
-                // Check if message contains "jarvis" or tags the bot
-        const isJarvisCalled = text.includes("jarvis") || msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id.split(':')[0] + '@s.whatsapp.net');
+        if (badWords.some(word => text.includes(word)))
+            return await handleWarning(sock, jid, sender, "Abusive Language");
+
+        // Detect Jarvis call
+        const isJarvisCalled =
+            text.includes("jarvis") ||
+            msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id.split(':')[0] + '@s.whatsapp.net');
 
         if (isJarvisCalled) {
-            // 🤖 React with Bot Emoji
-            const reactionMessage = {
+            await sock.sendMessage(jid, {
                 react: {
-                    text: "🤖", 
-                    key: msg.key // This targets the specific message that called Jarvis
+                    text: "🤖",
+                    key: msg.key
                 }
-            };
-            await sock.sendMessage(jid, reactionMessage);
+            });
         }
-        
+
         // --- COMMANDS ---
+
         if (text === "!menu") {
             await sock.sendMessage(jid, { text: `*JARVIS AI MENU*\nPowered by Flexi edTech Digital Academy\n\n🔹 !groupinfo\n🔹 !kick @user\n🔹 !add 234...\n🔹 !ai [query]\n\n©2026 Flexi edTech Digital Academy` });
         }
@@ -163,7 +193,7 @@ async function startJarvis(targetNumber = null) {
     }
 }
 
-// --- BLUE DASHBOARD ---
+// --- DASHBOARD (UNCHANGED) ---
 app.get("/", (req, res) => {
     res.send(`
         <!DOCTYPE html>
@@ -207,4 +237,3 @@ app.listen(PORT, () => {
     startJarvis();
     setInterval(() => { if(process.env.RENDER_EXTERNAL_URL) axios.get(process.env.RENDER_EXTERNAL_URL).catch(()=>{}); }, 600000);
 });
-                       
