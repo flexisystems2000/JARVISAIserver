@@ -49,16 +49,15 @@ async function startJarvis(targetNumber = null) {
     const { state, saveCreds } = await useMultiFileAuthState('auth_session_fresh');
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
-        version,
-        printQRInTerminal: false,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-        },
-        logger: pino({ level: "silent" }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
-    });
+    const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false, // We use pairing codes instead
+    connectTimeoutMs: 120000, // Increase to 2 minutes
+    defaultQueryTimeoutMs: 0, // Disable query timeout
+    keepAliveIntervalMs: 30000,
+    browser: ["Ubuntu", "Chrome", "20.0.04"],
+});
+    
 
     // Handle Pairing Code Request
     if (targetNumber && !sock.authState.creds.registered) {
