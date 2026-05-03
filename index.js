@@ -1,201 +1,210 @@
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
-    fetchLatestBaileysVersion, 
-    DisconnectReason 
-} = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
-const pino = require('pino');
-const express = require('express');
-const mongoose = require('mongoose');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, DisconnectReason } = require("@whiskeysockets/baileys");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const pino = require("pino");
+const { Boom } = require("@hapi/boom");
+const express = require("express");
+const axios = require("axios");
+const bodyParser = require("body-parser");
 
 const app = express();
-const port = process.env.PORT || 3000;
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.urlencoded({ extended: true }));
+const PORT = process.env.PORT || 3000;
 
-// --- CRASH GUARDS ---
-process.on('uncaughtException', (err) => console.log('⚠️ System Error:', err.message));
-process.on('unhandledRejection', (err) => console.log('⚠️ Rejection Guard:', err.message));
+// State Persistence
+const warnings = new Map();
+const messageLog = new Map(); // ✅ Added for Anti-Spam
+const badWords = ["stupid", "idiot", "scam", "fool"];
 
-// --- CONFIG ---
-const OWNER_NUMBER = "2347051768946"; 
-const BOT_NAME = "JARVIS AI";
-const POWERED_BY = "Flexi Digital Academy";
-const MONGO_URI = "mongodb+srv://JarvisAI:flexisystems2000@cluster0.7g5odvt.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
-
-// --- DATABASE ---
-const WarnSchema = new mongoose.Schema({ userId: String, count: Number });
-const Warn = mongoose.model('Warn', WarnSchema);
-
-const QueueSchema = new mongoose.Schema({ 
-    jid: String, 
-    target: String, 
-    status: { type: String, default: 'pending' }
+// AI Config
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const aiModel = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    systemInstruction: "You are JARVIS, an educational assistant for Flexi edTech Digital Academy. Only answer educational questions."
 });
-const Queue = mongoose.model('Queue', QueueSchema);
 
-mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ MongoDB Connected"))
-    .catch(err => console.log("❌ DB Error:", err));
-
-const groupCache = new Map();
 let sock;
-let isProcessing = false;
+let pairingCode = "";
+let connectedNumber = "Not Connected";
 
-// --- RUGGED QUEUE (PREVENTS LOGOUTS) ---
-async function processQueue() {
-    if (isProcessing) return;
-    isProcessing = true;
-    try {
-        let task = await Queue.findOne({ status: 'pending' });
-        while (task) {
-            if (!sock?.user) break;
-            try {
-                const code = await sock.groupInviteCode(task.jid);
-                const inviteLink = `https://chat.whatsapp.com/${code}`;
-
-                await sock.presenceSubscribe(task.target);
-                await new Promise(r => setTimeout(r, 1000));
-                await sock.sendPresenceUpdate('composing', task.target);
-                await new Promise(r => setTimeout(r, 1500));
-
-                await sock.sendMessage(task.target, {
-                    text: `Hello! JARVIS here. Your privacy settings blocked the group add.\n\n*Join here:*\n${inviteLink}`
-                });
-
-                await sock.sendMessage(task.jid, { text: `📥 Invite sent to DM for ${task.target.split('@')[0]}` });
-                await Queue.deleteOne({ _id: task._id });
-            } catch (e) {
-                await Queue.updateOne({ _id: task._id }, { status: 'failed' });
-            }
-            task = await Queue.findOne({ status: 'pending' });
-            await new Promise(r => setTimeout(r, 2000)); 
-        }
-    } finally { isProcessing = false; }
-}
-
-async function startJARVIS() {
+async function startJarvis(targetNumber = null) {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
-        version, auth: state,
-        printQRInTerminal: true,
-        logger: pino({ level: 'silent' }),
+        version,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        },
+        logger: pino({ level: "silent" }),
         browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
+
+    if (targetNumber && !sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                pairingCode = await sock.requestPairingCode(targetNumber);
+            } catch (e) { console.error("Pairing Error:", e); }
+        }, 5000);
+    }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
+        if (connection === 'open') {
+            connectedNumber = sock.user.id.split(':')[0];
+            pairingCode = "";
+        }
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(startJARVIS, 3000);
-        } else if (connection === 'open') {
-            console.log(`✅ ${BOT_NAME} Online`);
-            processQueue();
-            setInterval(processQueue, 15000);
+            const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) startJarvis(targetNumber);
         }
     });
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
-        const m = messages[0];
-        if (!m.message || m.key.fromMe) return;
+        const msg = messages[0];
+        if (!msg.key || msg.key.fromMe || !msg.message) return;
 
-        const jid = m.key.remoteJid;
-        const sender = m.key.participant || m.key.remoteJid;
-        const body = m.message.conversation || m.message.extendedTextMessage?.text || m.message.imageMessage?.caption || "";
-        const text = body.toLowerCase().trim();
-        
-        // --- STAFF CHECK ---
-        const isOwner = sender.includes(OWNER_NUMBER);
+        const jid = msg.key.remoteJid;
+        const isGroup = jid.endsWith('@g.us');
+        const sender = msg.key.participant || jid;
 
-        // React Logic
-        if (text.includes("jarvis")) {
-            await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
+        // 1. Anti-Status Mention
+        if (msg.messageStubType === 204 || msg.messageStubType === 'GROUP_MENTIONED_IN_STATUS') {
+            await handleWarning(sock, jid, sender, "Status Mention");
+            return;
         }
 
-        // Filter: Ignore DMs for non-owners
-        if (!jid.endsWith('@g.us') && !isOwner) return;
+        if (!isGroup) {
+            await sock.sendMessage(jid, { text: "Please join a group to interact with JARVIS." });
+            return;
+        }
 
-        // Metadata Guard
-        let metadata;
-        if (jid.endsWith('@g.us')) {
-            try {
-                metadata = groupCache.get(jid);
-                if (!metadata || Date.now() - (metadata.lastFetch || 0) > 600000) {
-                    metadata = await sock.groupMetadata(jid);
-                    metadata.lastFetch = Date.now();
-                    groupCache.set(jid, metadata);
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
+
+        // 2. Anti-Spam (5 messages / 10 seconds)
+        const now = Date.now();
+        const userLogs = messageLog.get(sender) || [];
+        const recentLogs = userLogs.filter(time => now - time < 10000);
+        recentLogs.push(now);
+        messageLog.set(sender, recentLogs);
+        if (recentLogs.length > 5) return await handleWarning(sock, jid, sender, "Spamming");
+
+        // 3. Anti-Link & Bad Words
+        if (/https?:\/\/\S+/.test(text)) return await handleWarning(sock, jid, sender, "Anti-Link");
+        if (badWords.some(word => text.includes(word))) return await handleWarning(sock, jid, sender, "Abusive Language");
+
+                // Check if message contains "jarvis" or tags the bot
+        const isJarvisCalled = text.includes("jarvis") || msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id.split(':')[0] + '@s.whatsapp.net');
+
+        if (isJarvisCalled) {
+            // 🤖 React with Bot Emoji
+            const reactionMessage = {
+                react: {
+                    text: "🤖", 
+                    key: msg.key // This targets the specific message that called Jarvis
                 }
-            } catch { metadata = { subject: "Group", participants: [] }; }
+            };
+            await sock.sendMessage(jid, reactionMessage);
         }
-
-        const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id);
-        const isStaff = isOwner || admins.includes(sender);
         
-        const command = text.split(/ +/)[0];
-        const args = body.trim().split(/ +/).slice(1);
-
-        // --- WATCHDOG ---
-        if (jid.endsWith('@g.us') && !isStaff) {
-            const badWords = ["are you okay", "you are mad", "your mother", "your father", "rubbish", "ode", "mumu", "foolish"];
-            if (badWords.some(word => text.includes(word)) || /https?:\/\/\S+/.test(text)) {
-                await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
-                let userWarn = await Warn.findOneAndUpdate({ userId: sender }, { $inc: { count: 1 } }, { upsert: true, new: true });
-                if (userWarn.count >= 3) {
-                    await sock.groupParticipantsUpdate(jid, [sender], "remove");
-                    await Warn.deleteOne({ userId: sender });
-                } else {
-                    await sock.sendMessage(jid, { text: `⚠️ Strike ${userWarn.count}/3 for @${sender.split('@')[0]}`, mentions: [sender] });
-                }
-                return;
-            }
-        }
-
         // --- COMMANDS ---
-        if (isStaff) {
-            // !GINFO
-            if (command === "!ginfo") {
-                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} REPORT*\n\nGroup: ${metadata.subject}\nMembers: ${metadata.participants.length}\nStatus: Active 🟢` });
-            }
+        if (text === "!menu") {
+            await sock.sendMessage(jid, { text: `*JARVIS AI MENU*\nPowered by Flexi edTech Digital Academy\n\n🔹 !groupinfo\n🔹 !kick @user\n🔹 !add 234...\n🔹 !ai [query]\n\n©2026 Flexi edTech Digital Academy` });
+        }
 
-            // !ADD
-            if (command === "!add") {
-                let num = args[0]?.replace(/[^0-9]/g, '');
-                if (!num) return sock.sendMessage(jid, { text: "Oya, type the number." });
-                let jidTarget = num + "@s.whatsapp.net";
-                const resp = await sock.groupParticipantsUpdate(jid, [jidTarget], "add").catch(() => null);
-                if (!resp || !resp[0] || resp[0].status.toString() !== "200") {
-                    await Queue.create({ jid, target: jidTarget });
-                    processQueue();
-                    return sock.sendMessage(jid, { text: `📨 Privacy detected. Sending invite to DM.` });
+        if (text === "!groupinfo") {
+            const metadata = await sock.groupMetadata(jid);
+            await sock.sendMessage(jid, { text: `📌 *Group:* ${metadata.subject}\n👥 *Members:* ${metadata.participants.length}` });
+        }
+
+        if (text.startsWith("!kick")) {
+            const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+            if (!target) return await sock.sendMessage(jid, { text: "Tag a user." });
+            await sock.groupParticipantsUpdate(jid, [target], "remove");
+        }
+
+        if (text.startsWith("!add")) {
+            const num = text.replace("!add", "").trim();
+            const userJid = `${num}@s.whatsapp.net`;
+            try {
+                const resp = await sock.groupParticipantsUpdate(jid, [userJid], "add");
+                if (resp[0]?.status === "403") {
+                    const code = await sock.groupInviteCode(jid);
+                    await sock.sendMessage(userJid, { text: `Invite Link: https://chat.whatsapp.com/${code}` });
                 }
-                return sock.sendMessage(jid, { text: `✅ Added ${num}.` });
-            }
+            } catch (e) { console.error("Add Error"); }
+        }
 
-            // !KICK / !PROMOTE
-            if (command === "!kick" || command === "!promote") {
-                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || 
-                             m.message.extendedTextMessage?.contextInfo?.participant;
-                if (!target && args[0]) target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
-                
-                if (!target || target.includes(OWNER_NUMBER)) return;
-
-                const action = command === "!kick" ? "remove" : "promote";
-                await sock.groupParticipantsUpdate(jid, [target], action).catch(() => {});
-                return sock.sendMessage(jid, { text: `✅ ${action.toUpperCase()} done.` });
+        if (text.startsWith("!ai")) {
+            const query = text.replace("!ai", "").trim();
+            if (["how", "what", "solve", "math", "why", "define", "explain"].some(k => query.includes(k))) {
+                try {
+                    const result = await aiModel.generateContent(query);
+                    await sock.sendMessage(jid, { text: `🎓 *JARVIS AI*\n\n${result.response.text()}` });
+                } catch (e) { await sock.sendMessage(jid, { text: "AI Busy." }); }
+            } else {
+                await sock.sendMessage(jid, { text: "❌ Educational questions only." });
             }
         }
     });
+
+    async function handleWarning(sock, jid, user, reason) {
+        let count = (warnings.get(user) || 0) + 1;
+        warnings.set(user, count);
+        if (count >= 3) {
+            await sock.sendMessage(jid, { text: `⛔ @${user.split('@')[0]} kicked for ${reason}.`, mentions: [user] });
+            await sock.groupParticipantsUpdate(jid, [user], "remove");
+            warnings.delete(user);
+        } else {
+            await sock.sendMessage(jid, { text: `⚠️ Strike [${count}/3] for @${user.split('@')[0]}\nReason: ${reason}`, mentions: [user] });
+        }
+    }
 }
 
-// --- UI ---
-app.get('/', (req, res) => { res.send(`<h1>🤖 ${BOT_NAME} UI</h1><form method="POST" action="/pair"><input name="number" placeholder="234..." /><button>Get Code</button></form>`); });
-app.post('/pair', async (req, res) => {
-    const code = await sock.requestPairingCode(req.body.number.replace(/[^0-9]/g, ''));
-    res.send(`<h1>CODE: ${code}</h1>`);
+// --- BLUE DASHBOARD ---
+app.get("/", (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>JARVIS | Flexi edTech</title>
+            <style>
+                body { font-family: sans-serif; background: #f0f4f8; text-align: center; color: #1a237e; margin: 0; }
+                .header { background: #1565c0; color: white; padding: 40px; }
+                .card { background: white; max-width: 450px; margin: -30px auto 40px; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+                input { padding: 12px; width: 80%; border: 1px solid #ddd; border-radius: 8px; }
+                button { padding: 12px 25px; background: #0044ff; color: white; border: none; border-radius: 8px; margin-top: 15px; cursor: pointer; font-weight: bold; }
+                .code { font-size: 32px; color: #2e7d32; font-weight: bold; background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px dashed #2e7d32; letter-spacing: 5px; }
+            </style>
+        </head>
+        <body>
+            <div class="header"><h1>JARVIS AI DASHBOARD</h1><p>Flexi edTech Digital Academy</p></div>
+            <div class="card">
+                <h3>Status: ${connectedNumber === "Not Connected" ? "Disconnected ❌" : "Connected ✅"}</h3>
+                <p>User: ${connectedNumber}</p>
+                <hr>
+                <form action="/pair" method="POST">
+                    <input type="text" name="number" placeholder="2348012345678" required>
+                    <button type="submit">Get Pairing Code</button>
+                </form>
+                ${pairingCode ? `<div class="code">${pairingCode}</div>` : ""}
+            </div>
+            <p>©2026 Flexi edTech Digital Academy. All rights reserved.</p>
+        </body>
+        </html>
+    `);
 });
 
-app.listen(port, () => startJARVIS());
+app.post("/pair", async (req, res) => {
+    const num = req.body.number.replace(/\D/g, '');
+    await startJarvis(num);
+    res.redirect("/");
+});
+
+app.listen(PORT, () => {
+    startJarvis();
+    setInterval(() => { if(process.env.RENDER_EXTERNAL_URL) axios.get(process.env.RENDER_EXTERNAL_URL).catch(()=>{}); }, 600000);
+});
+                       
