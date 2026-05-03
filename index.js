@@ -71,7 +71,7 @@ async function startJarvis(targetNumber = null) {
         const { connection, lastDisconnect } = update;
 
         // ✅ FAST PAIRING HERE
-        if (connection === 'connecting' && targetNumber && !sock.authState.creds.registered) {
+        if ((connection === 'connecting'||connection === 'open')&& targetNumber && !sock.authState.creds.registered) {
             try {
                 pairingCode = await sock.requestPairingCode(targetNumber);
             } catch (e) { console.error("Pairing Error:", e); }
