@@ -56,18 +56,26 @@ async function startJarvis(targetNumber = null) {
         browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    if (targetNumber && !sock.authState.creds.registered) {
-        setTimeout(async () => {
-            try {
-                pairingCode = await sock.requestPairingCode(targetNumber);
-            } catch (e) { console.error("Pairing Error:", e); }
-        }, 5000);
-    }
+    // ❌ REMOVED DELAY BLOCK
+    // if (targetNumber && !sock.authState.creds.registered) {
+    //     setTimeout(async () => {
+    //         try {
+    //             pairingCode = await sock.requestPairingCode(targetNumber);
+    //         } catch (e) { console.error("Pairing Error:", e); }
+    //     }, 5000);
+    // }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
+
+        // ✅ FAST PAIRING HERE
+        if (connection === 'connecting' && targetNumber && !sock.authState.creds.registered) {
+            try {
+                pairingCode = await sock.requestPairingCode(targetNumber);
+            } catch (e) { console.error("Pairing Error:", e); }
+        }
 
         if (connection === 'open') {
             connectedNumber = sock.user.id.split(':')[0];
@@ -85,7 +93,6 @@ async function startJarvis(targetNumber = null) {
 
         const msg = messages[0];
 
-        // ✅ FIXED SAFETY CHECK
         if (!msg.message) return;
         if (msg.key.fromMe) return;
 
@@ -93,10 +100,8 @@ async function startJarvis(targetNumber = null) {
         const isGroup = jid.endsWith('@g.us');
         const sender = msg.key.participant || jid;
 
-        // ✅ USE FIXED EXTRACTOR
         const text = getText(msg).toLowerCase();
 
-        // 1. Anti-Status Mention
         if (msg.messageStubType === 204 || msg.messageStubType === 'GROUP_MENTIONED_IN_STATUS') {
             await handleWarning(sock, jid, sender, "Status Mention");
             return;
@@ -107,7 +112,6 @@ async function startJarvis(targetNumber = null) {
             return;
         }
 
-        // 2. Anti-Spam
         const now = Date.now();
         const userLogs = messageLog.get(sender) || [];
         const recentLogs = userLogs.filter(time => now - time < 10000);
@@ -117,28 +121,21 @@ async function startJarvis(targetNumber = null) {
         if (recentLogs.length > 5)
             return await handleWarning(sock, jid, sender, "Spamming");
 
-        // 3. Anti-Link & Bad Words
         if (/https?:\/\/\S+/.test(text))
             return await handleWarning(sock, jid, sender, "Anti-Link");
 
         if (badWords.some(word => text.includes(word)))
             return await handleWarning(sock, jid, sender, "Abusive Language");
 
-        // Detect Jarvis call
         const isJarvisCalled =
             text.includes("jarvis") ||
             msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.includes(sock.user.id.split(':')[0] + '@s.whatsapp.net');
 
         if (isJarvisCalled) {
             await sock.sendMessage(jid, {
-                react: {
-                    text: "🤖",
-                    key: msg.key
-                }
+                react: { text: "🤖", key: msg.key }
             });
         }
-
-        // --- COMMANDS ---
 
         if (text === "!menu") {
             await sock.sendMessage(jid, { text: `*JARVIS AI MENU*\nPowered by Flexi edTech Digital Academy\n\n🔹 !groupinfo\n🔹 !kick @user\n🔹 !add 234...\n🔹 !ai [query]\n\n©2026 Flexi edTech Digital Academy` });
@@ -195,33 +192,44 @@ async function startJarvis(targetNumber = null) {
 
 // --- DASHBOARD (UNCHANGED) ---
 app.get("/", (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
+    res.send(`        <!DOCTYPE html>
         <html>
         <head>
             <title>JARVIS | Flexi edTech</title>
             <style>
-                body { font-family: sans-serif; background: #f0f4f8; text-align: center; color: #1a237e; margin: 0; }
-                .header { background: #1565c0; color: white; padding: 40px; }
+                body { font-family: 'Segoe UI', sans-serif; background: #f0f4f8; text-align: center; color: #1a237e; margin: 0; }
+                .header { background: #1565c0; color: white; padding: 40px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
                 .card { background: white; max-width: 450px; margin: -30px auto 40px; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-                input { padding: 12px; width: 80%; border: 1px solid #ddd; border-radius: 8px; }
+                input { padding: 12px; width: 85%; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
                 button { padding: 12px 25px; background: #0044ff; color: white; border: none; border-radius: 8px; margin-top: 15px; cursor: pointer; font-weight: bold; }
-                .code { font-size: 32px; color: #2e7d32; font-weight: bold; background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px dashed #2e7d32; letter-spacing: 5px; }
+                .code-box { font-size: 28px; color: #2e7d32; font-weight: bold; background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px dashed #2e7d32; letter-spacing: 4px; }
+                .footer { padding: 20px; color: #78909c; font-size: 13px; }
             </style>
         </head>
         <body>
-            <div class="header"><h1>JARVIS AI DASHBOARD</h1><p>Flexi edTech Digital Academy</p></div>
-            <div class="card">
-                <h3>Status: ${connectedNumber === "Not Connected" ? "Disconnected ❌" : "Connected ✅"}</h3>
-                <p>User: ${connectedNumber}</p>
-                <hr>
-                <form action="/pair" method="POST">
-                    <input type="text" name="number" placeholder="2348012345678" required>
-                    <button type="submit">Get Pairing Code</button>
-                </form>
-                ${pairingCode ? `<div class="code">${pairingCode}</div>` : ""}
+            <div class="header">
+                <h1>JARVIS AI DASHBOARD</h1>
+                <p>Flexi edTech Digital Academy</p>
             </div>
-            <p>©2026 Flexi edTech Digital Academy. All rights reserved.</p>
+            <div class="card">
+                <h3>Connection Status</h3>
+                <p>Status: <span style="color: ${connectedNumber === "Not Connected" ? "red" : "green"}">● ${connectedNumber === "Not Connected" ? "Disconnected" : "Connected ✅"}</span></p>
+                ${connectedNumber !== "Not Connected" ? `<p>User: ${connectedNumber}</p>` : ""}
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                
+                <h4>Link Your WhatsApp</h4>
+                <form action="/pair" method="POST">
+                    <input type="text" name="number" placeholder="Enter number (e.g. 2348012345678)" required>
+                    <button type="submit">Generate Pairing Code</button>
+                </form>
+
+                ${pairingCode ? `
+                    <div class="code-box">${pairingCode}</div>
+                    <p style="font-size: 14px;">Open WhatsApp > Linked Devices > Link with Phone Number. Enter the code above.</p>
+                ` : ""}
+            </div>
+            <div class="footer">©2026 Flexi edTech Digital Academy. All rights reserved.</div>
         </body>
         </html>
     `);
