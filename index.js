@@ -46,7 +46,7 @@ async function handleWarning(sock, jid, user, reason) {
 
 // --- Main Bot Logic ---
 async function startJarvis(targetNumber = null) {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { state, saveCreds } = await useMultiFileAuthState('auth_session_fresh');
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
