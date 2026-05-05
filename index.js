@@ -55,29 +55,31 @@ async function startBot(io) {
 const sock = makeWASocket({ 
   auth: state, 
   logger: pino({ level: 'silent' }), // This prevents unnecessary console spam/crashes
-  browser: ["Ubuntu", "Chrome", "20.0.04"] 
+  browser: ["Jarvis", "Chrome", "1.0.0"] 
 });
   
   global.sock = sock;
-
-  sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
-      console.log('🔄 Connection lost. Reconnecting:', shouldReconnect);
-      if (shouldReconnect) {
-        // Re-run startBot but without re-triggering the server.listen
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const reason = lastDisconnect?.error?.output?.payload?.message || "Unknown";
+      
+      console.log(`❌ Connection Closed: ${reason} (Code: ${statusCode})`);
+
+      if (statusCode !== 401) { 
+        console.log("🔄 Retrying in 5 seconds...");
         setTimeout(() => startBot(), 5000);
+      } else {
+        console.log("⚠️ Logged out. Please delete 'auth' folder and re-scan.");
       }
     }
 
-    if (connection === 'open') console.log('✅ Connected to WhatsApp');
+    if (connection === 'open') console.log('✅ JARVIS IS ONLINE');
   });
   
-
     // ================= PAIRING CODE =================
   if (!sock.authState.creds.registered && CONFIG.OWNER_NUMBER) {
     const phoneNumber = formatNumber(CONFIG.OWNER_NUMBER);
