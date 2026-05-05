@@ -1,3 +1,23 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Environment variables
 .env
-auth_info
+
+# Baileys session data
+auth/
+auth_info/
+session/
+sessions/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build outputs (if any)
+dist/
+build/
