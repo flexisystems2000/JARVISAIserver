@@ -79,28 +79,40 @@ async function startJARVIS() {
 
     // --- WELCOME SYSTEM (Updated Tag Placement) ---
     sock.ev.on('group-participants.update', async (anu) => {
-        try {
-            const metadata = await sock.groupMetadata(anu.id);
-            const participants = anu.participants;
+    try {
+        console.log("Group Update:", anu);
 
-            for (const num of participants) {
-                if (anu.action === 'add') {
-                    const welcomeText = `@${num.split('@')[0]}\n\n` +
-                        `**Greetings from Jarvis AI**\n\n` +
-                        `You're welcome to *${metadata.subject}*\n\n` +
-                        `Please read the group rules carefully to stay updated\n\n` +
-                        `- Posting of links is strictly prohibited ✍️\n` +
-                        `- Avoid using stickers during lessons\n` +
-                        `- Stay on topic — no off-topic discussions during classes\n` +
-                        `- Do not tag this group in your status\n` +
-                        `- Engage actively in group activities; inactive members may be removed to create space for active participants\n` +
-                        `- Feel free to invite friends who are also preparing for SSCE or UTME`;
+        if (anu.action !== 'add') return;
 
-                    await sock.sendMessage(anu.id, { text: welcomeText, mentions: [num] });
-                }
-            }
-        } catch (err) { console.log("Welcome Error:", err.message); }
-    });
+        const metadata = await sock.groupMetadata(anu.id).catch(() => null);
+        const groupName = metadata?.subject || "this group";
+
+        for (const num of anu.participants) {
+            const userTag = num.split('@')[0];
+
+            const welcomeText = `👋 @${userTag}
+
+🤖 *Welcome to ${groupName}*
+
+Please follow the rules:
+
+• No links 🚫  
+• No insults 🚫  
+• Stay on topic 📚  
+• Be active or risk removal  
+
+Enjoy your learning with *JARVIS AI* 🚀 in ${groupName}`;
+
+            await sock.sendMessage(anu.id, {
+                text: welcomeText,
+                mentions: [num]
+            });
+        }
+
+    } catch (err) {
+        console.log("❌ Welcome Error:", err);
+    }
+});
     
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
