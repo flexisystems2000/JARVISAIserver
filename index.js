@@ -49,7 +49,13 @@ function isEnglish(text) {
 async function startBot(io) {
   const { state, saveCreds } = await useMultiFileAuthState('auth');
 
-  const sock = makeWASocket({ auth: state });
+  const pino = require('pino'); // Add this at the very top of your file
+const sock = makeWASocket({ 
+  auth: state, 
+  logger: pino({ level: 'silent' }), // This prevents unnecessary console spam/crashes
+  browser: ["Ubuntu", "Chrome", "20.0.04"] 
+});
+  
   global.sock = sock;
 
   sock.ev.on('creds.update', saveCreds);
@@ -272,8 +278,16 @@ app.get('/pair', async (req, res) => {
     const number = formatNumber(req.query.number);
     if (!number) return res.send('Invalid number');
 
-    const code = await global.sock.requestPairingCode(number);
-    res.send(`Your Pairing Code: ${code}`);
+    if (!global.sock) {
+  return res.send('Bot is still starting up. Please refresh in 5 seconds.');
+}
+try {
+  const code = await global.sock.requestPairingCode(number);
+  res.send(`Your Pairing Code: ${code}`);
+} catch (err) {
+  res.send('Error: Bot is already linked or busy.');
+}
+    
   } catch (e) {
     console.error(e);
     res.send('Error generating pairing code');
