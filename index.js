@@ -78,14 +78,15 @@ const sock = makeWASocket({
   });
   
 
-  // ================= PAIRING CODE =================
-  if (!sock.authState.creds.registered) {
+    // ================= PAIRING CODE =================
+  if (!sock.authState.creds.registered && CONFIG.OWNER_NUMBER) {
     const phoneNumber = formatNumber(CONFIG.OWNER_NUMBER);
     if (phoneNumber) {
       const code = await sock.requestPairingCode(phoneNumber);
-      console.log(`\n🔗 Pairing Code: ${code}\n`);
+      console.log(`\n🔗 Default Owner Pairing Code: ${code}\n`);
     }
   }
+  
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
