@@ -58,27 +58,21 @@ const sock = makeWASocket({
   
   global.sock = sock;
 
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection } = update;
-
-      sock.ev.on('connection.update', async (update) => {
+    sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
-        if (connection === 'close') {
-      const shouldReconnect = update.lastDisconnect?.error?.output?.statusCode !== 401;
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401;
       console.log('🔄 Connection lost. Reconnecting:', shouldReconnect);
       if (shouldReconnect) {
-        // We only restart the bot logic, NOT the entire script/server
+        // Re-run startBot but without re-triggering the server.listen
         setTimeout(() => startBot(), 5000);
       }
-        }
-        
+    }
 
     if (connection === 'open') console.log('✅ Connected to WhatsApp');
   });
-    
+  
 
   // ================= PAIRING CODE =================
   if (!sock.authState.creds.registered) {
@@ -303,6 +297,12 @@ try {
   }
 });
 
-server.listen(3000, () => console.log('🌐 Running on 3000'));
+// ================= SERVER STARTUP =================
+const PORT = process.env.PORT || 3000;
 
-startBot();
+server.listen(PORT, () => {
+  console.log(`🌐 Dashboard running on port ${PORT}`);
+  // Start the bot only AFTER the server is live
+  startBot().catch(err => console.error("Start Error:", err));
+});
+
