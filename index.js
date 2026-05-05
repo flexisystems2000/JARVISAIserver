@@ -66,13 +66,15 @@ const sock = makeWASocket({
       sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401; 
-      console.log('Connection closed. Reconnecting:', shouldReconnect);
+        if (connection === 'close') {
+      const shouldReconnect = update.lastDisconnect?.error?.output?.statusCode !== 401;
+      console.log('🔄 Connection lost. Reconnecting:', shouldReconnect);
       if (shouldReconnect) {
-        setTimeout(() => startBot(), 5000); // Only restart the socket logic
+        // We only restart the bot logic, NOT the entire script/server
+        setTimeout(() => startBot(), 5000);
       }
-    }
+        }
+        
 
     if (connection === 'open') console.log('✅ Connected to WhatsApp');
   });
