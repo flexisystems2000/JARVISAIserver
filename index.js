@@ -26,7 +26,7 @@ async function startBot() {
     sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
-    if (connection === 'close') {
+        if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error?.output?.payload?.message || "Unknown";
       
@@ -34,14 +34,14 @@ async function startBot() {
 
       if (statusCode !== 401) { 
         console.log("🔄 Retrying in 5 seconds...");
+        // Ensure we don't leave the old socket hanging
+        if (global.sock) global.sock.ev.removeAllListeners(); 
         setTimeout(() => startBot(), 5000);
       } else {
         console.log("⚠️ Logged out. Please delete 'auth' folder and re-scan.");
       }
-    }
-
-    if (connection === 'open') console.log('✅ JARVIS IS ONLINE');
-  });
+        }
+      
   
     // ================= PAIRING CODE =================
   if (!sock.authState.creds.registered && CONFIG.OWNER_NUMBER) {
