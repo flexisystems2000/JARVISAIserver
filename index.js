@@ -1,65 +1,28 @@
-// ================= FLEXI TUTORS WHATSAPP BOT =================
-// Smart Version (Gemini AI + Pairing Code + Smart Translate)
+// Add fetchLatestBaileysVersion to your imports at the top
+const { 
+  default: makeWASocket, 
+  useMultiFileAuthState, 
+  fetchLatestBaileysVersion // <--- Add this
+} = require('@whiskeysockets/baileys');
 
-require('dotenv').config();
-
-const CONFIG = { PREFIX: '.', GEMINI_API_KEY: process.env.GEMINI_API_KEY, OWNER_NUMBER: process.env.OWNER_NUMBER };
-
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const express = require('express');
-const http = require('http');
-const axios = require('axios');
-
-let linkWarnings = {};
-let badWarnings = {};
-let spamTracker = {};
-
-// ================= NUMBER FORMAT =================
-function formatNumber(num) {
-  if (!num || typeof num !== 'string') return null; // Stops the "replace" error
-  num = num.replace(/\D/g, '');
-  if (num.startsWith('0')) num = '234' + num.slice(1);
-  if (num.startsWith('234')) return num;
-  return null;
-}
-
-
-// ================= GEMINI (UPGRADED) =================
-async function askAI(prompt) {
-  for (let i = 0; i < 2; i++) {
-    try {
-      const res = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${CONFIG.GEMINI_API_KEY}`,
-        { contents: [{ parts: [{ text: prompt }] }] },
-        { timeout: 10000 }
-      );
-
-      return res.data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response';
-
-    } catch (e) {
-      if (i === 1) return '⚠️ AI temporarily unavailable';
-    }
-  }
-}
-
-// ================= SMART LANGUAGE CHECK (FAST LOCAL) =================
-function isEnglish(text) {
-  return /^[\x00-\x7F\s.,?!'"()\-]+$/.test(text);
-}
-
-// ================= BOT =================
-async function startBot(io) {
+async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth');
+  const pino = require('pino');
 
-  const pino = require('pino'); // Add this at the very top of your file
-const sock = makeWASocket({ 
-  auth: state, 
-  logger: pino({ level: 'silent' }), // This prevents unnecessary console spam/crashes
-  browser: ["Jarvis", "Chrome", "1.0.0"] 
-});
+  // 1. Fetch the latest WA version to stop the 405 error
+  const { version, isLatest } = await fetchLatestBaileysVersion();
+  console.log(`BT: Using WA version v${version.join('.')}, isLatest: ${isLatest}`);
+
+  const sock = makeWASocket({ 
+    version, // <--- Add this line here
+    auth: state, 
+    logger: pino({ level: 'silent' }),
+    // Use a desktop browser string to look more "official" to WA
+    browser: ["Mac OS", "Safari", "10.15.7"] 
+  });
   
   global.sock = sock;
-
+  sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
