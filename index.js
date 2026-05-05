@@ -16,11 +16,13 @@ let spamTracker = {};
 
 // ================= NUMBER FORMAT =================
 function formatNumber(num) {
+  if (!num || typeof num !== 'string') return null; // Stops the "replace" error
   num = num.replace(/\D/g, '');
   if (num.startsWith('0')) num = '234' + num.slice(1);
   if (num.startsWith('234')) return num;
   return null;
 }
+
 
 // ================= GEMINI (UPGRADED) =================
 async function askAI(prompt) {
