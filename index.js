@@ -77,7 +77,7 @@ async function startJARVIS() {
         }
     });
 
-    // --- WELCOME SYSTEM ---
+    // --- WELCOME SYSTEM (Updated Tag Placement) ---
     sock.ev.on('group-participants.update', async (anu) => {
         try {
             const metadata = await sock.groupMetadata(anu.id);
@@ -85,22 +85,23 @@ async function startJARVIS() {
 
             for (const num of participants) {
                 if (anu.action === 'add') {
-                    const welcomeText = `**Greetings from Jarvis AI**\n\n` +
+                    const welcomeText = `@${num.split('@')[0]}\n\n` +
+                        `**Greetings from Jarvis AI**\n\n` +
                         `You're welcome to *${metadata.subject}*\n\n` +
                         `Please read the group rules carefully to stay updated\n\n` +
                         `- Posting of links is strictly prohibited ✍️\n` +
                         `- Avoid using stickers during lessons\n` +
                         `- Stay on topic — no off-topic discussions during classes\n` +
                         `- Do not tag this group in your status\n` +
-                        `- Engage actively in group activities; inactive members may be removed\n` +
-                        `- Feel free to invite friends who are also preparing for SSCE or UTME\n\n` +
-                        `Tag: @${num.split('@')[0]}`;
+                        `- Engage actively in group activities; inactive members may be removed to create space for active participants\n` +
+                        `- Feel free to invite friends who are also preparing for SSCE or UTME`;
 
                     await sock.sendMessage(anu.id, { text: welcomeText, mentions: [num] });
                 }
             }
         } catch (err) { console.log("Welcome Error:", err.message); }
     });
+    
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
@@ -168,7 +169,7 @@ async function startJARVIS() {
             }
 
             if (command === "!ginfo") {
-                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} STATUS*\n\n*Group:* ${metadata?.subject}\n*Members:* ${metadata?.participants?.length}\n*Admin Control:* Active 🟢\n*Powered by:* ${POWERED_BY}` });
+                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} REPORT*\n\n*Group:* ${metadata?.subject}\n*Members:* ${metadata?.participants?.length}\n*Admin Control:* Active 🟢\n*Powered by:* ${POWERED_BY}` });
             }
 
             if (command === "!kick" || command === "!promote") {
