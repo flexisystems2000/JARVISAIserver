@@ -30,7 +30,7 @@ const MONGO_URI = "mongodb+srv://JarvisAI:flexisystems2000@cluster0.7g5odvt.mong
 async function askAI(prompt) {
     try {
         const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
             {
                 contents: [{ parts: [{ text: prompt }] }]
             }
@@ -77,6 +77,31 @@ async function startJARVIS() {
         }
     });
 
+    // --- WELCOME SYSTEM ---
+    sock.ev.on('group-participants.update', async (anu) => {
+        try {
+            const metadata = await sock.groupMetadata(anu.id);
+            const participants = anu.participants;
+
+            for (const num of participants) {
+                if (anu.action === 'add') {
+                    const welcomeText = `**Greetings from Jarvis AI**\n\n` +
+                        `You're welcome to *${metadata.subject}*\n\n` +
+                        `Please read the group rules carefully to stay updated\n\n` +
+                        `- Posting of links is strictly prohibited ✍️\n` +
+                        `- Avoid using stickers during lessons\n` +
+                        `- Stay on topic — no off-topic discussions during classes\n` +
+                        `- Do not tag this group in your status\n` +
+                        `- Engage actively in group activities; inactive members may be removed\n` +
+                        `- Feel free to invite friends who are also preparing for SSCE or UTME\n\n` +
+                        `Tag: @${num.split('@')[0]}`;
+
+                    await sock.sendMessage(anu.id, { text: welcomeText, mentions: [num] });
+                }
+            }
+        } catch (err) { console.log("Welcome Error:", err.message); }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
@@ -87,13 +112,9 @@ async function startJARVIS() {
         const text = body.toLowerCase().trim();
         const isOwner = sender.includes(OWNER_NUMBER);
 
-        // --- SMART REACTIONS ---
-        if (text.includes("jarvis") && !text.startsWith("!")) {
-            await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
-        }
-
-        // --- GROUP METADATA ---
+        // --- GROUP METADATA & PERMISSIONS ---
         let metadata;
+        let isStaff = isOwner;
         if (jid.endsWith('@g.us')) {
             try {
                 metadata = groupCache.get(jid);
@@ -102,18 +123,18 @@ async function startJARVIS() {
                     metadata.lastFetch = Date.now();
                     groupCache.set(jid, metadata);
                 }
+                const admins = (metadata.participants || []).filter(p => p.admin !== null).map(p => p.id);
+                isStaff = isOwner || admins.includes(sender);
             } catch { metadata = { subject: "Group", participants: [] }; }
         }
 
-        const admins = (metadata?.participants || []).filter(p => p.admin).map(p => p.id);
-        const isStaff = isOwner || admins.includes(sender);
         const command = text.split(/ +/)[0];
         const args = body.trim().split(/ +/).slice(1);
 
         // --- WATCHDOG (Antilink, Antibadwords) ---
         if (jid.endsWith('@g.us') && !isStaff) {
-            const badWords = ["are you okay", "you are mad", "your mother", "your father", "rubbish", "ode", "mumu", "foolish"];
-            const isLink = /https?:\/\/\S+/.test(text);
+            const badWords = ["are you okay", "you are mad", "your mother", "your father", "rubbish", "ode", "mumu", "foolish", "stupid", "bastard"];
+            const isLink = text.includes("http") || text.includes(".com") || text.includes("chat.whatsapp");
             const isBadWord = badWords.some(word => text.includes(word));
 
             if (isLink || isBadWord) {
@@ -125,10 +146,7 @@ async function startJARVIS() {
                     await sock.groupParticipantsUpdate(jid, [sender], "remove");
                     await Warn.deleteOne({ userId: sender });
                 } else {
-                    await sock.sendMessage(jid, { 
-                        text: `⚠️ *Watchdog Alert*\n@${sender.split('@')[0]}, violation detected. Strike ${userWarn.count}/3.`, 
-                        mentions: [sender] 
-                    });
+                    await sock.sendMessage(jid, { text: `⚠️ *Watchdog Alert*\n@${sender.split('@')[0]}, violation detected. Strike ${userWarn.count}/3.`, mentions: [sender] });
                 }
                 return;
             }
@@ -136,7 +154,6 @@ async function startJARVIS() {
 
         // --- COMMANDS ---
         if (isStaff) {
-            // AI
             if (command === "!ai") {
                 const prompt = args.join(" ");
                 if (!prompt) return sock.sendMessage(jid, { text: "Oya, what is your question?" });
@@ -145,18 +162,13 @@ async function startJARVIS() {
                 return sock.sendMessage(jid, { text: `🤖 *JARVIS AI*\n\n${aiReply}` });
             }
 
-            // Group Info
             if (command === "!ginfo") {
-                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} STATUS*\n\n*Group:* ${metadata.subject}\n*Members:* ${metadata.participants.length}\n*Admin Control:* Active 🟢\n*Powered by:* ${POWERED_BY}` });
+                return sock.sendMessage(jid, { text: `*📊 ${BOT_NAME} STATUS*\n\n*Group:* ${metadata?.subject}\n*Members:* ${metadata?.participants?.length}\n*Admin Control:* Active 🟢\n*Powered by:* ${POWERED_BY}` });
             }
 
-            // Kick / Promote
             if (command === "!kick" || command === "!promote") {
-                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || 
-                             m.message.extendedTextMessage?.contextInfo?.participant;
-                
+                let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || m.message.extendedTextMessage?.contextInfo?.participant;
                 if (!target && args[0]) target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
-                
                 if (!target || target.includes(OWNER_NUMBER)) return sock.sendMessage(jid, { text: "❌ Target invalid." });
 
                 const action = command === "!kick" ? "remove" : "promote";
@@ -165,7 +177,6 @@ async function startJARVIS() {
                     .catch(() => sock.sendMessage(jid, { text: "❌ Failed. Am I admin?" }));
             }
 
-            // Reset Warnings
             if (command === "!reset") {
                 let target = m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
                 if (!target) return sock.sendMessage(jid, { text: "Tag the user to reset strikes." });
@@ -176,7 +187,7 @@ async function startJARVIS() {
     });
 }
 
-// --- UI DASHBOARD ---
+// --- ORIGINAL UI DASHBOARD ---
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
     <html lang="en">
@@ -252,3 +263,4 @@ app.get('/pair', async (req, res) => {
 });
 
 app.listen(port, () => startJARVIS());
+                                                       
