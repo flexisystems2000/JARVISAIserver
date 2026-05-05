@@ -82,7 +82,7 @@ async function startJARVIS() {
     try {
         console.log("Group Update:", anu);
 
-        if (anu.action !== 'add') return;
+        if (!['add', 'invite'].includes(anu.action)) return;
 
         const metadata = await sock.groupMetadata(anu.id).catch(() => null);
         const groupName = metadata?.subject || "this group";
