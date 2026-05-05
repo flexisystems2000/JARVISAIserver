@@ -1,32 +1,25 @@
-// Add fetchLatestBaileysVersion to your imports at the top
-const { 
-  default: makeWASocket, 
-  useMultiFileAuthState, 
-  fetchLatestBaileysVersion // <--- Add this
-} = require('@whiskeysockets/baileys');
-
+// ... (Top remains same)
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth');
   const pino = require('pino');
 
-  // 1. Fetch the latest WA version to stop the 405 error
   const { version, isLatest } = await fetchLatestBaileysVersion();
   console.log(`BT: Using WA version v${version.join('.')}, isLatest: ${isLatest}`);
 
   const sock = makeWASocket({ 
-    version, // <--- Add this line here
+    version, 
     auth: state, 
     logger: pino({ level: 'silent' }),
-    // Use a desktop browser string to look more "official" to WA
     browser: ["Mac OS", "Safari", "10.15.7"] 
   });
   
   global.sock = sock;
   sock.ev.on('creds.update', saveCreds);
-    sock.ev.on('connection.update', async (update) => {
+
+  sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
-        if (connection === 'close') {
+    if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error?.output?.payload?.message || "Unknown";
       
@@ -34,24 +27,30 @@ async function startBot() {
 
       if (statusCode !== 401) { 
         console.log("🔄 Retrying in 5 seconds...");
-        // Ensure we don't leave the old socket hanging
         if (global.sock) global.sock.ev.removeAllListeners(); 
         setTimeout(() => startBot(), 5000);
       } else {
         console.log("⚠️ Logged out. Please delete 'auth' folder and re-scan.");
       }
-        }
-      
-  
-    // ================= PAIRING CODE =================
+    }
+
+    if (connection === 'open') console.log('✅ JARVIS IS ONLINE');
+  }); // <--- Added missing closing brace here
+
+  // ================= PAIRING CODE =================
   if (!sock.authState.creds.registered && CONFIG.OWNER_NUMBER) {
     const phoneNumber = formatNumber(CONFIG.OWNER_NUMBER);
     if (phoneNumber) {
-      const code = await sock.requestPairingCode(phoneNumber);
-      console.log(`\n🔗 Default Owner Pairing Code: ${code}\n`);
+      setTimeout(async () => { // Added a small delay to ensure socket is ready
+        try {
+          const code = await sock.requestPairingCode(phoneNumber);
+          console.log(`\n🔗 Default Owner Pairing Code: ${code}\n`);
+        } catch (e) {
+          console.log("Waiting for web pairing...");
+        }
+      }, 5000);
     }
-  }
-  
+  }      
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
