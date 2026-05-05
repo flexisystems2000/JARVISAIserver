@@ -62,7 +62,7 @@ async function startJARVIS() {
         auth: state,
         printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "22.04.4"]
+        browser: ["Mac OS", "Chrome", "125.0.0"]
     });
 
     sock.ev.on('creds.update', saveCreds);
