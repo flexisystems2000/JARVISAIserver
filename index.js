@@ -112,6 +112,11 @@ async function startJARVIS() {
         const text = body.toLowerCase().trim();
         const isOwner = sender.includes(OWNER_NUMBER);
 
+                // --- SMART REACTIONS (Place after defining 'text' and before 'isStaff') ---
+        if (text.includes("jarvis") && !text.startsWith("!")) {
+            await sock.sendMessage(jid, { react: { key: m.key, text: "🤖" } });
+        }
+        
         // --- GROUP METADATA & PERMISSIONS ---
         let metadata;
         let isStaff = isOwner;
