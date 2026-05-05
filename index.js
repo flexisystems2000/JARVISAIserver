@@ -184,19 +184,20 @@ async function startJARVIS() {
             }
                         // --- MUTE / UNMUTE ---
             if (command === "!mute" || command === "!unmute") {
-                const announce = command === "!mute" ? 'announcement' : 'not_announcement';
-                
-                await sock.groupSettingUpdate(jid, announce)
-                    .then(() => {
-                        const status = command === "!mute" 
-                            ? "🔒 *Group Locked:* Only Admins can send messages now. Please stay tuned for the lesson."
-                            : "🔓 *Group Unlocked:* Members can now send messages. Keep the discussion academic!";
-                        
-                        sock.sendMessage(jid, { text: status });
-                    })
-                    .catch(() => {
-                        sock.sendMessage(jid, { text: "❌ Failed. Make sure I am an Admin." });
-           }
+    const announce = command === "!mute" ? 'announcement' : 'not_announcement';
+    
+    await sock.groupSettingUpdate(jid, announce)
+        .then(() => {
+            const status = command === "!mute" 
+                ? "🔒 *Group Locked:* Only Admins can send messages now. Please stay tuned for the lesson."
+                : "🔓 *Group Unlocked:* Members can now send messages. Keep the discussion academic!";
+            
+            sock.sendMessage(jid, { text: status });
+        })
+        .catch(() => {
+            sock.sendMessage(jid, { text: "❌ Failed. Make sure I am an Admin." });
+        });
+            }
             
 
             if (command === "!reset") {
