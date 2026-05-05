@@ -208,7 +208,67 @@ const app = express();
 const server = http.createServer(app);
 
 app.get('/', (req, res) => {
-  res.send(`... Your Dashboard HTML ...`); // Keep your existing HTML here
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Jarvis AI Dashboard</title>
+<style>
+body { margin:0; font-family: Arial; background:#f4f8fc; }
+header { background:#002b5c; color:white; padding:15px; text-align:center; font-size:18px; font-weight:bold; }
+.container { padding:20px; max-width:500px; margin:auto; }
+.card { background:white; padding:20px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
+input { width:100%; padding:12px; margin-top:10px; border:1px solid #ccc; border-radius:6px; }
+button { width:100%; padding:12px; margin-top:10px; background:#003f88; color:white; border:none; border-radius:6px; font-weight:bold; cursor:pointer; }
+.code { margin-top:15px; padding:10px; background:#e6f0ff; border-radius:6px; text-align:center; font-weight:bold; }
+.features { margin-top:20px; }
+.features h3 { color:#003366; }
+.features ul { padding-left:20px; }
+footer { text-align:center; padding:15px; margin-top:20px; font-size:13px; color:#555; }
+</style>
+</head>
+<body>
+<header>🤖 JARVIS AI powered by Flexi edTech Digital Academy</header>
+<div class="container">
+<div class="card">
+<h3>Connect WhatsApp</h3>
+<input type="text" id="number" placeholder="Enter your WhatsApp number (234...)" />
+<button onclick="getCode()">Get Pairing Code</button>
+<div class="code" id="code">Your pairing code will appear here</div>
+
+<div class="features">
+<h3>Features of Jarvis AI</h3>
+<ul>
+<li>AI Educational Assistant (.ai)</li>
+<li>Auto Language Translation</li>
+<li>Antilink Protection</li>
+<li>Antispam System</li>
+<li>Antibadwords Filter</li>
+<li>Group Management (.add, .kick, .ginfo)</li>
+<li>Jarvis Smart Reactions 🤖</li>
+</ul>
+</div>
+
+</div>
+</div>
+
+<footer>©2026 Flexi edTech Digital Academy. All rights reserved</footer>
+
+<script>
+async function getCode() {
+  const number = document.getElementById('number').value;
+  if (!number) return alert('Enter number');
+
+  const res = await fetch('/pair?number=' + number);
+  const data = await res.text();
+
+  document.getElementById('code').innerText = data;
+}
+</script>
+
+</body>
+</html>.`); // Keep your existing HTML here
 });
 
 app.get('/pair', async (req, res) => {
@@ -227,4 +287,4 @@ server.listen(PORT, () => {
   console.log(`🌐 Dashboard running on port ${PORT}`);
   startBot().catch(err => console.error("Start Error:", err));
 });
-    
+          
