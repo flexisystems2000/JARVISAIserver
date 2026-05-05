@@ -58,6 +58,8 @@ const sock = makeWASocket({
   
   global.sock = sock;
 
+  sock.ev.on('creds.update', saveCreds);
+
     sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
