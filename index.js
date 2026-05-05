@@ -63,13 +63,20 @@ const sock = makeWASocket({
   sock.ev.on('connection.update', async (update) => {
     const { connection } = update;
 
+      sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect } = update;
+
     if (connection === 'close') {
-      console.log('Reconnecting safely...');
-      setTimeout(() => startBot(io), 8000);
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== 401; 
+      console.log('Connection closed. Reconnecting:', shouldReconnect);
+      if (shouldReconnect) {
+        setTimeout(() => startBot(), 5000); // Only restart the socket logic
+      }
     }
 
-    if (connection === 'open') console.log('✅ Connected');
+    if (connection === 'open') console.log('✅ Connected to WhatsApp');
   });
+    
 
   // ================= PAIRING CODE =================
   if (!sock.authState.creds.registered) {
