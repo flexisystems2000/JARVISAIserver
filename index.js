@@ -8,7 +8,6 @@ const CONFIG = { PREFIX: '.', GEMINI_API_KEY: process.env.GEMINI_API_KEY, OWNER_
 const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
 const axios = require('axios');
 
 let linkWarnings = {};
@@ -202,7 +201,6 @@ async function startBot(io) {
 // ================= WEB =================
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -284,4 +282,4 @@ app.get('/pair', async (req, res) => {
 
 server.listen(3000, () => console.log('🌐 Running on 3000'));
 
-startBot(io);
+startBot();
