@@ -409,19 +409,58 @@ const FB_SCRIPTS = `
 
 app.get('/login', (req, res) => {
     res.send(`<html><head><title>Login</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>body{font-family:sans-serif;background:#f0f2f5;display:flex;justify:center;align-items:center;height:100vh;margin:0;} .card{background:white;padding:30px;border-radius:15px;width:90%;max-width:400px;box-shadow:0 10px 25px rgba(0,0,0,0.1);} header{background:#002b5c;color:white;padding:15px;text-align:center;margin:-30px -30px 20px -30px;border-radius:15px 15px 0 0;} input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:8px;} button{width:100%;padding:12px;background:#002b5c;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;}</style>
-    </head><body><div class="card"><header>LOGIN</header><input id="email" type="email" placeholder="Email Address"><input id="pass" type="password" placeholder="Password"><button onclick="login()">Login</button><p style="text-align:center;font-size:12px;margin-top:15px;">Don't have an account? <a href="/signup">Sign up</a></p></div>
+    <style>
+        body{font-family:sans-serif;background:#f0f2f5;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;} 
+        .card{background:white;padding:30px;border-radius:15px;width:90%;max-width:400px;box-shadow:0 10px 25px rgba(0,0,0,0.1); box-sizing: border-box;} 
+        header{background:#002b5c;color:white;padding:15px;text-align:center;margin:-30px -30px 20px -30px;border-radius:15px 15px 0 0;} 
+        input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:8px;box-sizing: border-box;} 
+        button{width:100%;padding:12px;background:#002b5c;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:bold;}
+        
+        /* Added Styles for Google Button */
+        .google-btn { background: #ffffff; color: #757575; border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 15px; }
+        .divider { margin: 20px 0; border-top: 1px solid #eee; position: relative; text-align: center; }
+        .divider span { position: absolute; top: -10px; left: 42%; background: white; padding: 0 10px; font-size: 12px; color: #aaa; }
+    </style>
+    </head><body>
+    <div class="card">
+        <header>LOGIN</header>
+        <input id="email" type="email" placeholder="Email Address">
+        <input id="pass" type="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+
+        <!-- Keep these INSIDE the card div -->
+        <div class="divider"><span>OR</span></div>
+        <button class="google-btn" onclick="loginWithGoogle()">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18"> 
+            Sign in with Google
+        </button>
+
+        <p style="text-align:center;font-size:12px;margin-top:15px;">Don't have an account? <a href="/signup">Sign up</a></p>
+    </div>
+
     ${FB_SCRIPTS}
     <script>
         function login(){
-            const e = document.getElementById('email').value; const p = document.getElementById('pass').value;
+            const e = document.getElementById('email').value; 
+            const p = document.getElementById('pass').value;
             firebase.auth().signInWithEmailAndPassword(e, p).then(u => {
                 localStorage.setItem('userName', u.user.displayName || 'Admin');
                 window.location.href = '/';
             }).catch(err => alert(err.message));
         }
+
+        function loginWithGoogle() {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            firebase.auth().signInWithPopup(provider).then((result) => {
+                localStorage.setItem('userName', result.user.displayName);
+                window.location.href = '/';
+            }).catch((error) => {
+                alert("Google Error: " + error.message);
+            });
+        }
     </script></body></html>`);
 });
+
 
 app.get('/signup', (req, res) => {
     res.send(`<html><head><title>Sign Up</title><meta name="viewport" content="width=device-width, initial-scale=1.0">
