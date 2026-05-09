@@ -39,17 +39,15 @@ mongoose.connect(MONGO_URI)
 // --- AI FUNCTION ---
 async function askAI(prompt) {
     try {
-        const dbConfig = await Config.findOne({ keyName: 'GEMINI_API_KEY' });
-        const apiKey = dbConfig ? dbConfig.keyValue : process.env.GEMINI_API_KEY;
-        if (!apiKey) return "🤖 API Key missing. Update it in the dashboard!";
-
-        const res = await axios.post(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-            { contents: [{ parts: [{ text: prompt }] }] }
+        const res = await axios.get(
+            `https://flexieduconsult-ai-link.onrender.com/ai?q=${encodeURIComponent(prompt)}`
         );
-        return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "🤖 I couldn't process that.";
+
+        return res.data?.result || "🤖 No response from AI";
+
     } catch (err) {
-        return "⚠️ AI service unavailable. Check your API key.";
+        console.log("AI LINK ERROR:", err.message);
+        return "⚠️ AI service unavailable.";
     }
 }
 
