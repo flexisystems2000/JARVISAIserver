@@ -82,27 +82,46 @@ async function startJARVIS() {
         }
     });
 
-    // --- WELCOME & GOODBYE ---
-    sock.ev.on('group-participants.update', async (anu) => {
-        try {
-            const metadata = await sock.groupMetadata(anu.id).catch(() => null);
-            const groupName = metadata?.subject || "this group";
-            for (const num of anu.participants) {
-                const userTag = num.split('@')[0];
-                if (anu.action === 'add' || anu.action === 'invite') {
-                    await sock.sendMessage(anu.id, {
-                        text: `👋 @${userTag}\n\n🤖 *Welcome to ${groupName}*\n\nPlease follow the rules:\n• No links 🚫\n• No insults 🚫\n• Stay on topic 📚\n\nEnjoy your learning with *JARVIS AI* 🚀 from *${groupName}*`,
-                        mentions: [num]
-                    });
-                } else if (anu.action === 'remove' || anu.action === 'leave') {
-                    await sock.sendMessage(anu.id, {
-                        text: `👋 Goodbye @${userTag}\n\nWe are sorry to see you leave *${groupName}*. Best of luck in your studies! 🎓`,
-                        mentions: [num]
-                    });
-                }
+// --- AUTOMATED WELCOME & GOODBYE ---
+sock.ev.on('group-participants.update', async (anu) => {
+    const jid = anu.id;
+    if (!jid) return;
+
+    // A 1-second delay is still recommended to ensure WhatsApp 
+    // has finished delivering the 'join' event metadata to your bot.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    try {
+        const metadata = await sock.groupMetadata(jid).catch(() => null);
+        const groupName = metadata?.subject || "this group";
+        const groupDesc = metadata?.desc?.toString() || "No description provided.";
+
+        for (const num of anu.participants) {
+            // Skip if the bot itself joined, to prevent self-greeting loops
+            if (num === sock.user.id.split(':')[0] + '@s.whatsapp.net') continue;
+
+            const userTag = num.split('@')[0];
+
+            if (anu.action === 'add') {
+                // Immediate automated greeting
+                await sock.sendMessage(jid, {
+                    text: `👋 @${userTag}\n\n🤖 *Welcome to ${groupName}*\n\n📝 *Group Info:* ${groupDesc}\n\nEnjoy your stay! Powered by *JARVIS AI* 🚀`,
+                    mentions: [num]
+                });
+            } 
+            else if (anu.action === 'remove' || anu.action === 'leave') {
+                // Immediate automated goodbye
+                await sock.sendMessage(jid, {
+                    text: `👋 Goodbye @${userTag}\n\nWe're sorry to see you leave *${groupName}*. Best of luck! 🎓`,
+                    mentions: [num]
+                });
             }
-        } catch (err) { console.log("Group Event Error:", err); }
-    });
+        }
+    } catch (err) {
+        console.log("Automation Error:", err.message);
+    }
+});
+    
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
