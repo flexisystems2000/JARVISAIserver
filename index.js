@@ -238,6 +238,23 @@ try {
         const command = text.split(/ +/)[0];
         const args = body.trim().split(/ +/).slice(1);
 
+        // --- PUBLIC COMMANDS (Everyone can use these) ---
+        if (command === "!timetable") {
+            const timetableUrl = 'https://firebasestorage.googleapis.com/v0/b/jarvisai-1a594.firebasestorage.app/o/20243.jpg?alt=media';
+            try {
+                const response = await axios.get(timetableUrl, { responseType: 'arraybuffer' });
+                await sock.sendMessage(jid, { 
+                    image: Buffer.from(response.data), 
+                    caption: `🗓️ *POST UTME TUTORIALS 2025/2026*\n\n` +
+                             `✅ *Starts:* 11th July\n` +
+                             `💰 *Fee:* ₦6,000 monthly\n\n` +
+                             `_Powered by ${POWERED_BY}_`
+                });
+            } catch (err) {
+                console.log("Timetable Error:", err.message);
+            }
+               }
+
         if (isStaff) {
             if (command === "!ai") {
                 const prompt = args.join(" ");
