@@ -378,7 +378,7 @@ if (command === "!menu" || command === "!help") {
 🔹 *!ai [query]* - Ask anything
 🔹 *!ginfo* - Group status report
 🔹 *!listonline* - Activity tracker
-
+🔹 *!timetable* - Get latest tutorial schedule
 🛡️ *GROUP MODERATION*
 🔸 *!add [number]* - Add new member
 🔸 *!kick @user* - Remove member
