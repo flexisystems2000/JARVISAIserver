@@ -269,6 +269,83 @@ try {
     }
         }
 
+        // --- LIST ADMINS COMMAND (Everyone can use) ---
+if (command === "!listadmins") {
+
+    if (!jid.endsWith('@g.us')) {
+        return sock.sendMessage(jid, {
+            text: "❌ This command only works in groups."
+        });
+    }
+
+    try {
+        let metadata = groupCache.get(jid);
+
+        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000) {
+            metadata = await sock.groupMetadata(jid);
+            metadata.lastFetch = Date.now();
+            groupCache.set(jid, metadata);
+        }
+
+        const admins = metadata.participants.filter(p => p.admin);
+
+        let adminList = `👑 *${metadata.subject} Admins*\n\n`;
+
+        admins.forEach((admin, index) => {
+            adminList += `${index + 1}. @${admin.id.split('@')[0]}\n`;
+        });
+
+        adminList += `\n🤖 _Powered by ${POWERED_BY}_`;
+
+        await sock.sendMessage(jid, {
+            text: adminList,
+            mentions: admins.map(a => a.id)
+        });
+
+    } catch (err) {
+        console.log("ListAdmins Error:", err.message);
+
+        await sock.sendMessage(jid, {
+            text: "❌ Failed to fetch admin list."
+        });
+    }
+}
+
+// --- MENU / HELP COMMAND ---
+if (command === "!menu" || command === "!help") {
+    const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
+    
+*Powered by ${POWERED_BY}*
+
+━━━━━━━━━━━━━━━━━━━━
+✨ *AI & UTILITY*
+🔹 *!ai [query]* - Ask anything
+🔹 *!ginfo* - Group status report
+🔹 *!listonline* - Activity tracker
+🔹 *!timetable* - Get latest tutorial schedule
+🔹 *!listadmins* - View group admins
+🛡️ *GROUP MODERATION*
+🔸 *!add [number]* - Add new member
+🔸 *!kick @user* - Remove member
+🔸 *!promote @user* - Make admin
+🔸 *!mute [time] [unit]* - Lock group
+🔸 *!unmute [time] [unit]* - Open group
+🔸 *!reset @user* - Clear warnings
+
+🚫 *SYSTEM PROTECTIONS*
+✅ *Watchdog:* Anti-Link & Anti-Badword
+✅ *Anti-Status:* Deletes status tags
+✅ *Auto-Greet:* Welcome/Goodbye
+━━━━━━━━━━━━━━━━━━━━
+
+_Type !mute 30 min to test the timer!_`;
+
+    return sock.sendMessage(jid, { 
+        text: menuText,
+        quoted: m 
+    });
+}
+        
         if (isStaff) {
             if (command === "!ai") {
                 const prompt = args.join(" ");
@@ -380,41 +457,6 @@ if (command === "!add") {
         return sock.sendMessage(jid, { text: "❌ Error: Am I an admin? Also check my connection." });
     }
 }
-
-// --- MENU / HELP COMMAND ---
-if (command === "!menu" || command === "!help") {
-    const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
-    
-*Powered by ${POWERED_BY}*
-
-━━━━━━━━━━━━━━━━━━━━
-✨ *AI & UTILITY*
-🔹 *!ai [query]* - Ask anything
-🔹 *!ginfo* - Group status report
-🔹 *!listonline* - Activity tracker
-🔹 *!timetable* - Get latest tutorial schedule
-🛡️ *GROUP MODERATION*
-🔸 *!add [number]* - Add new member
-🔸 *!kick @user* - Remove member
-🔸 *!promote @user* - Make admin
-🔸 *!mute [time] [unit]* - Lock group
-🔸 *!unmute [time] [unit]* - Open group
-🔸 *!reset @user* - Clear warnings
-
-🚫 *SYSTEM PROTECTIONS*
-✅ *Watchdog:* Anti-Link & Anti-Badword
-✅ *Anti-Status:* Deletes status tags
-✅ *Auto-Greet:* Welcome/Goodbye
-━━━━━━━━━━━━━━━━━━━━
-
-_Type !mute 30 min to test the timer!_`;
-
-    return sock.sendMessage(jid, { 
-        text: menuText,
-        quoted: m 
-    });
-}
-
 
 
             if (command === "!reset") {
