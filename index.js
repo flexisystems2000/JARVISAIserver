@@ -240,8 +240,7 @@ try {
 
         // --- PUBLIC COMMANDS (Everyone can use these) ---
         if (command === "!timetable") {
-            const timetableUrl = 'https://firebasestorage.googleapis.com/v0/b/jarvisai-1a594.firebasestorage.app/o/20243.jpg?alt=media';
-            try {
+            const timetableUrl = 'https://i.postimg.cc/mkVBvmLz/IMG-20260510-WA0205.jpg';
                 const response = await axios.get(timetableUrl, { responseType: 'arraybuffer' });
                 await sock.sendMessage(jid, { 
                     image: Buffer.from(response.data), 
