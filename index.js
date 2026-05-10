@@ -240,19 +240,30 @@ try {
 
         // --- PUBLIC COMMANDS (Everyone can use these) ---
         if (command === "!timetable") {
-            const timetableUrl = 'https://i.postimg.cc/mkVBvmLz/IMG-20260510-WA0205.jpg';
-                const response = await axios.get(timetableUrl, { responseType: 'arraybuffer' });
-                await sock.sendMessage(jid, { 
-                    image: Buffer.from(response.data), 
-                    caption: `🗓️ *POST UTME TUTORIALS 2025/2026*\n\n` +
-                             `✅ *Starts:* 11th July\n` +
-                             `💰 *Fee:* ₦6,000 monthly\n\n` +
-                             `_Powered by ${POWERED_BY}_`
-                });
-            } catch (err) {
-                console.log("Timetable Error:", err.message);
-            }
-               }
+    try {
+        const timetableUrl = 'https://i.postimg.cc/mkVBvmLz/IMG-20260510-WA0205.jpg';
+
+        const response = await axios.get(timetableUrl, {
+            responseType: 'arraybuffer'
+        });
+
+        await sock.sendMessage(jid, {
+            image: Buffer.from(response.data),
+            caption:
+                `🗓️ *POST UTME TUTORIALS 2025/2026*\n\n` +
+                `✅ *Starts:* 11th July\n` +
+                `💰 *Fee:* ₦6,000 monthly\n\n` +
+                `_Powered by ${POWERED_BY}_`
+        });
+
+    } catch (err) {
+        console.log("Timetable Error:", err.message);
+
+        await sock.sendMessage(jid, {
+            text: "❌ Failed to load timetable image."
+        });
+    }
+        }
 
         if (isStaff) {
             if (command === "!ai") {
