@@ -253,6 +253,10 @@ try {
                 `🗓️ *POST UTME TUTORIALS 2025/2026*\n\n` +
                 `✅ *Starts:* 11th July\n` +
                 `💰 *Fee:* ₦6,000 monthly\n\n` +
+
+                `📢 *Join the Post UTME WhatsApp group with this link 👇👇👇*\n\n` +
+                `https://chat.whatsapp.com/KoI4QtlwggOFtGyoE0MYY4\n\n` +
+
                 `_Powered by ${POWERED_BY}_`
         });
 
