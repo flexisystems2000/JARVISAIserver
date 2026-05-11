@@ -241,7 +241,7 @@ try {
         // --- PUBLIC COMMANDS (Everyone can use these) ---
         if (command === "!timetable") {
     try {
-        const timetableUrl = 'https://i.postimg.cc/mkVBvmLz/IMG-20260510-WA0205.jpg';
+        const timetableUrl = 'https://i.postimg.cc/vTyBtTzS/IMG-20260511-WA0031.jpg';
 
         const response = await axios.get(timetableUrl, {
             responseType: 'arraybuffer'
