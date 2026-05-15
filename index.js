@@ -46,14 +46,13 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.log("❌ DB Error:", err));
 
 // --- AI FUNCTION ---
-async function askAI(prompt, base64Image = null) {
+async function askAI(prompt, base64Media = null, type = "image") {
     try {
-        // We use POST now to send both text and image data safely
         const res = await axios.post(`https://flexieduconsult-ai-link.onrender.com/ai`, {
             prompt: prompt,
-            image: base64Image // This will be null if no photo is sent
+            image: type === "image" ? base64Media : null,
+            audio: type === "audio" ? base64Media : null
         });
-
         return res.data?.result || "🤖 No response from AI";
     } catch (err) {
         console.log("AI LINK ERROR:", err.message);
