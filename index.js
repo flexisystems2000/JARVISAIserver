@@ -421,9 +421,21 @@ _Type !mute 30 min to test the timer!_`;
                     }
                 }
 
-                const aiReply = await askAI(prompt || "Analyze this image and explain it clearly.");
+                                let base64Image = null;
+                if (isDirectImage || isQuotedImage) {
+                    const mediaMessage = isDirectImage ? m.message : quoted;
+                    try {
+                        const buffer = await downloadMedia(mediaMessage);
+                        base64Image = buffer.toString('base64');
+                    } catch (err) {
+                        console.log("Media Download Error:", err.message);
+                    }
+                }
+
+                // Pass the image data to the updated askAI function
+                const aiReply = await askAI(prompt || "Analyze this image and explain it clearly.", base64Image);
                 return sock.sendMessage(jid, { text: `🤖 *JARVIS AI*\n\n${aiReply}` });
-                        }
+                            
             
 
             if (command === "!listonline") {
