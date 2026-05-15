@@ -244,7 +244,28 @@ try {
         const command = text.split(/ +/)[0];
         const args = body.trim().split(/ +/).slice(1);
 
-        // --- PUBLIC COMMANDS (Everyone can use these) ---
+         // --- NEW: askAI NIGERIA PROTOCOL (7 PM WAT) ---
+        const nigeriaTime = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Africa/Lagos', hour: 'numeric', hour12: false
+        }).format(new Date());
+
+        const currentHourWAT = parseInt(nigeriaTime);
+
+        if (isStaff && currentHourWAT >= 19 && !protocolFired && !text.startsWith("!")) {
+            const subjects = ["math", "physics", "chemistry", "biology", "english", "economics", "government"];
+            const foundSubject = subjects.find(s => text.includes(s));
+
+            if (foundSubject) {
+                const adminTag = `@${sender.split('@')[0]}`;
+                await sock.sendMessage(jid, { 
+                    text: `================\n*askAI PROTOCOL ONLINE*\n================\n${adminTag} Kindly use !ai to fetch PostUTME questions for ${foundSubject.toUpperCase()}`, 
+                    mentions: [sender] 
+                });
+                protocolFired = true;
+            }
+        }
+    
+  // --- PUBLIC COMMANDS (Everyone can use these) ---
         if (command === "!timetable") {
     try {
         const timetableUrl = 'https://i.postimg.cc/vTyBtTzS/IMG-20260511-WA0031.jpg';
