@@ -518,7 +518,7 @@ _Type !mute 30 min to test the timer!_`;
 
     try {
         // We call a new endpoint on your server specifically for images
-        const res = await axios.post(`https://flexieduconsult-ai-link.onrender.com/generate-image`, {
+        const res = await axios.post(`https://flexieduconsult-ai-link.onrender.com/image`, {
             prompt: prompt
         });
 
