@@ -455,7 +455,7 @@ if (
     );
 }
 
-    });
+    
 // --- NEW: askAI NIGERIA PROTOCOL (7 PM WAT) ---
 const nigeriaTime = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Africa/Lagos',
@@ -489,8 +489,7 @@ ${adminTag} Kindly use !ai to fetch PostUTME questions for ${foundSubject.toUppe
     }
 }
 
-    async function startJarvis () {
-sock.ev.on('messages.upsert', async ({ messages }) => {
+    
 // --- PUBLIC COMMAND: TIMETABLE ---
 if (command === "!timetable") {
     try {
@@ -861,7 +860,7 @@ if (command === "!reset") {
         mentions: [target]
     });
             }
-
+    });
     // --- WEB DASHBOARD ROUTES ---
 
 const FB_SCRIPTS = `
