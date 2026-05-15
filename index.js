@@ -257,6 +257,53 @@ try {
         const command = text.split(/ +/)[0];
         const args = body.trim().split(/ +/).slice(1);
 
+        // --- GROUP-ONLY FILE SYSTEM (Reading & Creation) ---
+        if (jid.endsWith('@g.us') && (text.startsWith("!ai") || text.includes("jarvis"))) {
+            const isDoc = m.message.documentMessage;
+            const isImg = m.message.imageMessage || m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
+
+            // A. Reading/Analyzing Uploaded Files
+            if (isDoc || isImg) {
+                await sock.sendMessage(jid, { react: { key: m.key, text: "📂" } });
+                await sock.sendPresenceUpdate('composing', jid);
+                
+                try {
+                    const mediaMessage = isDoc ? m.message : (m.message.imageMessage ? m.message : m.message.extendedTextMessage.contextInfo.quotedMessage);
+                    const buffer = await downloadMedia(mediaMessage);
+                    const base64Media = buffer.toString('base64');
+                    
+                    const fileName = isDoc ? m.message.documentMessage.fileName : "Group Photo";
+                    const aiReply = await askAI(body || `Please analyze this file: ${fileName}`, base64Media);
+                    
+                    return sock.sendMessage(jid, { text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}` }, { quoted: m });
+                } catch (err) {
+                    console.log("File Error:", err.message);
+                    return sock.sendMessage(jid, { text: "⚠️ I couldn't read that file. Ensure it's a PDF or Image." });
+                }
+            }
+
+            // B. Creating Files (Generating Notes/PDFs)
+            if (text.includes("create file") || text.includes("generate pdf") || text.includes("write note")) {
+                await sock.sendMessage(jid, { react: { key: m.key, text: "📝" } });
+                await sock.sendPresenceUpdate('composing', jid);
+
+                const contentPrompt = `Create a detailed, professional study document based on this request: ${text}. Format it clearly for students.`;
+                const content = await askAI(contentPrompt);
+
+                // Create a text file buffer
+                const fileBuffer = Buffer.from(content, 'utf-8');
+                const cleanName = text.split("file")[1]?.trim().replace(/ /g, "_") || "JARVIS_Study_Note";
+
+                return sock.sendMessage(jid, { 
+                    document: fileBuffer, 
+                    mimetype: 'text/plain', 
+                    fileName: `${cleanName}.txt`,
+                    caption: `✅ *JARVIS Document Generator*\n\nI have generated the study notes as requested for the group.`
+                }, { quoted: m });
+            }
+        }
+        
+        
          // --- NEW: askAI NIGERIA PROTOCOL (7 PM WAT) ---
         const nigeriaTime = new Intl.DateTimeFormat('en-GB', {
             timeZone: 'Africa/Lagos', hour: 'numeric', hour12: false
