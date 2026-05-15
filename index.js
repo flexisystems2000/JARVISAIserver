@@ -524,7 +524,7 @@ _Type !mute 30 min to test the timer!_`;
 
         if (res.data?.success) {
             await sock.sendMessage(jid, { 
-                image: { url: res.data.imageUrl }, 
+                image: { url: res.data.image }, 
                 caption: `🖌️ *JARVIS AI Art*\n\nPrompt: ${prompt}\n\n_Powered by Nano Banana 2_` 
             });
         } else {
