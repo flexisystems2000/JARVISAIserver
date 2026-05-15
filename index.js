@@ -445,6 +445,33 @@ _Type !mute 30 min to test the timer!_`;
                     .catch(() => sock.sendMessage(jid, { text: "❌ Failed. Am I admin?" }));
             }
 
+            if (command === "!draw") {
+    const prompt = args.join(" ");
+    if (!prompt) return sock.sendMessage(jid, { text: "❌ Please provide a description. Example: !draw a futuristic school in Lagos" });
+
+    await sock.sendMessage(jid, { react: { key: m.key, text: "🎨" } });
+    await sock.sendPresenceUpdate('composing', jid);
+
+    try {
+        // We call a new endpoint on your server specifically for images
+        const res = await axios.post(`https://flexieduconsult-ai-link.onrender.com/generate-image`, {
+            prompt: prompt
+        });
+
+        if (res.data?.success) {
+            await sock.sendMessage(jid, { 
+                image: { url: res.data.imageUrl }, 
+                caption: `🖌️ *JARVIS AI Art*\n\nPrompt: ${prompt}\n\n_Powered by Nano Banana 2_` 
+            });
+        } else {
+            throw new Error(res.data.error || "Generation failed");
+        }
+    } catch (err) {
+        console.log("Image Gen Error:", err.message);
+        await sock.sendMessage(jid, { text: "⚠️ Failed to generate image. Daily quota might be reached." });
+    }
+            }
+
 // --- TIMED MUTE/UNMUTE LOGIC ---
 if (command === "!mute" || command === "!unmute") {
     const duration = args[0]; 
