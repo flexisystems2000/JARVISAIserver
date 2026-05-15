@@ -1214,3 +1214,5 @@ app.get('/pair', async (req, res) => {
 
 // ---------------- START ----------------
 app.listen(port, () => startJARVIS());
+});   
+}
