@@ -385,13 +385,44 @@ _Type !mute 30 min to test the timer!_`;
 }
         
         if (isStaff) {
-            if (command === "!ai") {
+                        if (command === "!ai") {
                 const prompt = args.join(" ");
-                if (!prompt) return sock.sendMessage(jid, { text: "Oya, what is your question?" });
+                const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
+                const isQuotedImage = quoted?.imageMessage;
+                const isDirectImage = m.message.imageMessage;
+
+                if (!prompt && !isDirectImage && !isQuotedImage) {
+                    return sock.sendMessage(jid, { text: "Oya, what is your question? You can also snap a photo and tag me!" });
+                }
+
                 await sock.sendPresenceUpdate('composing', jid);
-                const aiReply = await askAI(prompt);
+
+                if (isDirectImage || isQuotedImage) {
+                    // Send a quick feedback message so users know JARVIS is "looking"
+                    await sock.sendMessage(jid, { react: { key: m.key, text: "📸" } });
+                    
+                    const mediaMessage = isDirectImage ? m.message : quoted;
+                    try {
+                        const buffer = await downloadMedia(mediaMessage);
+                        // Convert to Base64 if your API needs it
+                        const base64Image = buffer.toString('base64');
+                        
+                        /* 
+                           IMPORTANT: If your Render API (flexieduconsult-ai-link) 
+                           only takes text via GET, it won't see the image yet. 
+                           You'll need to update that API to accept POST requests 
+                           with the image buffer/base64.
+                        */
+                        console.log("Image received and buffered for AI processing");
+                    } catch (err) {
+                        console.log("Media Download Error:", err.message);
+                    }
+                }
+
+                const aiReply = await askAI(prompt || "Analyze this image and explain it clearly.");
                 return sock.sendMessage(jid, { text: `🤖 *JARVIS AI*\n\n${aiReply}` });
-            }
+                        }
+            
 
             if (command === "!listonline") {
                 if (!metadata) return;
