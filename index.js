@@ -423,7 +423,7 @@ We wish you success ahead from *${groupName}* 🎓`,
             }
         }
     }
-});
+
 
 // B. Creating Files (Generating Notes/PDFs)
 if (
@@ -455,7 +455,7 @@ if (
     );
 }
 
-
+    });
 // --- NEW: askAI NIGERIA PROTOCOL (7 PM WAT) ---
 const nigeriaTime = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Africa/Lagos',
@@ -1198,7 +1198,7 @@ if(!localStorage.getItem('userName')) window.location.href='/login';
 `);
 });
 
-
+}
 // ---------------- PAIR ----------------
 app.get('/pair', async (req, res) => {
     const num = req.query.number?.replace(/[^0-9]/g,'');
@@ -1210,8 +1210,9 @@ app.get('/pair', async (req, res) => {
     }catch(e){
         res.send("Error generating code");
     }
-});
+});  
 
+}
 
 // ---------------- START ----------------
 app.listen(port, () => {
