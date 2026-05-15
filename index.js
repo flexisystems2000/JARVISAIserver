@@ -62,12 +62,27 @@ async function askAI(prompt) {
 
 const groupCache = new Map();
 const activityTracker = new Map();
+
+// --- PASTE THE NEW STATE LOGIC HERE ---
+let protocolFired = false;
+
+setInterval(() => {
+    const nigTime = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Africa/Lagos', hour: 'numeric', minute: 'numeric', hour12: false
+    }).format(new Date());
+
+    if (nigTime === "00:00") {
+        protocolFired = false;
+        console.log("🔄 Protocol reset (Nigeria Midnight)");
+    }
+}, 60000);
+// --------------------------------------
+
 let sock;
 
 async function startJARVIS() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const { version } = await fetchLatestBaileysVersion();
-
     sock = makeWASocket({
         version, 
         auth: state,
