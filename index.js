@@ -425,51 +425,6 @@ We wish you success ahead from *${groupName}* 🎓`,
     }
 });
 
-// A. Reading/Analyzing Uploaded Files
-if (isDoc || isImg) {
-    await sock.sendMessage(jid, { react: { key: m.key, text: "📂" } });
-    await sock.sendPresenceUpdate('composing', jid);
-
-    try {
-        let mediaMessage;
-
-        if (isDoc) {
-            mediaMessage = m.message.documentMessage;
-        } else {
-            mediaMessage = m.message.imageMessage
-                ? m.message
-                : m.message.extendedTextMessage?.contextInfo?.quotedMessage;
-        }
-
-        const buffer = await downloadMedia(mediaMessage);
-        const base64Media = buffer.toString('base64');
-
-        const fileName = isDoc
-            ? m.message.documentMessage?.fileName || "document.pdf"
-            : "Image Analysis";
-
-        const aiReply = await askAI(
-            body || `Please analyze this file: ${fileName}`,
-            base64Media
-        );
-
-        return sock.sendMessage(
-            jid,
-            {
-                text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`
-            },
-            { quoted: m }
-        );
-
-    } catch (err) {
-        console.log("File Error:", err.message);
-        return sock.sendMessage(jid, {
-            text: "⚠️ I couldn't read that file. Ensure it's a valid image or document."
-        });
-    }
-}
-
-
 // B. Creating Files (Generating Notes/PDFs)
 if (
     text.includes("create file") ||
@@ -534,7 +489,7 @@ ${adminTag} Kindly use !ai to fetch PostUTME questions for ${foundSubject.toUppe
     }
 }
 
-
+sock.ev.on('messages.upsert', async ({ messages }) => {
 // --- PUBLIC COMMAND: TIMETABLE ---
 if (command === "!timetable") {
     try {
