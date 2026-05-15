@@ -1198,6 +1198,7 @@ if(!localStorage.getItem('userName')) window.location.href='/login';
 });
     
 });
+    
 // ---------------- PAIR ----------------
 app.get('/pair', async (req, res) => {
     const num = req.query.number?.replace(/[^0-9]/g,'');
@@ -1209,13 +1210,10 @@ app.get('/pair', async (req, res) => {
     }catch(e){
         res.send("Error generating code");
     }
-});  
-
-}
+});
 
 // ---------------- START ----------------
 app.listen(port, () => {
    console.log(`Server running on ${port}`);
    startJARVIS();
-});   
-
+});
