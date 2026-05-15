@@ -78,6 +78,17 @@ setInterval(() => {
 }, 60000);
 // --------------------------------------
 
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
+
+async function downloadMedia(message) {
+    const type = Object.keys(message)[0];
+    const stream = await downloadContentFromMessage(message[type], type.replace('Message', ''));
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk]);
+    }
+    return buffer;
+}
 let sock;
 
 async function startJARVIS() {
