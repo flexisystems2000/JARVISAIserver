@@ -1213,6 +1213,8 @@ app.get('/pair', async (req, res) => {
 
 
 // ---------------- START ----------------
-app.listen(port, () => startJARVIS());
+app.listen(port, () => {
+   console.log(`Server running on ${port}`);
+   startJARVIS();
 });   
 }
