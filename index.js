@@ -106,47 +106,38 @@ async function startJARVIS() {
         }
     });
 
-// --- AUTOMATED WELCOME & GOODBYE ---
-sock.ev.on('group-participants.update', async (anu) => {
-    const jid = anu.id;
-    if (!jid) return;
+// --- UPDATED AUTOMATED WELCOME & GOODBYE ---
+    sock.ev.on('group-participants.update', async (anu) => {
+        const jid = anu.id;
+        if (!jid) return;
+        await new Promise(resolve => setTimeout(resolve, 2000)); 
 
-    // A 1-second delay is still recommended to ensure WhatsApp 
-    // has finished delivering the 'join' event metadata to your bot.
-    await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+            let metadata = groupCache.get(jid);
+            if (!metadata) metadata = await sock.groupMetadata(jid).catch(() => ({ subject: "this group" }));
+            
+            const groupName = metadata.subject;
 
-    try {
-        const metadata = await sock.groupMetadata(jid).catch(() => null);
-        const groupName = metadata?.subject || "this group";
-        const groupDesc = metadata?.desc?.toString() || "No description provided.";
+            for (const num of anu.participants) {
+                if (num === sock.user.id.split(':')[0] + '@s.whatsapp.net') continue;
+                const userTag = num.split('@')[0];
 
-        for (const num of anu.participants) {
-            // Skip if the bot itself joined, to prevent self-greeting loops
-            if (num === sock.user.id.split(':')[0] + '@s.whatsapp.net') continue;
-
-            const userTag = num.split('@')[0];
-
-            if (anu.action === 'add') {
-                // Immediate automated greeting
-                await sock.sendMessage(jid, {
-                    text: `👋 @${userTag}\n\n🤖 *Welcome to ${groupName}*\n\n📝 *Group Info:* ${groupDesc}\n\nEnjoy your stay! Powered by *JARVIS AI* 🚀`,
-                    mentions: [num]
-                });
-            } 
-            else if (anu.action === 'remove' || anu.action === 'leave') {
-                // Immediate automated goodbye
-                await sock.sendMessage(jid, {
-                    text: `👋 Goodbye @${userTag}\n\nWe're sorry to see you leave *${groupName}*. Best of luck! 🎓`,
-                    mentions: [num]
-                });
+                if (anu.action === 'add') {
+                    await sock.sendMessage(jid, {
+                        text: `👋 @${userTag}\n\n🤖 *Welcome to ${groupName}*\n\nSuccess in your Post-UTME starts here! Prepare with the best tools.\n\n_Powered by JARVIS AI_ 🚀`,
+                        mentions: [num]
+                    });
+                } 
+                else if (anu.action === 'remove' || anu.action === 'leave') {
+                    await sock.sendMessage(jid, {
+                        text: `👋 Goodbye @${userTag}\n\nWe're sorry to see you leave *${groupName}*. Best of luck! 🎓`,
+                        mentions: [num]
+                    });
+                }
             }
-        }
-    } catch (err) {
-        console.log("Automation Error:", err.message);
-    }
-});
+        } catch (err) { console.log("Automation Error:", err.message); }
+    });
     
-
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
