@@ -489,6 +489,7 @@ ${adminTag} Kindly use !ai to fetch PostUTME questions for ${foundSubject.toUppe
     }
 }
 
+    async function startJarvis () {
 sock.ev.on('messages.upsert', async ({ messages }) => {
 // --- PUBLIC COMMAND: TIMETABLE ---
 if (command === "!timetable") {
