@@ -427,6 +427,7 @@ if (command === "!menu" || command === "!help") {
 🔹 *!listonline* - Activity tracker
 🔹 *!timetable* - Get latest tutorial schedule
 🔹 *!listadmins* - View group admins
+🔹 *!image* - To generate images
 🛡️ *GROUP MODERATION*
 🔸 *!add [number]* - Add new member
 🔸 *!kick @user* - Remove member
@@ -508,9 +509,9 @@ _Type !mute 30 min to test the timer!_`;
                     .catch(() => sock.sendMessage(jid, { text: "❌ Failed. Am I admin?" }));
             }
 
-            if (command === "!draw") {
+            if (command === "!image") {
     const prompt = args.join(" ");
-    if (!prompt) return sock.sendMessage(jid, { text: "❌ Please provide a description. Example: !draw a futuristic school in Lagos" });
+    if (!prompt) return sock.sendMessage(jid, { text: "❌ Please provide a description. Example: !image a futuristic school in Lagos" });
 
     await sock.sendMessage(jid, { react: { key: m.key, text: "🎨" } });
     await sock.sendPresenceUpdate('composing', jid);
