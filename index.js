@@ -1196,8 +1196,8 @@ if(!localStorage.getItem('userName')) window.location.href='/login';
 </html>
 `);
 });
-
-}
+    
+});
 // ---------------- PAIR ----------------
 app.get('/pair', async (req, res) => {
     const num = req.query.number?.replace(/[^0-9]/g,'');
