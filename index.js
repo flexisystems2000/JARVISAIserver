@@ -563,4 +563,699 @@ if (command === "!timetable") {
         });
     }
 }
+
+    // --- LIST ADMINS COMMAND (Everyone can use) ---
+if (command === "!listadmins") {
+    if (!jid.endsWith('@g.us')) {
+        return sock.sendMessage(jid, {
+            text: "❌ This command only works in groups."
+        });
+    }
+
+    try {
+        let metadata = groupCache.get(jid);
+
+        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000) {
+            metadata = await sock.groupMetadata(jid);
+            metadata.lastFetch = Date.now();
+            groupCache.set(jid, metadata);
+        }
+
+        const admins = metadata.participants.filter(p => p.admin);
+
+        let adminList = `👑 *${metadata.subject} Admins*\n\n`;
+
+        admins.forEach((admin, index) => {
+            adminList += `${index + 1}. @${admin.id.split('@')[0]}\n`;
+        });
+
+        adminList += `\n🤖 _Powered by ${POWERED_BY}_`;
+
+        await sock.sendMessage(jid, {
+            text: adminList,
+            mentions: admins.map(a => a.id)
+        });
+
+    } catch (err) {
+        console.log("ListAdmins Error:", err.message);
+
+        await sock.sendMessage(jid, {
+            text: "❌ Failed to fetch admin list."
+        });
+    }
+}
+
+
+// --- MENU / HELP COMMAND ---
+if (command === "!menu" || command === "!help") {
+    const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
     
+*Powered by ${POWERED_BY}*
+
+━━━━━━━━━━━━━━━━━━━━
+✨ *AI & UTILITY*
+🔹 *!ai [query]* - Ask anything
+🔹 *!ginfo* - Group status report
+🔹 *!listonline* - Activity tracker
+🔹 *!timetable* - Get latest tutorial schedule
+🔹 *!listadmins* - View group admins
+🔹 *!image* - To generate images
+
+🛡️ *GROUP MODERATION*
+🔸 *!add [number]* - Add new member
+🔸 *!kick @user* - Remove member
+🔸 *!promote @user* - Make admin
+🔸 *!mute [time] [unit]* - Lock group
+🔸 *!unmute [time] [unit]* - Open group
+🔸 *!reset @user* - Clear warnings
+
+🚫 *SYSTEM PROTECTIONS*
+✅ *Watchdog:* Anti-Link & Anti-Badword
+✅ *Anti-Status:* Deletes status tags
+✅ *Auto-Greet:* Welcome/Goodbye
+━━━━━━━━━━━━━━━━━━━━
+
+_Type !mute 30 min to test the timer!_`;
+
+    return sock.sendMessage(jid, {
+        text: menuText,
+        quoted: m
+    });
+}
+
+
+// =======================
+// AI COMMAND (FIXED SAFE VERSION)
+// =======================
+if (isStaff && command === "!ai") {
+    const prompt = args.join(" ");
+    const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
+    const isQuotedImage = quoted?.imageMessage;
+    const isDirectImage = m.message.imageMessage;
+
+    if (!prompt && !isDirectImage && !isQuotedImage) {
+        return sock.sendMessage(jid, {
+            text: "Oya, what is your question? You can also send an image."
+        });
+    }
+
+    await sock.sendPresenceUpdate('composing', jid);
+
+    let base64Image = null;
+
+    if (isDirectImage || isQuotedImage) {
+        await sock.sendMessage(jid, { react: { key: m.key, text: "📸" } });
+
+        const mediaMessage = isDirectImage ? m.message : quoted;
+
+        try {
+            const buffer = await downloadMedia(mediaMessage);
+            base64Image = buffer.toString('base64');
+        } catch (err) {
+            console.log("Media Error:", err.message);
+        }
+    }
+
+    const aiReply = await askAI(
+        prompt || "Analyze this image clearly.",
+        base64Image
+    );
+
+    return sock.sendMessage(jid, {
+        text: `🤖 *JARVIS AI*\n\n${aiReply}`
+    });
+}
+
+
+// --- WATCHONLINE COMMAND ---
+if (command === "!listonline") {
+    if (!metadata) return;
+
+    const activeThreshold = 30 * 60 * 1000;
+    let activeCount = 0;
+
+    metadata.participants.forEach(p => {
+        if (
+            activityTracker.has(p.id) &&
+            (Date.now() - activityTracker.get(p.id) < activeThreshold)
+        ) {
+            activeCount++;
+        }
+    });
+
+    return sock.sendMessage(jid, {
+        text: `*📊 ACTIVITY REPORT*\n\n🟢 Active: ${activeCount}\n👻 Ghosts: ${metadata.participants.length - activeCount}`
+    });
+}
+
+
+// --- GROUP INFO ---
+if (command === "!ginfo") {
+    return sock.sendMessage(jid, {
+        text: `*📊 ${BOT_NAME} REPORT*\n\nGroup: ${metadata?.subject}\nMembers: ${metadata?.participants?.length}\nPowered by: ${POWERED_BY}`
+    });
+}
+
+
+// --- KICK / PROMOTE ---
+if (command === "!kick" || command === "!promote") {
+    let target =
+        m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
+        m.message.extendedTextMessage?.contextInfo?.participant;
+
+    if (!target && args[0]) {
+        target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+    }
+
+    if (!target || target.includes(OWNER_NUMBER)) {
+        return sock.sendMessage(jid, { text: "❌ Target invalid." });
+    }
+
+    const action = command === "!kick" ? "remove" : "promote";
+
+    try {
+        await sock.groupParticipantsUpdate(jid, [target], action);
+
+        await sock.sendMessage(jid, {
+            text: `✅ Successfully ${action === "remove" ? "removed" : "promoted"}.`
+        });
+
+    } catch (err) {
+        console.log("Group Action Error:", err.message);
+        await sock.sendMessage(jid, {
+            text: "❌ Failed. Am I admin?"
+        });
+    }
+}
+
+
+// --- IMAGE GENERATION ---
+if (command === "!image") {
+    const prompt = args.join(" ");
+    if (!prompt) {
+        return sock.sendMessage(jid, {
+            text: "❌ Provide a prompt"
+        });
+    }
+
+    await sock.sendMessage(jid, { react: { key: m.key, text: "🎨" } });
+
+    try {
+        const res = await axios.get(
+            `https://flexieduconsult-ai-link.onrender.com/image?prompt=${encodeURIComponent(prompt)}`
+        );
+
+        if (res.data?.success) {
+            await sock.sendMessage(jid, {
+                image: { url: res.data.image },
+                caption: `🖌️ *JARVIS AI ART*\nPrompt: ${prompt}`
+            });
+        }
+    } catch (err) {
+        console.log(err.message);
+        await sock.sendMessage(jid, {
+            text: "⚠️ Image generation failed"
+        });
+    }
+}
+
+
+// --- MUTE / UNMUTE ---
+if (command === "!mute" || command === "!unmute") {
+    const duration = args[0];
+    const unit = args[1]?.toLowerCase();
+
+    const action = command === "!mute"
+        ? 'announcement'
+        : 'not_announcement';
+
+    const statusText = command === "!mute"
+        ? "🔒 Group Locked"
+        : "🔓 Group Unlocked";
+
+    if (!duration || isNaN(duration)) {
+        await sock.groupSettingUpdate(jid, action);
+        return sock.sendMessage(jid, { text: statusText });
+    }
+
+    let milliseconds;
+
+    switch (unit) {
+        case 'sec':
+        case 's': milliseconds = duration * 1000; break;
+
+        case 'min':
+        case 'm': milliseconds = duration * 60 * 1000; break;
+
+        case 'hr':
+        case 'h': milliseconds = duration * 60 * 60 * 1000; break;
+
+        default:
+            return sock.sendMessage(jid, {
+                text: `❌ Use: ${command} [number] [sec/min/hr]`
+            });
+    }
+
+    await sock.groupSettingUpdate(jid, action);
+
+    setTimeout(async () => {
+        const reverse = action === 'announcement'
+            ? 'not_announcement'
+            : 'announcement';
+
+        await sock.groupSettingUpdate(jid, reverse);
+
+        await sock.sendMessage(jid, {
+            text: "🔄 Auto-reversed group setting"
+        });
+    }, milliseconds);
+}
+
+
+// --- ADD USER ---
+if (command === "!add") {
+    let target = args[0];
+
+    if (!target) {
+        return sock.sendMessage(jid, {
+            text: "❌ Provide number e.g. !add 08012345678"
+        });
+    }
+
+    target = target.replace(/[^0-9]/g, '');
+
+    if (target.startsWith('0')) {
+        target = '234' + target.slice(1);
+    }
+
+    const targetJid = target + "@s.whatsapp.net";
+
+    try {
+        const response = await sock.groupParticipantsUpdate(
+            jid,
+            [targetJid],
+            "add"
+        );
+
+        const result = response?.[0];
+
+        if (result?.status === "200") {
+            return sock.sendMessage(jid, {
+                text: `✅ Added @${target}`,
+                mentions: [targetJid]
+            });
+        } else if (result?.status === "403") {
+            return sock.sendMessage(jid, {
+                text: "⚠️ Privacy restriction"
+            });
+        } else if (result?.status === "409") {
+            return sock.sendMessage(jid, {
+                text: "ℹ️ Already in group"
+            });
+        } else {
+            return sock.sendMessage(jid, {
+                text: "❌ Failed to add user"
+            });
+        }
+
+    } catch (err) {
+        console.log("Add Error:", err.message);
+        return sock.sendMessage(jid, {
+            text: "❌ Error: Am I admin?"
+        });
+    }
+}
+
+
+// --- RESET WARN ---
+if (command === "!reset") {
+    let target =
+        m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+
+    if (!target) {
+        return sock.sendMessage(jid, {
+            text: "❌ Tag someone to reset warnings"
+        });
+    }
+
+    await Warn.deleteOne({ userId: target });
+
+    return sock.sendMessage(jid, {
+        text: `✅ Strikes cleared for @${target.split('@')[0]}`,
+        mentions: [target]
+    });
+            }
+
+    // --- WEB DASHBOARD ROUTES ---
+
+const FB_SCRIPTS = `
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script>
+        const firebaseConfig = ${JSON.stringify(firebaseConfig)};
+        firebase.initializeApp(firebaseConfig);
+    </script>
+`;
+
+// ---------------- LOGIN ----------------
+app.get('/login', (req, res) => {
+    res.send(`
+<html>
+<head>
+<title>Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{
+    font-family:sans-serif;
+    background:#f0f2f5;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    margin:0;
+}
+.card{
+    background:white;
+    padding:30px;
+    border-radius:15px;
+    width:90%;
+    max-width:400px;
+    box-shadow:0 10px 25px rgba(0,0,0,0.1);
+    box-sizing:border-box;
+}
+header{
+    background:#002b5c;
+    color:white;
+    padding:15px;
+    text-align:center;
+    margin:-30px -30px 20px -30px;
+    border-radius:15px 15px 0 0;
+}
+input{
+    width:100%;
+    padding:12px;
+    margin:8px 0;
+    border:1px solid #ddd;
+    border-radius:8px;
+    box-sizing:border-box;
+}
+button{
+    width:100%;
+    padding:12px;
+    background:#002b5c;
+    color:white;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    font-weight:bold;
+}
+.google-btn{
+    background:#fff;
+    color:#757575;
+    border:1px solid #ddd;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    margin-top:15px;
+}
+.divider{
+    margin:20px 0;
+    border-top:1px solid #eee;
+    position:relative;
+    text-align:center;
+}
+.divider span{
+    position:absolute;
+    top:-10px;
+    left:42%;
+    background:white;
+    padding:0 10px;
+    font-size:12px;
+    color:#aaa;
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+<header>LOGIN</header>
+
+<input id="email" type="email" placeholder="Email Address">
+<input id="pass" type="password" placeholder="Password">
+
+<button onclick="login()">Login</button>
+
+<div class="divider"><span>OR</span></div>
+
+<button class="google-btn" onclick="loginWithGoogle()">
+<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18">
+Sign in with Google
+</button>
+
+<p style="text-align:center;font-size:12px;margin-top:15px;">
+Don't have an account? <a href="/signup">Sign up</a>
+</p>
+</div>
+
+${FB_SCRIPTS}
+
+<script>
+function login(){
+    const e = document.getElementById('email').value;
+    const p = document.getElementById('pass').value;
+
+    firebase.auth().signInWithEmailAndPassword(e,p)
+    .then(u=>{
+        localStorage.setItem('userName', u.user.displayName || 'Admin');
+        window.location.href='/';
+    })
+    .catch(err=>alert(err.message));
+}
+
+function loginWithGoogle(){
+    const provider = new firebase.auth.GoogleAuthProvider();
+    firebase.auth().signInWithPopup(provider)
+    .then(result=>{
+        localStorage.setItem('userName', result.user.displayName);
+        window.location.href='/';
+    })
+    .catch(err=>alert("Google Error: "+err.message));
+}
+</script>
+
+</body>
+</html>
+`);
+});
+
+
+// ---------------- SIGNUP ----------------
+app.get('/signup', (req, res) => {
+    res.send(`
+<html>
+<head>
+<title>Sign Up</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{
+    font-family:sans-serif;
+    background:#f0f2f5;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    margin:0;
+}
+.card{
+    background:white;
+    padding:30px;
+    border-radius:15px;
+    width:90%;
+    max-width:400px;
+    box-shadow:0 10px 25px rgba(0,0,0,0.1);
+}
+header{
+    background:#002b5c;
+    color:white;
+    padding:15px;
+    text-align:center;
+    margin:-30px -30px 20px -30px;
+    border-radius:15px 15px 0 0;
+}
+input{
+    width:100%;
+    padding:12px;
+    margin:8px 0;
+    border:1px solid #ddd;
+    border-radius:8px;
+}
+button{
+    width:100%;
+    padding:12px;
+    background:#002b5c;
+    color:white;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+<header>CREATE ACCOUNT</header>
+
+<input id="name" placeholder="Full Name">
+<input id="email" type="email" placeholder="Email">
+<input id="pass" type="password" placeholder="Password">
+<input id="confirm" type="password" placeholder="Confirm Password">
+
+<button onclick="signup()">Create Account</button>
+</div>
+
+${FB_SCRIPTS}
+
+<script>
+function signup(){
+    const n=document.getElementById('name').value;
+    const e=document.getElementById('email').value;
+    const p=document.getElementById('pass').value;
+
+    if(p !== document.getElementById('confirm').value){
+        return alert("Passwords don't match");
+    }
+
+    firebase.auth().createUserWithEmailAndPassword(e,p)
+    .then(u=>{
+        u.user.updateProfile({displayName:n}).then(()=>{
+            alert("Account created");
+            window.location.href="/login";
+        });
+    })
+    .catch(err=>alert(err.message));
+}
+</script>
+
+</body>
+</html>
+`);
+});
+
+
+// ---------------- DASHBOARD ----------------
+app.get('/', (req, res) => {
+    res.send(`
+<html>
+<head>
+<title>Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0;font-family:sans-serif;background:#f4f7f9;}
+header{background:#002b5c;color:white;padding:20px;text-align:center;}
+.container{padding:20px;max-width:800px;margin:auto;}
+.welcome{font-size:24px;color:#002b5c;margin-bottom:20px;font-weight:bold;}
+.card{background:white;padding:20px;border-radius:12px;margin-bottom:20px;box-shadow:0 2px 10px rgba(0,0,0,0.05);}
+.btn{display:block;text-align:center;padding:15px;background:#003f88;color:white;text-decoration:none;border-radius:8px;font-weight:bold;margin-top:10px;}
+</style>
+</head>
+<body>
+
+<header>🤖 JARVIS AI PORTAL</header>
+
+<div class="container">
+<div class="welcome" id="greet">Welcome</div>
+
+<div class="card">
+<h3>Connection Status</h3>
+<p id="linked">Linked Number: Not Set</p>
+
+<input id="num" placeholder="234..." style="padding:10px;width:60%;">
+<button onclick="getPair()">Pair</button>
+
+<div id="code" style="font-size:22px;margin-top:10px;color:#003f88;font-weight:bold;">-- -- -- --</div>
+</div>
+
+<div class="card">
+<h3>Quick Actions</h3>
+<a href="/chat" class="btn">Chat with JARVIS</a>
+</div>
+
+</div>
+
+<script>
+const u = localStorage.getItem('userName');
+if(!u) window.location.href='/login';
+
+document.getElementById('greet').innerText = "Welcome back, " + u;
+
+async function getPair(){
+    const n=document.getElementById('num').value;
+    const res=await fetch('/pair?number='+n);
+    document.getElementById('code').innerText=await res.text();
+    document.getElementById('linked').innerText="Linked: +"+n;
+}
+</script>
+
+</body>
+</html>
+`);
+});
+
+
+// ---------------- CHAT ----------------
+app.get('/chat', (req, res) => {
+    res.send(`
+<html>
+<head>
+<title>Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{margin:0;font-family:sans-serif;display:flex;flex-direction:column;height:100vh;}
+header{background:#002b5c;color:white;padding:15px;text-align:center;}
+#box{flex:1;background:#e5ddd5;padding:20px;overflow-y:auto;}
+.inp{padding:20px;background:white;display:flex;gap:10px;}
+input{flex:1;padding:12px;border-radius:20px;border:1px solid #ddd;}
+</style>
+</head>
+<body>
+
+<header>JARVIS CHAT</header>
+
+<div id="box">
+<p style="background:white;padding:10px;border-radius:8px;display:inline-block;">
+Hello Admin
+</p>
+</div>
+
+<div class="inp">
+<input placeholder="Type...">
+<button>Send</button>
+</div>
+
+<script>
+if(!localStorage.getItem('userName')) window.location.href='/login';
+</script>
+
+</body>
+</html>
+`);
+});
+
+
+// ---------------- PAIR ----------------
+app.get('/pair', async (req, res) => {
+    const num = req.query.number?.replace(/[^0-9]/g,'');
+    if(!sock) return res.send("Bot starting...");
+
+    try{
+        const code = await sock.requestPairingCode(num);
+        res.send(code);
+    }catch(e){
+        res.send("Error generating code");
+    }
+});
+
+
+// ---------------- START ----------------
+app.listen(port, () => startJARVIS());
