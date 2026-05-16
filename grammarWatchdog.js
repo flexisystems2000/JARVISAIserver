@@ -10,7 +10,7 @@ const OpenAI = require('openai');
  *
  * Layer 2:
  * ✅ OpenRouter AI Fallback
- * Deep sentence reconstruction
+ * Advanced sentence reconstruction
  *
  * Optimized for:
  * ✅ Render deployment
@@ -71,7 +71,7 @@ async function autoCorrectGrammar(textInput) {
         return null;
     }
 
-    // Ignore weird non-English spam
+    // Ignore weird non-language spam
     if (!/[a-zA-Z]/.test(textInput)) {
         return null;
     }
@@ -161,23 +161,40 @@ async function autoCorrectGrammar(textInput) {
                         role: 'system',
 
                         content:
-`You are a grammar correction engine.
+`You are an advanced English grammar correction engine.
 
-Correct the user's sentence naturally.
+Your task is to completely fix broken English sentences naturally.
 
 RULES:
 - Return ONLY the corrected sentence
 - No explanations
 - No quotation marks
-- Preserve meaning
-- Fix broken English naturally`
+- Fix tense errors correctly
+- Fix sentence structure fully
+- Preserve original meaning
+- Sound natural in standard English
+
+EXAMPLES:
+
+Input: He go school yesterday
+Output: He went to school yesterday.
+
+Input: Is there anyone that know how today date are
+Output: Does anyone know today's date?
+
+Input: She no dey around
+Output: She is not around.`
                     },
 
                     {
                         role: 'user',
                         content: textInput
                     }
-                ]
+                ],
+
+                temperature: 0.2,
+
+                max_tokens: 60
             });
 
         const aiText =
@@ -187,17 +204,33 @@ RULES:
         // AI VALIDATION
         // =========================
 
-        if (
-            aiText &&
-            aiText.length > 3 &&
-            aiText.toLowerCase() !==
-            textInput.toLowerCase()
-        ) {
-
-            return aiText;
+        if (!aiText) {
+            return null;
         }
 
-        return null;
+        // Prevent chatbot-style responses
+        if (
+            aiText.toLowerCase().includes('corrected version') ||
+            aiText.toLowerCase().includes('grammar check') ||
+            aiText.toLowerCase().includes('here is')
+        ) {
+            return null;
+        }
+
+        // Prevent identical responses
+        if (
+            aiText.toLowerCase().trim() ===
+            textInput.toLowerCase().trim()
+        ) {
+            return null;
+        }
+
+        // Basic sanity check
+        if (aiText.length < 3) {
+            return null;
+        }
+
+        return aiText;
 
     } catch (err) {
 
