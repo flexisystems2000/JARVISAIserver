@@ -605,6 +605,11 @@ _Type !mute 30 min to test the timer!_`;
     });
 }
 
+if (command === "!getjid") {
+    return sock.sendMessage(jid, { 
+        text: `🎯 This group's JID is:\n\n*${jid}*` 
+    }, { quoted: m });
+}
 
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
