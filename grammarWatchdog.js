@@ -1,28 +1,21 @@
 const axios = require('axios');
-const Groq = require('groq-sdk');
 
 /**
- * 🕵️‍♂️ JARVIS SMART GRAMMAR WATCHDOG
+ * 🕵️‍♂️ JARVIS GEMINI GRAMMAR WATCHDOG
  *
- * Hybrid System:
- * ✅ LanguageTool (fast corrections)
- * ✅ Groq AI fallback
+ * Fully AI Powered:
+ * ✅ Gemini Backend Server
  *
- * Smart Features:
+ * Features:
+ * ✅ Spelling correction
+ * ✅ Grammar correction
+ * ✅ Sentence reconstruction
+ * ✅ Nigerian English awareness
  * ✅ Anti-spam
- * ✅ Nigerian slang awareness
  * ✅ Cooldown protection
  * ✅ WhatsApp-friendly behavior
- * ✅ Serious grammar correction only
+ * ✅ Smart AI validation
  */
-
-// =========================
-// GROQ CLIENT
-// =========================
-
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
 
 // =========================
 // USER COOLDOWNS
@@ -48,29 +41,13 @@ const casualSlangPatterns = [
     /^na wa/i
 ];
 
-// =========================
-// SERIOUS ERROR PATTERNS
-// =========================
-
-const seriousPatterns = [
-
-    /\bgo school yesterday\b/i,
-    /\bhave already did\b/i,
-    /\bwas not knowing\b/i,
-    /\bdoes people\b/i,
-    /\bno understand\b/i,
-    /\bwhy she no\b/i,
-    /\bwere understanding\b/i,
-    /\bhave wrote\b/i,
-    /\bcan sings\b/i
-];
-
 /**
  * Auto-correct grammar intelligently
  * @param {string} textInput
  * @param {string} sender
  * @returns {Promise<string|null>}
  */
+
 async function autoCorrectGrammar(
     textInput,
     sender = 'unknown'
@@ -86,7 +63,7 @@ async function autoCorrectGrammar(
 
     textInput = textInput.trim();
 
-    // Ignore very short chats
+    // Ignore short chats
     if (textInput.split(/\s+/).length < 4) {
         return null;
     }
@@ -147,163 +124,45 @@ async function autoCorrectGrammar(
     try {
 
         // =========================
-        // LAYER 1:
-        // LANGUAGETOOL
+        // GEMINI BACKEND REQUEST
         // =========================
 
-        const params = new URLSearchParams();
+        const aiResponse = await axios.post(
 
-        params.append('text', textInput);
-        params.append('language', 'auto');
+            'https://flexieduconsult-ai-link.onrender.com/grammar',
 
-        const res = await axios.post(
-            'https://api.languagetoolplus.com/v2/check',
-            params,
             {
-                headers: {
-                    'Content-Type':
-                        'application/x-www-form-urlencoded'
-                },
+                text: textInput
+            },
 
-                timeout: 7000
+            {
+                timeout: 20000
             }
         );
 
-        const matches =
-            res.data?.matches || [];
-
-        let correctedText = textInput;
-
-        // Reverse sorting prevents offset corruption
-        matches.sort((a, b) => b.offset - a.offset);
-
-        for (const match of matches) {
-
-            // Skip invalid replacements
-            if (!match.replacements?.length) {
-                continue;
-            }
-
-            const replacement =
-                match.replacements[0]?.value;
-
-            if (
-                replacement === undefined ||
-                replacement === null
-            ) {
-                continue;
-            }
-
-            correctedText =
-                correctedText.slice(0, match.offset) +
-                replacement +
-                correctedText.slice(
-                    match.offset + match.length
-                );
-        }
-
         // =========================
-        // FAST FIX VALIDATION
+        // RESPONSE EXTRACTION
         // =========================
-
-        const languageToolChanged =
-            correctedText.trim().toLowerCase() !==
-            textInput.trim().toLowerCase();
-
-        // Minor corrections only
-        if (
-            languageToolChanged &&
-            matches.length <= 2
-        ) {
-
-            grammarCooldowns.set(sender, now);
-
-            return correctedText;
-        }
-
-        // =========================
-        // SERIOUS ERROR CHECK
-        // =========================
-
-        const hasSeriousIssue =
-            seriousPatterns.some(pattern =>
-                pattern.test(textInput)
-            );
-
-        // Avoid unnecessary AI calls
-        if (
-            !hasSeriousIssue &&
-            matches.length < 3
-        ) {
-            return null;
-        }
-
-        // =========================
-        // AI FALLBACK (GROQ)
-        // =========================
-
-        const ai =
-            await groq.chat.completions.create({
-
-                model: 'llama3-8b-8192',
-
-                messages: [
-
-                    {
-                        role: 'system',
-
-                        content:
-`You are an advanced English grammar correction engine.
-
-Your task is to completely fix broken English sentences naturally.
-
-RULES:
-- Return ONLY the corrected sentence
-- No explanations
-- No quotation marks
-- Fix tense errors correctly
-- Fix sentence structure fully
-- Preserve original meaning
-- Sound natural in standard English
-
-EXAMPLES:
-
-Input: He go school yesterday
-Output: He went to school yesterday.
-
-Input: Is there anyone that know how today date are
-Output: Does anyone know today's date?
-
-Input: She no understand wetin teacher talk
-Output: She did not understand what the teacher said.`
-                    },
-
-                    {
-                        role: 'user',
-                        content: textInput
-                    }
-                ],
-
-                temperature: 0.2,
-
-                max_tokens: 60
-            });
 
         const aiText =
-            ai.choices?.[0]?.message?.content?.trim();
+            aiResponse.data?.reply?.trim();
+
+        const correctionType =
+            aiResponse.data?.type || 'grammar';
 
         // =========================
-        // AI VALIDATION
+        // VALIDATION
         // =========================
 
         if (!aiText) {
             return null;
         }
 
-        // Prevent chatbot behavior
+        // Prevent AI chatbot responses
         if (
-            aiText.toLowerCase().includes('corrected version') ||
+            aiText.toLowerCase().includes('as an ai') ||
             aiText.toLowerCase().includes('grammar check') ||
+            aiText.toLowerCase().includes('corrected version') ||
             aiText.toLowerCase().includes('here is')
         ) {
             return null;
@@ -317,20 +176,50 @@ Output: She did not understand what the teacher said.`
             return null;
         }
 
-        // Basic sanity check
+        // Ignore tiny responses
         if (aiText.length < 3) {
             return null;
         }
 
-        // Set cooldown
-        grammarCooldowns.set(sender, now);
+        // =========================
+        // FORMAT RESPONSE
+        // =========================
 
-        return aiText;
+        let finalReply;
+
+        if (correctionType === 'spelling') {
+
+            finalReply =
+`📝 *Spelling Correction* 📝
+
+You had a spelling error.
+
+👉 *${aiText}*`;
+        }
+
+        else {
+
+            finalReply =
+`📝 *Grammar Correction* 📝
+
+👉 *${aiText}*`;
+        }
+
+        // =========================
+        // SAVE COOLDOWN
+        // =========================
+
+        grammarCooldowns.set(
+            sender,
+            now
+        );
+
+        return finalReply;
 
     } catch (err) {
 
         console.log(
-            '🕵️‍♂️ Grammar Hybrid Skip:',
+            '🕵️‍♂️ Gemini Grammar Skip:',
             err.response?.data || err.message
         );
 
