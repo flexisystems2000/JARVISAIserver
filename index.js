@@ -282,7 +282,8 @@ We wish you success ahead from *${groupName}* 🎓`,
     const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
 
-  // 🌟 PASTE THE QUIZ INTERCEPTOR RIGHT HERE 🌟
+  // 🌟 LIVE QUIZ INTERCEPTOR 🌟
+    // Intercepts and grades students' choice inputs on Saturday nights
     const wasQuizMessage = await quizEngine.handleLiveMarking(sock, jid, sender, body, m);
     if (wasQuizMessage) return;
         
