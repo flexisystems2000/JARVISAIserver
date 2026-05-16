@@ -1,12 +1,12 @@
 const axios = require('axios');
-const OpenAI = require('openai');
+const Groq = require('groq-sdk');
 
 /**
  * 🕵️‍♂️ JARVIS SMART GRAMMAR WATCHDOG
  *
  * Hybrid System:
  * ✅ LanguageTool (fast corrections)
- * ✅ OpenRouter AI fallback
+ * ✅ Groq AI fallback
  *
  * Smart Features:
  * ✅ Anti-spam
@@ -17,12 +17,11 @@ const OpenAI = require('openai');
  */
 
 // =========================
-// OPENROUTER CLIENT
+// GROQ CLIENT
 // =========================
 
-const openrouter = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey: process.env.OPENROUTER_API_KEY
+const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
 });
 
 // =========================
@@ -47,6 +46,23 @@ const casualSlangPatterns = [
     /^bro\b/i,
     /^pls\b/i,
     /^na wa/i
+];
+
+// =========================
+// SERIOUS ERROR PATTERNS
+// =========================
+
+const seriousPatterns = [
+
+    /\bgo school yesterday\b/i,
+    /\bhave already did\b/i,
+    /\bwas not knowing\b/i,
+    /\bdoes people\b/i,
+    /\bno understand\b/i,
+    /\bwhy she no\b/i,
+    /\bwere understanding\b/i,
+    /\bhave wrote\b/i,
+    /\bcan sings\b/i
 ];
 
 /**
@@ -123,7 +139,7 @@ async function autoCorrectGrammar(
 
     if (
         grammarCooldowns.has(sender) &&
-        now - grammarCooldowns.get(sender) < 300000
+        now - grammarCooldowns.get(sender) < 900000
     ) {
         return null;
     }
@@ -190,26 +206,46 @@ async function autoCorrectGrammar(
         // FAST FIX VALIDATION
         // =========================
 
-        if (
-            correctedText &&
+        const languageToolChanged =
             correctedText.trim().toLowerCase() !==
-            textInput.trim().toLowerCase()
+            textInput.trim().toLowerCase();
+
+        // Minor corrections only
+        if (
+            languageToolChanged &&
+            matches.length <= 2
         ) {
 
-            // Set cooldown
             grammarCooldowns.set(sender, now);
 
             return correctedText;
         }
 
         // =========================
-        // AI FALLBACK
+        // SERIOUS ERROR CHECK
+        // =========================
+
+        const hasSeriousIssue =
+            seriousPatterns.some(pattern =>
+                pattern.test(textInput)
+            );
+
+        // Avoid unnecessary AI calls
+        if (
+            !hasSeriousIssue &&
+            matches.length < 3
+        ) {
+            return null;
+        }
+
+        // =========================
+        // AI FALLBACK (GROQ)
         // =========================
 
         const ai =
-            await openrouter.chat.completions.create({
+            await groq.chat.completions.create({
 
-                model: 'deepseek/deepseek-chat:free',
+                model: 'llama3-8b-8192',
 
                 messages: [
 
