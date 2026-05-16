@@ -283,6 +283,10 @@ We wish you success ahead from *${groupName}* 🎓`,
     const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
 
+  // 🌟 PASTE THE QUIZ INTERCEPTOR RIGHT HERE 🌟
+    const wasQuizMessage = await quizEngine.handleLiveMarking(sock, jid, sender, body, m);
+    if (wasQuizMessage) return;
+        
     if (text.includes("jarvis") && !text.startsWith("!")) {
         await sock.sendMessage(jid, {
             react: { key: m.key, text: "🤖" }
