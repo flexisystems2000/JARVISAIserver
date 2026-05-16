@@ -12,7 +12,7 @@ const axios = require('axios');
  * ✅ Sentence reconstruction
  * ✅ Nigerian English awareness
  * ✅ Anti-spam
- * ✅ Cooldown protection
+ * ✅ 15-second cooldown
  * ✅ WhatsApp-friendly behavior
  * ✅ Smart AI validation
  */
@@ -22,24 +22,6 @@ const axios = require('axios');
 // =========================
 
 const grammarCooldowns = new Map();
-
-// =========================
-// CASUAL CHAT FILTERS
-// =========================
-
-const casualSlangPatterns = [
-
-    /^abi\b/i,
-    /^abeg\b/i,
-    /^omo\b/i,
-    /^omoh\b/i,
-    /^lol\b/i,
-    /^lmao\b/i,
-    /^guy\b/i,
-    /^bro\b/i,
-    /^pls\b/i,
-    /^na wa/i
-];
 
 /**
  * Auto-correct grammar intelligently
@@ -63,8 +45,8 @@ async function autoCorrectGrammar(
 
     textInput = textInput.trim();
 
-    // Ignore short chats
-    if (textInput.split(/\s+/).length < 4) {
+    // Ignore extremely short chats
+    if (textInput.split(/\s+/).length < 2) {
         return null;
     }
 
@@ -86,25 +68,12 @@ async function autoCorrectGrammar(
     const plainText =
         textInput.replace(/[^\w\s]/gi, '');
 
-    if (plainText.length < 5) {
+    if (plainText.length < 4) {
         return null;
     }
 
-    // Ignore weird non-language messages
+    // Ignore non-language messages
     if (!/[a-zA-Z]/.test(textInput)) {
-        return null;
-    }
-
-    // =========================
-    // CASUAL CHAT FILTER
-    // =========================
-
-    const isCasualChat =
-        casualSlangPatterns.some(pattern =>
-            pattern.test(textInput)
-        );
-
-    if (isCasualChat) {
         return null;
     }
 
@@ -116,12 +85,27 @@ async function autoCorrectGrammar(
 
     if (
         grammarCooldowns.has(sender) &&
-        now - grammarCooldowns.get(sender) < 900000
+        now - grammarCooldowns.get(sender) < 15000
     ) {
+
+        console.log(
+            '⏳ Grammar cooldown active for:',
+            sender
+        );
+
         return null;
     }
 
     try {
+
+        // =========================
+        // DEBUG LOG
+        // =========================
+
+        console.log(
+            '📤 Sending Grammar Request:',
+            textInput
+        );
 
         // =========================
         // GEMINI BACKEND REQUEST
@@ -136,8 +120,21 @@ async function autoCorrectGrammar(
             },
 
             {
-                timeout: 20000
+                timeout: 20000,
+
+                headers: {
+                    'Content-Type': 'application/json'
+                }
             }
+        );
+
+        // =========================
+        // DEBUG RESPONSE
+        // =========================
+
+        console.log(
+            '📥 Gemini Response:',
+            aiResponse.data
         );
 
         // =========================
@@ -155,29 +152,52 @@ async function autoCorrectGrammar(
         // =========================
 
         if (!aiText) {
+
+            console.log(
+                '❌ No AI reply returned'
+            );
+
             return null;
         }
 
-        // Prevent AI chatbot responses
+        // Prevent chatbot responses
         if (
             aiText.toLowerCase().includes('as an ai') ||
             aiText.toLowerCase().includes('grammar check') ||
             aiText.toLowerCase().includes('corrected version') ||
             aiText.toLowerCase().includes('here is')
         ) {
+
+            console.log(
+                '❌ Blocked chatbot response'
+            );
+
             return null;
         }
 
-        // Ignore identical output
+        // Ignore identical responses
         if (
             aiText.trim().toLowerCase() ===
             textInput.trim().toLowerCase()
         ) {
+
+            console.log(
+                '❌ AI returned same text'
+            );
+
             return null;
         }
 
-        // Ignore tiny responses
-        if (aiText.length < 3) {
+        // Ignore weird responses
+        if (
+            aiText.length < 3 ||
+            aiText.length > 300
+        ) {
+
+            console.log(
+                '❌ Invalid AI response length'
+            );
+
             return null;
         }
 
@@ -187,7 +207,11 @@ async function autoCorrectGrammar(
 
         let finalReply;
 
-        if (correctionType === 'spelling') {
+        if (
+            correctionType
+                .toLowerCase()
+                .includes('spelling')
+        ) {
 
             finalReply =
 `📝 *Spelling Correction* 📝
@@ -214,13 +238,21 @@ You had a spelling error.
             now
         );
 
+        console.log(
+            '✅ Grammar correction sent'
+        );
+
         return finalReply;
 
     } catch (err) {
 
         console.log(
-            '🕵️‍♂️ Gemini Grammar Skip:',
-            err.response?.data || err.message
+            '❌ FULL GRAMMAR ERROR:',
+            {
+                message: err.message,
+                status: err.response?.status,
+                data: err.response?.data
+            }
         );
 
         return null;
