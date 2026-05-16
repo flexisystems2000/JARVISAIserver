@@ -1208,6 +1208,8 @@ if(!localStorage.getItem('userName')) window.location.href='/login';
 </html>
 `);
 });    
+// ... (rest of your code above)
+
 // ---------------- PAIR ----------------
 app.get('/pair', async (req, res) => {
     const num = req.query.number?.replace(/[^0-9]/g,'');
@@ -1221,10 +1223,34 @@ app.get('/pair', async (req, res) => {
     }
 });
 
-}
+// 🌟🌟🌟 PASTE THE WEBHOOK ROUTE BLOCK DIRECTLY HERE 🌟🌟🌟
+app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
+    try {
+        const { subject, quizText, answers } = req.body;
+        
+        if (!subject || !answers) {
+            return res.status(400).json({ success: false, error: "Incomplete quiz data payload" });
+        }
+
+        const trigger = await quizEngine.fireQuiz(sock, { subject, quizText, answers });
+        
+        if (trigger.success) {
+            res.json({ success: true, message: "Quiz pushed to group successfully" });
+        } else {
+            res.status(500).json({ success: false, error: trigger.error });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+
+} // <-- This is the absolute final curly bracket of your startJARVIS function
 
 // ---------------- START ----------------
 app.listen(port, () => {
    console.log(`Server running on ${port}`);
    startJARVIS();
 });
+
+}
