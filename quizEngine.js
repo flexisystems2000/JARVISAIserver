@@ -12,7 +12,7 @@ let activeQuiz = {
 const quizSessions = new Map();
 
 // 🎯 SET YOUR EXAM GROUP JID HERE
-const TARGET_GROUP_JID = "120363304523957291@g.us"; 
+const TARGET_GROUP_JID = "12036342497643845@g.us"; 
 
 /**
  * Triggered automatically via Webhook when the AI Server hits 8:00 PM WAT on Saturdays
