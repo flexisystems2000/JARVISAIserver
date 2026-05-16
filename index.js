@@ -13,6 +13,8 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 
 require('dotenv').config();
+const quizEngine = require('./quizEngine');
+
 
 const app = express();
 const port = process.env.PORT || 3000;
