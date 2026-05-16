@@ -151,6 +151,7 @@ async function startJARVIS() {
 
         } else if (connection === 'open') {
             console.log(`✅ ${BOT_NAME} Online & Synced`);
+     quizEngine.initializeQuizScheduler(sock);
         }
     });
 
