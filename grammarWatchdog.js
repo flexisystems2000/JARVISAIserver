@@ -12,8 +12,8 @@ const OpenAI = require('openai');
  * ✅ Anti-spam
  * ✅ Nigerian slang awareness
  * ✅ Cooldown protection
- * ✅ Serious mistakes only
  * ✅ WhatsApp-friendly behavior
+ * ✅ Serious grammar correction only
  */
 
 // =========================
@@ -32,31 +32,21 @@ const openrouter = new OpenAI({
 const grammarCooldowns = new Map();
 
 // =========================
-// NIGERIAN SLANG IGNORE LIST
+// CASUAL CHAT FILTERS
 // =========================
 
-const slangWords = [
-    'abi',
-    'sha',
-    'dey',
-    'wetin',
-    'una',
-    'wahala',
-    'abeg',
-    'omoh',
-    'omo',
-    'bro',
-    'guy',
-    'lol',
-    'lmao',
-    'pls',
-    'pls.',
-    'u',
-    'ur',
-    'no wahala',
-    'ehen',
-    'na',
-    'sef'
+const casualSlangPatterns = [
+
+    /^abi\b/i,
+    /^abeg\b/i,
+    /^omo\b/i,
+    /^omoh\b/i,
+    /^lol\b/i,
+    /^lmao\b/i,
+    /^guy\b/i,
+    /^bro\b/i,
+    /^pls\b/i,
+    /^na wa/i
 ];
 
 /**
@@ -65,18 +55,23 @@ const slangWords = [
  * @param {string} sender
  * @returns {Promise<string|null>}
  */
-async function autoCorrectGrammar(textInput, sender = 'unknown') {
+async function autoCorrectGrammar(
+    textInput,
+    sender = 'unknown'
+) {
 
     // =========================
     // BASIC FILTERS
     // =========================
 
-    if (!textInput) return null;
+    if (!textInput) {
+        return null;
+    }
 
     textInput = textInput.trim();
 
-    // Ignore short chats
-    if (textInput.split(/\s+/).length < 5) {
+    // Ignore very short chats
+    if (textInput.split(/\s+/).length < 4) {
         return null;
     }
 
@@ -108,15 +103,15 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
     }
 
     // =========================
-    // SLANG FILTER
+    // CASUAL CHAT FILTER
     // =========================
 
-    const containsSlang =
-        slangWords.some(word =>
-            textInput.toLowerCase().includes(word)
+    const isCasualChat =
+        casualSlangPatterns.some(pattern =>
+            pattern.test(textInput)
         );
 
-    if (containsSlang) {
+    if (isCasualChat) {
         return null;
     }
 
@@ -168,7 +163,7 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
 
         for (const match of matches) {
 
-            // Skip weak corrections
+            // Skip invalid replacements
             if (!match.replacements?.length) {
                 continue;
             }
@@ -186,7 +181,9 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
             correctedText =
                 correctedText.slice(0, match.offset) +
                 replacement +
-                correctedText.slice(match.offset + match.length);
+                correctedText.slice(
+                    match.offset + match.length
+                );
         }
 
         // =========================
@@ -198,17 +195,6 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
             correctedText.trim().toLowerCase() !==
             textInput.trim().toLowerCase()
         ) {
-
-            // Ignore tiny corrections
-            const difference =
-                Math.abs(
-                    correctedText.length -
-                    textInput.length
-                );
-
-            if (difference <= 1) {
-                return null;
-            }
 
             // Set cooldown
             grammarCooldowns.set(sender, now);
@@ -252,8 +238,8 @@ Output: He went to school yesterday.
 Input: Is there anyone that know how today date are
 Output: Does anyone know today's date?
 
-Input: She no dey around
-Output: She is not around.`
+Input: She no understand wetin teacher talk
+Output: She did not understand what the teacher said.`
                     },
 
                     {
@@ -289,20 +275,9 @@ Output: She is not around.`
 
         // Ignore identical output
         if (
-            aiText.toLowerCase().trim() ===
-            textInput.toLowerCase().trim()
+            aiText.trim().toLowerCase() ===
+            textInput.trim().toLowerCase()
         ) {
-            return null;
-        }
-
-        // Ignore tiny changes
-        const aiDifference =
-            Math.abs(
-                aiText.length -
-                textInput.length
-            );
-
-        if (aiDifference <= 1) {
             return null;
         }
 
