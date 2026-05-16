@@ -1,4 +1,3 @@
-const cron = require('node-cron');
 const axios = require('axios');
 
 // --- GLOBAL QUIZ STORAGE (RAM-SAFE) ---
@@ -16,45 +15,38 @@ const quizSessions = new Map();
 const TARGET_GROUP_JID = "120363304523957291@g.us"; 
 
 /**
- * Initializes the automated Saturday 8 PM WAT Cron Job
+ * Triggered automatically via Webhook when the AI Server hits 8:00 PM WAT on Saturdays
  * @param {Object} sock - The Baileys WhatsApp Socket instance
+ * @param {Object} quizData - The data payload containing { subject, quizText, answers }
  */
-function initializeQuizScheduler(sock) {
-    // '0 20 * * 6' runs exactly at 20:00 (8:00 PM) on Saturday (Day 6)
-    cron.schedule('0 20 * * 6', async () => {
-        console.log("⏰ Saturday 8PM WAT: Initiating Automated Quiz Protocol...");
+async function fireQuiz(sock, quizData) {
+    try {
+        if (!sock) return { success: false, error: "WhatsApp Socket is inactive." };
+
+        // Clear previous session's data to free up memory for the new test
+        quizSessions.clear();
+
+        // Load the payload values sent by the AI Server into the active state
+        activeQuiz.isActive = true;
+        activeQuiz.subject = quizData.subject;
+        activeQuiz.answers = quizData.answers;
+        activeQuiz.text = quizData.quizText;
+
+        const startMessage = 
+            `${activeQuiz.text}\n\n` +
+            `🏁 *THE MOCK EXAM HAS COMMENCED!*\n` +
+            `👉 To answer *Question 1*, simply type your choice (*A*, *B*, *C*, or *D*).\n` +
+            `⚠️ JARVIS will mark it, tag you, and automatically push you to the next question. You have 30 minutes!`;
+
+        // Broadcast the quiz block straight into your student group chat
+        await sock.sendMessage(TARGET_GROUP_JID, { text: startMessage });
+        console.log(`✅ Webhook Quiz Broadcast Successful for subject: ${activeQuiz.subject}`);
         
-        try {
-            if (!sock) return console.log("⚠️ Quiz Scheduler: WhatsApp Socket is inactive.");
-
-            // Clear previous week's data to free up memory
-            quizSessions.clear();
-
-            // Call your AI Link server to compile questions
-            const res = await axios.post('https://flexieduconsult-ai-link.onrender.com/generate-quiz');
-            
-            if (res.data?.success) {
-                activeQuiz.isActive = true;
-                activeQuiz.subject = res.data.subject;
-                activeQuiz.answers = res.data.answers;
-                activeQuiz.text = res.data.quizText;
-
-                const startMessage = 
-                    `${activeQuiz.text}\n\n` +
-                    `🏁 *THE MOCK EXAM HAS COMMENCED!*\n` +
-                    `👉 To answer *Question 1*, simply reply to this message or type your choice (*A*, *B*, *C*, or *D*).\n` +
-                    `⚠️ JARVIS will mark it, tag you, and automatically push you to the next question. You have 30 minutes!`;
-
-                await sock.sendMessage(TARGET_GROUP_JID, { text: startMessage });
-                console.log(`✅ Automated weekly quiz for ${activeQuiz.subject} successfully broadcast.`);
-            }
-        } catch (err) {
-            console.log("❌ Quiz Scheduler Error:", err.message);
-        }
-    }, {
-        scheduled: true,
-        timezone: "Africa/Lagos" // Strictly locks it to Nigeria time regardless of hosting location
-    });
+        return { success: true };
+    } catch (err) {
+        console.log("❌ fireQuiz Error:", err.message);
+        return { success: false, error: err.message };
+    }
 }
 
 /**
@@ -116,7 +108,6 @@ async function handleLiveMarking(sock, jid, sender, incomingText, msgObj) {
 }
 
 module.exports = {
-    initializeQuizScheduler,
+    fireQuiz,
     handleLiveMarking
 };
-      
