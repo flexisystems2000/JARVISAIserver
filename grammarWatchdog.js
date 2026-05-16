@@ -1,19 +1,27 @@
 const axios = require('axios');
+const ollama = require('ollama');
 
 /**
- * 🕵️‍♂️ JARVIS Grammar Watchdog
- * Automatically scans and corrects grammar/spelling issues
- * using LanguageTool API.
+ * 🕵️‍♂️ JARVIS HYBRID GRAMMAR WATCHDOG
+ *
+ * Layer 1:
+ * ✅ LanguageTool
+ * Fast grammar/spelling correction
+ *
+ * Layer 2:
+ * ✅ Ollama AI
+ * Advanced sentence reconstruction
  *
  * Optimized for:
- * ✅ WhatsApp group chats
- * ✅ Nigerian English users
- * ✅ Fast execution
- * ✅ Low spam behavior
+ * ✅ WhatsApp groups
+ * ✅ Nigerian students
+ * ✅ Low spam
+ * ✅ No paid APIs
+ * ✅ Broken English reconstruction
  */
 
 /**
- * Auto-correct grammar and spelling mistakes
+ * Auto-correct grammar and sentence structure
  * @param {string} textInput
  * @returns {Promise<string|null>}
  */
@@ -23,18 +31,16 @@ async function autoCorrectGrammar(textInput) {
     // SAFETY FILTERS
     // =========================
 
-    // Ignore empty messages
     if (!textInput) return null;
 
-    // Normalize spacing
     textInput = textInput.trim();
 
-    // Ignore very short messages
+    // Ignore short messages
     if (textInput.split(/\s+/).length <= 3) {
         return null;
     }
 
-    // Ignore bot commands
+    // Ignore commands
     if (textInput.startsWith('!')) {
         return null;
     }
@@ -48,70 +54,60 @@ async function autoCorrectGrammar(textInput) {
         return null;
     }
 
-    // Ignore mostly emojis/symbols
+    // Ignore symbols/emojis spam
     const plainText = textInput.replace(/[^\w\s]/gi, '');
+
     if (plainText.length < 5) {
+        return null;
+    }
+
+    // Ignore weird non-language messages
+    if (!/[a-zA-Z]/.test(textInput)) {
         return null;
     }
 
     try {
 
         // =========================
-        // PREPARE REQUEST
+        // LAYER 1:
+        // LANGUAGETOOL CHECK
         // =========================
 
         const params = new URLSearchParams();
 
         params.append('text', textInput);
-
-        // Auto-detect English variations
         params.append('language', 'auto');
-
-        // =========================
-        // API CALL
-        // =========================
 
         const res = await axios.post(
             'https://api.languagetoolplus.com/v2/check',
             params,
             {
                 headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
+                    'Content-Type':
+                        'application/x-www-form-urlencoded'
                 },
 
-                // Slightly relaxed timeout
-                timeout: 8000
+                timeout: 7000
             }
         );
 
-        // =========================
-        // PROCESS RESULTS
-        // =========================
-
         const matches = res.data?.matches || [];
-
-        // No issues found
-        if (!matches.length) {
-            return null;
-        }
 
         let correctedText = textInput;
 
-        // IMPORTANT:
         // Reverse sort prevents offset corruption
         matches.sort((a, b) => b.offset - a.offset);
 
         for (const match of matches) {
 
-            // Skip if no replacement exists
+            // Skip empty replacement suggestions
             if (!match.replacements?.length) {
                 continue;
             }
 
             const replacement =
-                match.replacements[0].value;
+                match.replacements[0]?.value;
 
-            // Skip dangerous blank replacements
             if (
                 replacement === undefined ||
                 replacement === null
@@ -119,7 +115,6 @@ async function autoCorrectGrammar(textInput) {
                 continue;
             }
 
-            // Apply correction safely
             correctedText =
                 correctedText.slice(0, match.offset) +
                 replacement +
@@ -127,24 +122,75 @@ async function autoCorrectGrammar(textInput) {
         }
 
         // =========================
-        // FINAL VALIDATION
+        // RETURN FAST FIX
         // =========================
 
-        // Avoid spam if nothing changed
         if (
-            correctedText.trim().toLowerCase() ===
+            correctedText &&
+            correctedText.trim().toLowerCase() !==
             textInput.trim().toLowerCase()
         ) {
-            return null;
+
+            return correctedText;
         }
 
-        return correctedText;
+        // =========================
+        // LAYER 2:
+        // OLLAMA AI FALLBACK
+        // =========================
+
+        const ai = await ollama.chat({
+
+            model: 'gemma:2b',
+
+            messages: [
+
+                {
+                    role: 'system',
+
+                    content:
+                        `You are a grammar correction engine.
+
+Correct the user's sentence naturally.
+
+RULES:
+- Return ONLY the corrected sentence
+- Do not explain
+- Do not add quotation marks
+- Keep original meaning
+- Fix broken English naturally`
+                },
+
+                {
+                    role: 'user',
+                    content: textInput
+                }
+            ]
+        });
+
+        const aiText =
+            ai.message?.content?.trim();
+
+        // =========================
+        // AI VALIDATION
+        // =========================
+
+        if (
+            aiText &&
+            aiText.length > 3 &&
+            aiText.toLowerCase() !==
+            textInput.toLowerCase()
+        ) {
+
+            return aiText;
+        }
+
+        return null;
 
     } catch (err) {
 
-        // Silent background failure
         console.log(
-            "🕵️‍♂️ Grammar Engine Passive Skip:",
+            '🕵️‍♂️ Grammar Hybrid Skip:',
             err.response?.data || err.message
         );
 
