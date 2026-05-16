@@ -1,24 +1,33 @@
 const axios = require('axios');
-const ollama = require('ollama');
+const OpenAI = require('openai');
 
 /**
  * 🕵️‍♂️ JARVIS HYBRID GRAMMAR WATCHDOG
  *
  * Layer 1:
  * ✅ LanguageTool
- * Fast grammar/spelling correction
+ * Fast spelling + grammar correction
  *
  * Layer 2:
- * ✅ Ollama AI
- * Advanced sentence reconstruction
+ * ✅ OpenRouter AI Fallback
+ * Deep sentence reconstruction
  *
  * Optimized for:
+ * ✅ Render deployment
  * ✅ WhatsApp groups
- * ✅ Nigerian students
- * ✅ Low spam
- * ✅ No paid APIs
- * ✅ Broken English reconstruction
+ * ✅ Nigerian English
+ * ✅ Low API usage
+ * ✅ Broken sentence correction
  */
+
+// =========================
+// OPENROUTER CLIENT
+// =========================
+
+const openrouter = new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: process.env.OPENROUTER_API_KEY
+});
 
 /**
  * Auto-correct grammar and sentence structure
@@ -54,14 +63,15 @@ async function autoCorrectGrammar(textInput) {
         return null;
     }
 
-    // Ignore symbols/emojis spam
-    const plainText = textInput.replace(/[^\w\s]/gi, '');
+    // Ignore emoji/symbol spam
+    const plainText =
+        textInput.replace(/[^\w\s]/gi, '');
 
     if (plainText.length < 5) {
         return null;
     }
 
-    // Ignore weird non-language messages
+    // Ignore weird non-English spam
     if (!/[a-zA-Z]/.test(textInput)) {
         return null;
     }
@@ -70,7 +80,7 @@ async function autoCorrectGrammar(textInput) {
 
         // =========================
         // LAYER 1:
-        // LANGUAGETOOL CHECK
+        // LANGUAGETOOL
         // =========================
 
         const params = new URLSearchParams();
@@ -91,16 +101,17 @@ async function autoCorrectGrammar(textInput) {
             }
         );
 
-        const matches = res.data?.matches || [];
+        const matches =
+            res.data?.matches || [];
 
         let correctedText = textInput;
 
-        // Reverse sort prevents offset corruption
+        // Reverse sorting prevents offset corruption
         matches.sort((a, b) => b.offset - a.offset);
 
         for (const match of matches) {
 
-            // Skip empty replacement suggestions
+            // Skip invalid replacements
             if (!match.replacements?.length) {
                 continue;
             }
@@ -136,40 +147,41 @@ async function autoCorrectGrammar(textInput) {
 
         // =========================
         // LAYER 2:
-        // OLLAMA AI FALLBACK
+        // OPENROUTER AI FALLBACK
         // =========================
 
-        const ai = await ollama.chat({
+        const ai =
+            await openrouter.chat.completions.create({
 
-            model: 'gemma:2b',
+                model: 'deepseek/deepseek-chat:free',
 
-            messages: [
+                messages: [
 
-                {
-                    role: 'system',
+                    {
+                        role: 'system',
 
-                    content:
-                        `You are a grammar correction engine.
+                        content:
+`You are a grammar correction engine.
 
 Correct the user's sentence naturally.
 
 RULES:
 - Return ONLY the corrected sentence
-- Do not explain
-- Do not add quotation marks
-- Keep original meaning
+- No explanations
+- No quotation marks
+- Preserve meaning
 - Fix broken English naturally`
-                },
+                    },
 
-                {
-                    role: 'user',
-                    content: textInput
-                }
-            ]
-        });
+                    {
+                        role: 'user',
+                        content: textInput
+                    }
+                ]
+            });
 
         const aiText =
-            ai.message?.content?.trim();
+            ai.choices?.[0]?.message?.content?.trim();
 
         // =========================
         // AI VALIDATION
