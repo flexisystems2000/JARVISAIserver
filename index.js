@@ -14,7 +14,7 @@ const axios = require('axios');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
-
+const grammarWatchdog = require('./grammarWatchdog'); // 👈 ADD THIS LINE HERE
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -279,10 +279,10 @@ We wish you success ahead from *${groupName}* 🎓`,
         m.message.imageMessage?.caption ||
         "";
 
-    const text = body.toLowerCase().trim();
+        const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
 
-  // 🌟 LIVE QUIZ INTERCEPTOR 🌟
+    // 🌟 LIVE QUIZ INTERCEPTOR 🌟
     // Intercepts and grades students' choice inputs on Saturday nights
     const wasQuizMessage = await quizEngine.handleLiveMarking(sock, jid, sender, body, m);
     if (wasQuizMessage) return;
@@ -292,6 +292,26 @@ We wish you success ahead from *${groupName}* 🎓`,
             react: { key: m.key, text: "🤖" }
         });
     }
+
+    // 🕵️‍♂️ AUTOMATED GRAMMAR MONITOR (Modular Interceptor)
+    // Runs in the background to automatically correct bad grammar structures
+    if (!m.key.fromMe && body) {
+        const correctedVersion = await grammarWatchdog.autoCorrectGrammar(body);
+        
+        if (correctedVersion && correctedVersion.trim().toLowerCase() !== body.trim().toLowerCase()) {
+            const userTag = sender.split('@')[0];
+            const alertPayload = 
+                `📝 *Grammar Check Alert* 📝\n\n` +
+                `@${userTag}, I noticed a minor slip in your structure. Here is the corrected version:\n\n` +
+                `👉 *"${correctedVersion}"*`;
+
+            await sock.sendMessage(jid, { 
+                text: alertPayload, 
+                mentions: [sender] 
+            }, { quoted: m });
+        }
+    }
+        
 
     // =========================
     // GROUP METADATA / STAFF CHECK (FIXED)
