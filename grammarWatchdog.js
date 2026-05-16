@@ -1,51 +1,153 @@
 const axios = require('axios');
 
 /**
- * Scans text via LanguageTool API and returns a corrected string if errors are found.
- * Optimized to skip short banter, links, and commands.
- * * @param {string} textInput - The raw message content from the chat
- * @returns {Promise<string|null>} - Returns the corrected text string, or null if text is fine
+ * 🕵️‍♂️ JARVIS Grammar Watchdog
+ * Automatically scans and corrects grammar/spelling issues
+ * using LanguageTool API.
+ *
+ * Optimized for:
+ * ✅ WhatsApp group chats
+ * ✅ Nigerian English users
+ * ✅ Fast execution
+ * ✅ Low spam behavior
+ */
+
+/**
+ * Auto-correct grammar and spelling mistakes
+ * @param {string} textInput
+ * @returns {Promise<string|null>}
  */
 async function autoCorrectGrammar(textInput) {
-    // Skip empty values, short phrases (<= 3 words), links, and bot commands
-    if (!textInput || textInput.split(/\s+/).length <= 3 || textInput.startsWith('!') || textInput.includes('http')) {
+
+    // =========================
+    // SAFETY FILTERS
+    // =========================
+
+    // Ignore empty messages
+    if (!textInput) return null;
+
+    // Normalize spacing
+    textInput = textInput.trim();
+
+    // Ignore very short messages
+    if (textInput.split(/\s+/).length <= 3) {
+        return null;
+    }
+
+    // Ignore bot commands
+    if (textInput.startsWith('!')) {
+        return null;
+    }
+
+    // Ignore links
+    if (
+        textInput.includes('http') ||
+        textInput.includes('.com') ||
+        textInput.includes('chat.whatsapp')
+    ) {
+        return null;
+    }
+
+    // Ignore mostly emojis/symbols
+    const plainText = textInput.replace(/[^\w\s]/gi, '');
+    if (plainText.length < 5) {
         return null;
     }
 
     try {
-        const params = new URLSearchParams();
-        params.append('text', textInput);
-        params.append('language', 'en-NG'); // Optimized for Nigerian English educational contexts
 
-        const res = await axios.post('https://api.languagetoolplus.com/v2/check', params, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: 4000 // Tight timeout to keep your bot lightning fast
-        });
+        // =========================
+        // PREPARE REQUEST
+        // =========================
+
+        const params = new URLSearchParams();
+
+        params.append('text', textInput);
+
+        // Auto-detect English variations
+        params.append('language', 'auto');
+
+        // =========================
+        // API CALL
+        // =========================
+
+        const res = await axios.post(
+            'https://api.languagetoolplus.com/v2/check',
+            params,
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+
+                // Slightly relaxed timeout
+                timeout: 8000
+            }
+        );
+
+        // =========================
+        // PROCESS RESULTS
+        // =========================
 
         const matches = res.data?.matches || [];
-        if (matches.length === 0) return null; // Grammar is completely clean!
 
-        let correctedText = textInput;
-        // Sort matches in reverse order so replacements don't break string indices
-        matches.sort((a, b) => b.offset - a.offset);
-
-        let errorCount = 0;
-        for (const match of matches) {
-            // Focus heavily on critical spelling and structural grammar rules
-            if (match.rule.issueType === 'misspelling' || match.rule.issueType === 'grammar') {
-                const replacement = match.replacements?.[0]?.value;
-                if (replacement) {
-                    correctedText = correctedText.substring(0, match.offset) + replacement + correctedText.substring(match.offset + match.length);
-                    errorCount++;
-                }
-            }
+        // No issues found
+        if (!matches.length) {
+            return null;
         }
 
-        // Only return the new string if modifications actually occurred
-        return errorCount > 0 ? correctedText : null;
+        let correctedText = textInput;
+
+        // IMPORTANT:
+        // Reverse sort prevents offset corruption
+        matches.sort((a, b) => b.offset - a.offset);
+
+        for (const match of matches) {
+
+            // Skip if no replacement exists
+            if (!match.replacements?.length) {
+                continue;
+            }
+
+            const replacement =
+                match.replacements[0].value;
+
+            // Skip dangerous blank replacements
+            if (
+                replacement === undefined ||
+                replacement === null
+            ) {
+                continue;
+            }
+
+            // Apply correction safely
+            correctedText =
+                correctedText.slice(0, match.offset) +
+                replacement +
+                correctedText.slice(match.offset + match.length);
+        }
+
+        // =========================
+        // FINAL VALIDATION
+        // =========================
+
+        // Avoid spam if nothing changed
+        if (
+            correctedText.trim().toLowerCase() ===
+            textInput.trim().toLowerCase()
+        ) {
+            return null;
+        }
+
+        return correctedText;
+
     } catch (err) {
-        // Fail silently in the background if the free API tier is congested
-        console.log("🕵️‍♂️ Grammar Engine Passive Skip:", err.message);
+
+        // Silent background failure
+        console.log(
+            "🕵️‍♂️ Grammar Engine Passive Skip:",
+            err.response?.data || err.message
+        );
+
         return null;
     }
 }
@@ -53,4 +155,3 @@ async function autoCorrectGrammar(textInput) {
 module.exports = {
     autoCorrectGrammar
 };
-
