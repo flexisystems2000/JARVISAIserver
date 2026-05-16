@@ -1,6 +1,6 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "JARVIS AI powered by Flexi edTech Digital Academy",
 
   "main": "index.js",
@@ -17,9 +17,9 @@
     "ai",
     "grammar",
     "education",
-    "groq",
     "gemini",
-    "languagetool"
+    "render",
+    "mongodb"
   ],
 
   "author": "Flexi edTech Digital Academy",
@@ -39,8 +39,6 @@
     "dotenv": "^16.4.5",
 
     "express": "^4.19.2",
-
-    "groq-sdk": "^0.7.0",
 
     "mongoose": "^8.4.1",
 
