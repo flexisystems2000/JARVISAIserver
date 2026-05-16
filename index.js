@@ -31,7 +31,7 @@ const POWERED_BY = "Flexi Digital Academy";
 const MONGO_URI = "mongodb+srv://JarvisAI:flexisystems2000@cluster0.7g5odvt.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCoGX2bXlvuwcJY8y0yW6_J42fgxfH5vZao",
+  apiKey: "AIzaSyCoGX2bXlvuwcJY8oyW6_J42fgxfH5vZao",
   authDomain: "jarvisai-1a594.firebaseapp.com",
   projectId: "jarvisai-1a594",
   storageBucket: "jarvisai-1a594.firebasestorage.app",
