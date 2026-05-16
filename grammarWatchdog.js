@@ -2,22 +2,18 @@ const axios = require('axios');
 const OpenAI = require('openai');
 
 /**
- * 🕵️‍♂️ JARVIS HYBRID GRAMMAR WATCHDOG
+ * 🕵️‍♂️ JARVIS SMART GRAMMAR WATCHDOG
  *
- * Layer 1:
- * ✅ LanguageTool
- * Fast spelling + grammar correction
+ * Hybrid System:
+ * ✅ LanguageTool (fast corrections)
+ * ✅ OpenRouter AI fallback
  *
- * Layer 2:
- * ✅ OpenRouter AI Fallback
- * Advanced sentence reconstruction
- *
- * Optimized for:
- * ✅ Render deployment
- * ✅ WhatsApp groups
- * ✅ Nigerian English
- * ✅ Low API usage
- * ✅ Broken sentence correction
+ * Smart Features:
+ * ✅ Anti-spam
+ * ✅ Nigerian slang awareness
+ * ✅ Cooldown protection
+ * ✅ Serious mistakes only
+ * ✅ WhatsApp-friendly behavior
  */
 
 // =========================
@@ -29,23 +25,58 @@ const openrouter = new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY
 });
 
+// =========================
+// USER COOLDOWNS
+// =========================
+
+const grammarCooldowns = new Map();
+
+// =========================
+// NIGERIAN SLANG IGNORE LIST
+// =========================
+
+const slangWords = [
+    'abi',
+    'sha',
+    'dey',
+    'wetin',
+    'una',
+    'wahala',
+    'abeg',
+    'omoh',
+    'omo',
+    'bro',
+    'guy',
+    'lol',
+    'lmao',
+    'pls',
+    'pls.',
+    'u',
+    'ur',
+    'no wahala',
+    'ehen',
+    'na',
+    'sef'
+];
+
 /**
- * Auto-correct grammar and sentence structure
+ * Auto-correct grammar intelligently
  * @param {string} textInput
+ * @param {string} sender
  * @returns {Promise<string|null>}
  */
-async function autoCorrectGrammar(textInput) {
+async function autoCorrectGrammar(textInput, sender = 'unknown') {
 
     // =========================
-    // SAFETY FILTERS
+    // BASIC FILTERS
     // =========================
 
     if (!textInput) return null;
 
     textInput = textInput.trim();
 
-    // Ignore short messages
-    if (textInput.split(/\s+/).length <= 3) {
+    // Ignore short chats
+    if (textInput.split(/\s+/).length < 5) {
         return null;
     }
 
@@ -71,8 +102,34 @@ async function autoCorrectGrammar(textInput) {
         return null;
     }
 
-    // Ignore weird non-language spam
+    // Ignore weird non-language messages
     if (!/[a-zA-Z]/.test(textInput)) {
+        return null;
+    }
+
+    // =========================
+    // SLANG FILTER
+    // =========================
+
+    const containsSlang =
+        slangWords.some(word =>
+            textInput.toLowerCase().includes(word)
+        );
+
+    if (containsSlang) {
+        return null;
+    }
+
+    // =========================
+    // USER COOLDOWN
+    // =========================
+
+    const now = Date.now();
+
+    if (
+        grammarCooldowns.has(sender) &&
+        now - grammarCooldowns.get(sender) < 300000
+    ) {
         return null;
     }
 
@@ -111,7 +168,7 @@ async function autoCorrectGrammar(textInput) {
 
         for (const match of matches) {
 
-            // Skip invalid replacements
+            // Skip weak corrections
             if (!match.replacements?.length) {
                 continue;
             }
@@ -133,7 +190,7 @@ async function autoCorrectGrammar(textInput) {
         }
 
         // =========================
-        // RETURN FAST FIX
+        // FAST FIX VALIDATION
         // =========================
 
         if (
@@ -142,12 +199,25 @@ async function autoCorrectGrammar(textInput) {
             textInput.trim().toLowerCase()
         ) {
 
+            // Ignore tiny corrections
+            const difference =
+                Math.abs(
+                    correctedText.length -
+                    textInput.length
+                );
+
+            if (difference <= 1) {
+                return null;
+            }
+
+            // Set cooldown
+            grammarCooldowns.set(sender, now);
+
             return correctedText;
         }
 
         // =========================
-        // LAYER 2:
-        // OPENROUTER AI FALLBACK
+        // AI FALLBACK
         // =========================
 
         const ai =
@@ -208,7 +278,7 @@ Output: She is not around.`
             return null;
         }
 
-        // Prevent chatbot-style responses
+        // Prevent chatbot behavior
         if (
             aiText.toLowerCase().includes('corrected version') ||
             aiText.toLowerCase().includes('grammar check') ||
@@ -217,7 +287,7 @@ Output: She is not around.`
             return null;
         }
 
-        // Prevent identical responses
+        // Ignore identical output
         if (
             aiText.toLowerCase().trim() ===
             textInput.toLowerCase().trim()
@@ -225,10 +295,24 @@ Output: She is not around.`
             return null;
         }
 
+        // Ignore tiny changes
+        const aiDifference =
+            Math.abs(
+                aiText.length -
+                textInput.length
+            );
+
+        if (aiDifference <= 1) {
+            return null;
+        }
+
         // Basic sanity check
         if (aiText.length < 3) {
             return null;
         }
+
+        // Set cooldown
+        grammarCooldowns.set(sender, now);
 
         return aiText;
 
