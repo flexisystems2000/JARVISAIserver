@@ -8,22 +8,31 @@ const PAYMENT_SERVER_URL = "https://jarvis-payments-server.onrender.com";
  * @param {object} sock - Baileys socket instance
  * @param {object} m - The raw message object
  * @param {string} sender - Student's unique JID (phone number format)
- * @param {string[]} args - Command arguments
+ * @param {string[]} args - Command arguments array
  */
 async function handlePaymentRequest(sock, m, sender, args) {
-    const userTag = sender.split('@')[0];
-    const planArg = args[0]?.toLowerCase();
-
-    // 1. Process plan selection logic
-    const isWeekly = (planArg === "week" || planArg === "weekly" || planArg === "1500");
-    const planType = isWeekly ? "week" : "month";
-    const displayAmount = isWeekly ? "1,500" : "6,000";
-    const displayDuration = isWeekly ? "1 Week Access" : "Full Month Access";
-
-    // 🔒 THE FORCED DM TARGET: Always redirect responses to the individual's private JID
-    const privateChatJid = sender; 
-
     try {
+        const userTag = sender.split('@')[0];
+        
+        // 🛡️ CRITICAL BUG FIX: Safely read args without crashing if it's undefined
+        let planArg = "";
+        if (Array.isArray(args) && args.length > 0) {
+            planArg = args[0]?.toLowerCase();
+        } else {
+            // Fallback: If args wasn't passed down, safely try to get it from the raw message text body
+            const body = m.message?.conversation || m.message?.extendedTextMessage?.text || "";
+            planArg = body.trim().split(/\s+/)[1]?.toLowerCase() || "";
+        }
+
+        // 1. Process plan selection logic safely
+        const isWeekly = (planArg === "week" || planArg === "weekly" || planArg === "1500");
+        const planType = isWeekly ? "week" : "month";
+        const displayAmount = isWeekly ? "1,500" : "6,000";
+        const displayDuration = isWeekly ? "1 Week Access" : "Full Month Access";
+
+        // 🔒 THE FORCED DM TARGET: Always redirect responses to the individual's private JID
+        const privateChatJid = sender; 
+
         // Send a direct placeholder update privately first
         await sock.sendMessage(privateChatJid, { 
             text: `⏳ _Compiling your secure ${planType.toUpperCase()} invoice for Flexi Tutorials..._` 
@@ -60,12 +69,16 @@ async function handlePaymentRequest(sock, m, sender, args) {
         }
 
     } catch (err) {
-        console.log("JARVIS Private Pay Error:", err.message);
-        await sock.sendMessage(privateChatJid, { 
-            text: "❌ *Connection Fault:* JARVIS could not fetch an active Paystack token right now. Please try again in a few minutes." 
-        });
+        console.log("❌ JARVIS Private Pay Error:", err.message);
+        // Fallback catch to safely notify the student in DM if the server times out
+        try {
+            await sock.sendMessage(sender, { 
+                text: "❌ *Connection Fault:* JARVIS could not fetch an active Paystack token right now. Please try again in a few minutes." 
+            });
+        } catch (msgErr) {
+            console.log("Could not drop error message to user:", msgErr.message);
+        }
     }
 }
 
 module.exports = { handlePaymentRequest };
-
