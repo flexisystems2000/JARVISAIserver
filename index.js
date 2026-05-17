@@ -547,47 +547,6 @@ if (command === "!timetable") {
 }
 
 
-                // =====================================================
-        // STAFF COMMAND: MANUAL QUIZ TRIGGER (!quiz)
-        // =====================================================
-        if (isStaff && command === "!quiz") {
-            const chosenSubject = args[0]?.toLowerCase();
-            const validSubjects = ["math", "physics", "chemistry", "biology", "english", "economics", "government"];
-
-            if (!chosenSubject || !validSubjects.includes(chosenSubject)) {
-                return sock.sendMessage(jid, {
-                    text: `❌ *Usage Error!*\n\nPlease specify a valid subject.\n\n*Example:* \`!quiz physics\`\n*Available:* ${validSubjects.join(", ")}`
-                }, { quoted: m });
-            }
-
-            // Let the group know JARVIS is preparing the mock paper
-            await sock.sendMessage(jid, { text: `⏳ _JARVIS is contacting the Exam Core to generate the ${chosenSubject.toUpperCase()} mock exam..._` }, { quoted: m });
-
-            try {
-                // Call your AI Link server directly to build the quiz payload
-                const res = await axios.post('https://flexieduconsult-ai-link.onrender.com/generate-quiz', {
-                    subject: chosenSubject
-                });
-                
-                if (res.data?.success) {
-                    const quizText = res.data.quizText;
-                    const answers = res.data.answers;
-
-                    // Forward the payload directly into your modular quiz engine
-                    const trigger = await quizEngine.fireQuiz(sock, { subject: chosenSubject, quizText, answers });
-                    
-                    if (!trigger.success) {
-                        await sock.sendMessage(jid, { text: `❌ *Quiz Engine Error:* ${trigger.error}` });
-                    }
-                } else {
-                    await sock.sendMessage(jid, { text: `⚠️ *AI Server Error:* Failed to compile the quiz structure.` });
-                }
-            } catch (err) {
-                console.log("Manual !quiz Error:", err.message);
-                await sock.sendMessage(jid, { text: `❌ *Connection Error:* Could not reach the AI Server. Check if your Render server is awake.` });
-            }
-            return;
-        }
         
     // --- LIST ADMINS COMMAND (Everyone can use) ---
 if (command === "!listadmins") {
