@@ -1,4 +1,5 @@
 const axios = require('axios');
+const db = require('./services/firestore'); // 🎯 Ensure this path matches your bot's firestore instance setup
 
 // 🔥 REPLACE THIS with your live Render payment server URL!
 const PAYMENT_SERVER_URL = "https://jarvis-payments-server.onrender.com"; 
@@ -13,6 +14,25 @@ const PAYMENT_SERVER_URL = "https://jarvis-payments-server.onrender.com";
 async function handlePaymentRequest(sock, m, sender, args) {
     try {
         const userTag = sender.split('@')[0];
+        const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
+
+        // 1. 🔍 QUICK DEMAND CHECK: Has this user paid already?
+        const snapshot = await db.collection("payment_requests")
+            .where("phone", "==", userTag)
+            .where("status", "==", "completed")
+            .limit(1)
+            .get();
+
+        // 2. 🚀 Already Paid? Serve the link instantly and exit!
+        if (!snapshot.empty) {
+            const activeTemplate = 
+                `✨ *FLEXI TUTORS PREMIUM PORTAL* 🎓\n\n` +
+                `Hello @${userTag}, our system shows you are already a **Verified Active Member**!\n\n` +
+                `You don't need a new invoice. Re-enter your paid class workspace via the link below:\n\n` +
+                `👉 ${paidClassGroupLink}`;
+
+            return await sock.sendMessage(sender, { text: activeTemplate, mentions: [sender] });
+        }
         
         // 🛡️ CRITICAL BUG FIX: Safely read args without crashing if it's undefined
         let planArg = "";
@@ -82,3 +102,4 @@ async function handlePaymentRequest(sock, m, sender, args) {
 }
 
 module.exports = { handlePaymentRequest };
+                    
