@@ -81,11 +81,25 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
         console.log('📥 Gemini Response:', aiResponse.data);
 
         // =========================
-        // RESPONSE EXTRACTION
-        // =========================
-        const aiText = aiResponse.data?.reply?.trim();
-        const correctionType = aiResponse.data?.type || 'grammar';
+// IGNORE NON-SERIOUS CASES
+// =========================
 
+if (aiResponse.data?.ignored) {
+
+    console.log('🤖 Grammar AI ignored casual message');
+
+    return null;
+}
+
+// =========================
+// RESPONSE EXTRACTION
+// =========================
+
+const aiText =
+    aiResponse.data?.reply?.trim();
+
+const correctionType =
+    aiResponse.data?.type || 'grammar';
         // =========================
         // VALIDATION
         // =========================
