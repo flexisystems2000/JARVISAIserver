@@ -1277,7 +1277,41 @@ app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
     }
 });
 
+// 🚀 PASTE THE NEW ROUTE RIGHT HERE:
 
+app.post("/payment-success", express.json(), async (req, res) => {
+    try {
+        const { phone, plan } = req.body;
+
+        if (!phone) {
+            return res.status(400).json({ success: false, message: "Missing phone details parameters." });
+        }
+
+        const studentJid = `${phone}@s.whatsapp.net`;
+        const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
+
+        const activationNotice = 
+            `🎉 *FLEXI TUTORS PAYSTACK COMPLIANCE* 🎓\n\n` +
+            `Hello @${phone}, your digital payment verification tracking for *${plan}* is completely successful!\n\n` +
+            `🚀 Premium system access tokens have been deployed straight to your mobile number profile.\n\n` +
+            `👇 *Click the direct link below to jump into the Paid Lectures Group right away:* \n` +
+            `${paidClassGroupLink}\n\n` +
+            `Welcome to the inner circle! Let's get you ready to clear those boards!`;
+
+        await sock.sendMessage(studentJid, { 
+            text: activationNotice,
+            mentions: [studentJid]
+        });
+
+        console.log(`🚀 Automated entry credentials passed cleanly to DM profile: ${phone}`);
+        return res.json({ success: true, message: "Group link dropped successfully." });
+
+    } catch (err) {
+        console.error("❌ Error running WhatsApp automation link callback:", err.message);
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+    
 } // <-- This is the absolute final curly bracket of your startJARVIS function
 
 // ---------------- START ----------------
