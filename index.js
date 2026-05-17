@@ -628,6 +628,16 @@ _Type !mute 30 min to test the timer!_`;
     });
 }
 
+                // =====================================================
+        // COMMAND: TUTORIAL PAYMENT PORTAL (!pay)
+        // =====================================================
+        if (command === "!pay") {
+            // Silently processes and routes the response straight to the student's DM
+            await paymentHandler.handlePaymentRequest(sock, m, sender, args);
+            return;
+        }
+
+        
 if (command === "!getjid") {
     return sock.sendMessage(jid, { 
         text: `🎯 This group's JID is:\n\n*${jid}*` 
