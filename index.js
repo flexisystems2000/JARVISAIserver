@@ -14,7 +14,8 @@ const axios = require('axios');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
-const grammarWatchdog = require('./grammarWatchdog'); // 👈 ADD THIS LINE HERE
+const grammarWatchdog = require('./grammarWatchdog');
+const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 
 const app = express();
 const port = process.env.PORT || 3000;
