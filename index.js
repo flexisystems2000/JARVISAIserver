@@ -646,23 +646,19 @@ if (body.startsWith('!name')) {
 
     if (!fullName) {
         return await sock.sendMessage(sender, { 
-            text: "⚠️ *Missing Name Input*\n\nPlease provide your name.\n\n👉 *Usage:* `!name Your Full Name`\n_Example:_ `!name Tunde Olaniyan`" 
+            text: "⚠️ *Missing Name Input*\n\nPlease provide your name.\n\n👉 *Usage:* `!name Your Full Name`\n_Example:* `!name Tunde Olaniyan`" 
         });
     }
 
     try {
-        // Safe context-aware grab of the already running firebase instance
-        const admin = require('firebase-admin');
-        const db = admin.apps.length > 0 ? admin.apps[0].firestore() : admin.firestore();
-
-        if (db) {
-            // Write directly into your dashboard's live "users" collection
-            await db.collection("users").doc(studentPhone).set({
-                name: fullName,
-                phone: studentPhone,
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            }, { merge: true });
-
+        // 📡 CLOUD BACKEND OVERFLOW BRIDGE
+        // Pushes it directly to your backend payment server cluster to write safely to Firestore!
+        const response = await axios.post("https://jarvis-payments-server.onrender.com/payments/register-user", {
+            phone: studentPhone,
+            name: fullName
+        });
+        
+        if (response.data && response.data.success) {
             const successMessage = 
                 `✅ *PROFILE REGISTERED SUCCESSFULLY* 🎓\n\n` +
                 `Thank you, your name has been saved as:\n*${fullName}*\n\n` +
@@ -670,32 +666,17 @@ if (body.startsWith('!name')) {
 
             return await sock.sendMessage(sender, { text: successMessage });
         } else {
-            throw new Error("Firestore context not initialized locally");
+            throw new Error("Backend server did not return a success response");
         }
 
     } catch (err) {
-        console.error("❌ Local Firestore write failed, checking backend bridge:", err.message);
+        console.error("❌ Cloud registration bridge down:", err.message);
+        return await sock.sendMessage(sender, { 
+            text: "⚠️ *System Fault:* Could not complete registration across cloud clusters right now. Please try again in a few minutes." 
+        });
+    }
+}
         
-        // 📡 CLOUD BACKEND OVERFLOW BRIDGE
-        // If Render's local Google Credentials block the direct SDK write, push it directly to your payment server API endpoint!
-        try {
-            const axios = require('axios');
-            await axios.post("https://jarvis-payments-server.onrender.com/payments/register-user", {
-                phone: studentPhone,
-                name: fullName
-            });
-            
-            return await sock.sendMessage(sender, { 
-                text: `✅ *PROFILE REGISTERED VIA CLOUD*\n\nYour name has been saved as *${fullName}*.\n\n🚀 Type \`!pay month\` now to get your invoice link!` 
-            });
-        } catch (apiErr) {
-            console.error("❌ Cloud registration bridge down:", apiErr.message);
-            return await sock.sendMessage(sender, { 
-                text: "⚠️ *System Fault:* Could not complete registration across cloud clusters right now. Please try again in a few minutes." 
-            });
-        }
-    }
-    }
     
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
