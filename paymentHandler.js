@@ -1,145 +1,354 @@
 const axios = require('axios');
 const admin = require('firebase-admin');
 
-// 🔐 BULLETPROOF FIREBASE INITIALIZATION CHECK
-let db;
-if (admin.apps.length === 0) {
-    try {
-        admin.initializeApp({
-            projectId: "jarvisai-1a594"
-        });
-        db = admin.firestore();
-    } catch (initErr) {
-        console.log("⚠️ Firebase initialization failed, retrying instance grab:", initErr.message);
-        db = admin.firestore();
-    }
-} else {
-    // If the [DEFAULT] app already exists in memory, safely grab its running instance
-    db = admin.firestore();
+// ===============================
+// PHONE NORMALIZER
+// ===============================
+function normalizePhone(input) {
+    return input
+        .replace(/\D/g, '')
+        .replace(/^0/, '234');
 }
 
-// 🔥 Decoupled Render Payment Server URL Constants
-const PAYMENT_SERVER_URL = "https://jarvis-payments-server.onrender.com"; 
+// ===============================
+// FIREBASE INITIALIZATION
+// ===============================
+let db;
 
-/**
- * Handles the !pay command completely inside private DM
- * @param {object} sock - Baileys socket instance
- * @param {object} m - The raw message object
- * @param {string} sender - Student's unique JID (phone number format)
- * @param {string[]} args - Command arguments array
- */
-async function handlePaymentRequest(sock, m, sender, args) {
+if (admin.apps.length === 0) {
+
     try {
-        const userTag = sender.split('@')[0];
-        const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
-        const privateChatJid = sender; 
 
-        // 1. 🔍 SAFE ON-DEMAND CHECK: Query Firestore payment_requests collection
+        // Uses your Render environment variable
+        const serviceAccount = JSON.parse(
+            process.env.FIREBASE_SERVICE_ACCOUNT
+        );
+
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+
+        console.log("✅ Firebase Admin Initialized Successfully");
+
+    } catch (initErr) {
+
+        console.log(
+            "❌ Firebase Initialization Error:",
+            initErr.message
+        );
+    }
+}
+
+db = admin.firestore();
+
+// ===============================
+// PAYMENT SERVER URL
+// ===============================
+const PAYMENT_SERVER_URL =
+    "https://jarvis-payments-server.onrender.com";
+
+// ===============================
+// HANDLE !PAY COMMAND
+// ===============================
+async function handlePaymentRequest(
+    sock,
+    m,
+    sender,
+    args
+) {
+
+    try {
+
+        // ===============================
+        // NORMALIZED USER PHONE
+        // ===============================
+        const userTag = normalizePhone(sender);
+
+        const paidClassGroupLink =
+            "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
+
+        const privateChatJid = sender;
+
+        console.log(
+            "🔍 Processing payment request for:",
+            userTag
+        );
+
+        // ===============================
+        // CHECK IF USER ALREADY PAID
+        // ===============================
         let snapshot;
+
         try {
-            snapshot = await db.collection("payment_requests")
+
+            snapshot = await db
+                .collection("payment_requests")
                 .where("phone", "==", userTag)
                 .where("status", "==", "completed")
                 .limit(1)
                 .get();
+
         } catch (dbErr) {
-            console.log("⚠️ Firestore query connection fault:", dbErr.message);
+
+            console.log(
+                "⚠️ Firestore payment query failed:",
+                dbErr.message
+            );
+
             snapshot = { empty: true };
         }
 
-        // 2. 🚀 Already Paid? Serve the link instantly and exit!
+        // ===============================
+        // USER ALREADY HAS ACCESS
+        // ===============================
         if (snapshot && !snapshot.empty) {
-            const activeTemplate = 
-                `✨ *FLEXI TUTORS PREMIUM PORTAL* 🎓\n\n` +
-                `Hello @${userTag}, our system shows you are already a **Verified Active Member**!\n\n` +
-                `You don't need a new invoice. Re-enter your paid class workspace via the link below:\n\n` +
-                `👉 ${paidClassGroupLink}`;
 
-            return await sock.sendMessage(privateChatJid, { text: activeTemplate, mentions: [sender] });
+            const activeTemplate =
+`✨ *FLEXI TUTORS PREMIUM PORTAL* 🎓
+
+Hello @${userTag}, our system shows that you are already a VERIFIED ACTIVE MEMBER.
+
+You do not need another invoice.
+
+👉 Rejoin your premium class workspace below:
+
+${paidClassGroupLink}`;
+
+            return await sock.sendMessage(
+                privateChatJid,
+                {
+                    text: activeTemplate,
+                    mentions: [sender]
+                }
+            );
         }
 
-        // 📝 STRICT PROFILE NAME CHECK: Correctly looking inside your "users" collection!
+        // ===============================
+        // FETCH USER PROFILE
+        // ===============================
         let studentRealName = "";
+
         try {
-            const userProfileDoc = await db.collection("users").doc(userTag).get();
-            if (userProfileDoc.exists && userProfileDoc.data().name) {
-                studentRealName = userProfileDoc.data().name;
+
+            const userProfileDoc = await db
+                .collection("users")
+                .doc(userTag)
+                .get();
+
+            console.log(
+                "🔍 Looking for profile:",
+                userTag
+            );
+
+            if (
+                userProfileDoc.exists &&
+                userProfileDoc.data().name
+            ) {
+
+                studentRealName =
+                    userProfileDoc.data().name;
+
+                console.log(
+                    "✅ Profile found:",
+                    studentRealName
+                );
             }
+
         } catch (profileErr) {
-            console.log("⚠️ Student profile query skipped:", profileErr.message);
+
+            console.log(
+                "⚠️ Student profile query failed:",
+                profileErr.message
+            );
         }
 
-        // 🛑 IF NO NAME IS FOUND: Block payment processing and demand name entry
+        // ===============================
+        // BLOCK IF NO NAME REGISTERED
+        // ===============================
         if (!studentRealName) {
-            const registerPrompt = 
-                `⚠️ *PROFILE REGISTRATION REQUIRED* 🎓\n\n` +
-                `Please enter your name first before generating a payment invoice so your receipt can be processed correctly.\n\n` +
-                `👉 *Reply with:* \`!name Your Full Name\`\n` +
-                `_Example:_ \`!name Tunde Olaniyan\``;
-                
-            return await sock.sendMessage(privateChatJid, { text: registerPrompt });
+
+            const registerPrompt =
+`⚠️ *PROFILE REGISTRATION REQUIRED* 🎓
+
+Please register your profile before generating a payment invoice.
+
+👉 Reply with:
+
+!name Your Full Name
+
+Example:
+!name Tunde Olaniyan`;
+
+            return await sock.sendMessage(
+                privateChatJid,
+                {
+                    text: registerPrompt
+                }
+            );
         }
-        
-        // 🛡️ CRITICAL BUG FIX: Safely read args without crashing if it's undefined
+
+        // ===============================
+        // PLAN DETECTION
+        // ===============================
         let planArg = "";
-        if (Array.isArray(args) && args.length > 0) {
-            planArg = args[0]?.toLowerCase();
+
+        if (
+            Array.isArray(args) &&
+            args.length > 0
+        ) {
+
+            planArg =
+                args[0]?.toLowerCase();
+
         } else {
-            const body = m.message?.conversation || m.message?.extendedTextMessage?.text || "";
-            planArg = body.trim().split(/\s+/)[1]?.toLowerCase() || "";
+
+            const body =
+                m.message?.conversation ||
+                m.message?.extendedTextMessage?.text ||
+                "";
+
+            planArg =
+                body
+                    .trim()
+                    .split(/\s+/)[1]
+                    ?.toLowerCase() || "";
         }
 
-        // Process plan selection logic safely
-        const isWeekly = (planArg === "week" || planArg === "weekly" || planArg === "1500");
-        const planType = isWeekly ? "week" : "month";
-        const displayAmount = isWeekly ? "1,500" : "6,000";
-        const displayDuration = isWeekly ? "1 Week Access" : "Full Month Access";
+        // ===============================
+        // PLAN LOGIC
+        // ===============================
+        const isWeekly =
+            (
+                planArg === "week" ||
+                planArg === "weekly" ||
+                planArg === "1500"
+            );
 
-        // Send a direct placeholder update privately first
-        await sock.sendMessage(privateChatJid, { 
-            text: `⏳ _Compiling your secure ${planType.toUpperCase()} invoice for Flexi Tutorials..._` 
-        });
+        const planType =
+            isWeekly ? "week" : "month";
 
-        // 3. Call your decoupled backend payment cluster with their validated name
-        const response = await axios.post(`${PAYMENT_SERVER_URL}/payments/initialize`, {
-            name: studentRealName, 
-            phone: userTag,
-            planType: planType
-        });
+        const displayAmount =
+            isWeekly ? "1,500" : "6,000";
 
+        const displayDuration =
+            isWeekly
+                ? "1 Week Access"
+                : "Full Month Access";
+
+        // ===============================
+        // PROCESSING MESSAGE
+        // ===============================
+        await sock.sendMessage(
+            privateChatJid,
+            {
+                text:
+`⏳ Compiling your secure ${planType.toUpperCase()} invoice for Flexi Tutors...`
+            }
+        );
+
+        // ===============================
+        // CALL PAYMENT SERVER
+        // ===============================
+        const response = await axios.post(
+            `${PAYMENT_SERVER_URL}/payments/initialize`,
+            {
+                name: studentRealName,
+                phone: userTag,
+                planType: planType
+            }
+        );
+
+        // ===============================
+        // SUCCESSFUL PAYMENT LINK
+        // ===============================
         if (response.data?.success) {
-            const paymentUrl = response.data.paymentUrl;
 
-            // Official Flexi Tutors invoice layout
-            const tutorialReceiptTemplate = 
-                `💳 *FLEXI TUTORS ACADEMY BILLING* 🎓\n\n` +
-                `Hello *${studentRealName}*, your requested invoice has been compiled:\n\n` +
-                `📝 *Subscription Type:* ${displayDuration}\n` +
-                `💰 *Fee Rate:* ₦${displayAmount}\n` +
-                `🗓️ *Access Features:* Group Access & Weekly Mock Portal\n\n` +
-                `👉 *Click this link to pay securely with Transfer, Card, or USSD:* \n` +
-                `${paymentUrl}\n\n` +
-                `💡 _Want to switch plans? Reply right here with \`!pay month\` for Monthly (₦6,000) or \`!pay week\` for Weekly (₦1,500)._`;
+            const paymentUrl =
+                response.data.paymentUrl;
 
-            // Deliver invoice template to private DM
-            await sock.sendMessage(privateChatJid, { text: tutorialReceiptTemplate });
+            const tutorialReceiptTemplate =
+`💳 *FLEXI TUTORS ACADEMY BILLING* 🎓
+
+Hello *${studentRealName}*,
+
+Your invoice has been generated successfully.
+
+📝 Subscription:
+${displayDuration}
+
+💰 Amount:
+₦${displayAmount}
+
+🗓️ Access Includes:
+• Premium Group Access
+• Weekly Mock Portal
+• Learning Materials
+
+👉 Pay securely below:
+${paymentUrl}
+
+💡 Want another plan?
+
+Reply with:
+
+!pay week
+or
+!pay month`;
+
+            await sock.sendMessage(
+                privateChatJid,
+                {
+                    text:
+                        tutorialReceiptTemplate
+                }
+            );
 
         } else {
-            await sock.sendMessage(privateChatJid, { 
-                text: "⚠️ *System Error:* The payment gateway could not register your billing key signature." 
-            });
+
+            await sock.sendMessage(
+                privateChatJid,
+                {
+                    text:
+`⚠️ PAYMENT INITIALIZATION FAILED
+
+The payment gateway could not generate your invoice right now.
+
+Please try again later.`
+                }
+            );
         }
 
     } catch (err) {
-        console.log("❌ JARVIS Private Pay Error:", err.message);
+
+        console.log(
+            "❌ JARVIS PAYMENT ERROR:",
+            err.message
+        );
+
         try {
-            await sock.sendMessage(sender, { 
-                text: "❌ *Connection Fault:* JARVIS could not fetch an active Paystack token right now. Please try again in a few minutes." 
-            });
+
+            await sock.sendMessage(
+                sender,
+                {
+                    text:
+`❌ CONNECTION ERROR
+
+JARVIS could not establish a secure payment session right now.
+
+Please try again in a few minutes.`
+                }
+            );
+
         } catch (msgErr) {
-            console.log("Could not drop error message to user:", msgErr.message);
+
+            console.log(
+                "❌ Failed to send error message:",
+                msgErr.message
+            );
         }
     }
 }
 
-module.exports = { handlePaymentRequest };
+module.exports = {
+    handlePaymentRequest
+};
