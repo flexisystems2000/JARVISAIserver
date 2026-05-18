@@ -637,21 +637,44 @@ _Type !mute 30 min to test the timer!_`;
             return;
         }
 
-        
-
-// ===============================
+ // ===============================
 // PROFILE REGISTRATION COMMAND
 // ===============================
 
-// Phone Normalizer
-function normalizePhone(input) {
+// Firebase
+const admin = require("firebase-admin");
+
+// Initialize Firebase ONLY ONCE
+if (!admin.apps.length) {
+
+    const serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT
+    );
+
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount)
+    });
+
+    console.log("✅ Firebase Connected");
+}
+
+// Firestore Database Instance
+const db = admin.firestore();
+
+// ===============================
+// PHONE NORMALIZER
+// ===============================
+
+function normalizePhone(input = "") {
+
     return input
+        .toString()
         .replace(/\D/g, '')
         .replace(/^0/, '234');
 }
 
 // ===============================
-// !name COMMAND
+// !NAME COMMAND
 // Example:
 // !name FLEXI SYSTEMS
 // ===============================
@@ -665,10 +688,14 @@ if (body.startsWith("!name ")) {
             .replace("!name ", "")
             .trim();
 
-        // Validate name
-        if (!suppliedName || suppliedName.length < 2) {
+        // Validate supplied name
+        if (
+            !suppliedName ||
+            suppliedName.length < 2
+        ) {
 
             await sock.sendMessage(sender, {
+
                 text:
 `⚠️ INVALID NAME
 
@@ -676,24 +703,43 @@ Please enter a valid name.
 
 Example:
 !name FLEXI SYSTEMS`
+
             });
 
             return;
         }
 
         // Normalize phone number
-        const phone = normalizePhone(sender);
+        const phone =
+            normalizePhone(sender);
 
-        // Save to Firestore
-        await db.collection("users").doc(phone).set({
+        console.log(
+            "📌 Saving profile for:",
+            phone
+        );
 
-            name: suppliedName,
-            phone: phone,
-            updatedAt: Date.now()
+        // Save profile to Firestore
+        await db
+            .collection("users")
+            .doc(phone)
+            .set({
 
-        }, { merge: true });
+                name: suppliedName,
 
-        console.log("✅ Profile saved for:", phone);
+                phone: phone,
+
+                updatedAt:
+                    Date.now(),
+
+                createdAt:
+                    Date.now()
+
+            }, { merge: true });
+
+        console.log(
+            "✅ Profile saved for:",
+            phone
+        );
 
         // Success message
         await sock.sendMessage(sender, {
@@ -705,7 +751,7 @@ Thank you, your name has been saved as:
 
 ${suppliedName.toUpperCase()}
 
-🚀 You can now proceed to type
+🚀 You can now proceed to type:
 
 !pay month
 or
@@ -717,7 +763,10 @@ to receive your secure billing invoice!`
 
     } catch (error) {
 
-        console.log("❌ Name registration error:", error);
+        console.log(
+            "❌ Name registration FULL ERROR:",
+            error
+        );
 
         await sock.sendMessage(sender, {
 
@@ -730,7 +779,8 @@ Please try again later.`
 
         });
     }
-}        
+}       
+
     
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
