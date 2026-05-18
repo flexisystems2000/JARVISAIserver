@@ -3,18 +3,19 @@ const admin = require('firebase-admin');
 
 // 🔐 BULLETPROOF FIREBASE INITIALIZATION CHECK
 let db;
-try {
-    if (admin.apps.length === 0) {
+if (admin.apps.length === 0) {
+    try {
         admin.initializeApp({
             projectId: "jarvisai-1a594"
         });
         db = admin.firestore();
-    } else {
+    } catch (initErr) {
+        console.log("⚠️ Firebase initialization failed, retrying instance grab:", initErr.message);
         db = admin.firestore();
     }
-} catch (initErr) {
-    console.log("⚠️ Firebase initialization notice:", initErr.message);
-    db = admin.firestore(); 
+} else {
+    // If the [DEFAULT] app already exists in memory, safely grab its running instance
+    db = admin.firestore();
 }
 
 // 🔥 Decoupled Render Payment Server URL Constants
@@ -33,7 +34,7 @@ async function handlePaymentRequest(sock, m, sender, args) {
         const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
         const privateChatJid = sender; 
 
-        // 1. 🔍 SAFE ON-DEMAND CHECK: Query Firestore manually for a completed payment record
+        // 1. 🔍 SAFE ON-DEMAND CHECK: Query Firestore payment_requests collection
         let snapshot;
         try {
             snapshot = await db.collection("payment_requests")
@@ -57,10 +58,10 @@ async function handlePaymentRequest(sock, m, sender, args) {
             return await sock.sendMessage(privateChatJid, { text: activeTemplate, mentions: [sender] });
         }
 
-        // 📝 STRICT PROFILE NAME CHECK: Stop the flow if they haven't registered their name yet
+        // 📝 STRICT PROFILE NAME CHECK: Correctly looking inside your "users" collection!
         let studentRealName = "";
         try {
-            const userProfileDoc = await db.collection("students").doc(userTag).get();
+            const userProfileDoc = await db.collection("users").doc(userTag).get();
             if (userProfileDoc.exists && userProfileDoc.data().name) {
                 studentRealName = userProfileDoc.data().name;
             }
@@ -68,7 +69,7 @@ async function handlePaymentRequest(sock, m, sender, args) {
             console.log("⚠️ Student profile query skipped:", profileErr.message);
         }
 
-        // 🛑 IF NO NAME IS FOUND: Block payment and ask them to register their name first
+        // 🛑 IF NO NAME IS FOUND: Block payment processing and demand name entry
         if (!studentRealName) {
             const registerPrompt = 
                 `⚠️ *PROFILE REGISTRATION REQUIRED* 🎓\n\n` +
@@ -99,7 +100,7 @@ async function handlePaymentRequest(sock, m, sender, args) {
             text: `⏳ _Compiling your secure ${planType.toUpperCase()} invoice for Flexi Tutorials..._` 
         });
 
-        // 3. Call your decoupled backend payment cluster with their validated name!
+        // 3. Call your decoupled backend payment cluster with their validated name
         const response = await axios.post(`${PAYMENT_SERVER_URL}/payments/initialize`, {
             name: studentRealName, 
             phone: userTag,
