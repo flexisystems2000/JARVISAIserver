@@ -10,12 +10,11 @@ try {
         });
         db = admin.firestore();
     } else {
-        // If an app instance already exists, safely grab its default firestore connection
         db = admin.firestore();
     }
 } catch (initErr) {
     console.log("⚠️ Firebase initialization notice:", initErr.message);
-    db = admin.firestore(); // Fallback to whatever instance is currently alive
+    db = admin.firestore(); 
 }
 
 // 🔥 Decoupled Render Payment Server URL Constants
@@ -34,7 +33,7 @@ async function handlePaymentRequest(sock, m, sender, args) {
         const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
         const privateChatJid = sender; 
 
-        // 1. 🔍 SAFE ON-DEMAND CHECK: Query Firestore manually with an inline error guard
+        // 1. 🔍 SAFE ON-DEMAND CHECK: Query Firestore manually for a completed payment record
         let snapshot;
         try {
             snapshot = await db.collection("payment_requests")
@@ -44,7 +43,6 @@ async function handlePaymentRequest(sock, m, sender, args) {
                 .get();
         } catch (dbErr) {
             console.log("⚠️ Firestore query connection fault:", dbErr.message);
-            // If anything blocks the query, pass right through to Paystack link generation safely
             snapshot = { empty: true };
         }
 
@@ -57,6 +55,28 @@ async function handlePaymentRequest(sock, m, sender, args) {
                 `👉 ${paidClassGroupLink}`;
 
             return await sock.sendMessage(privateChatJid, { text: activeTemplate, mentions: [sender] });
+        }
+
+        // 📝 STRICT PROFILE NAME CHECK: Stop the flow if they haven't registered their name yet
+        let studentRealName = "";
+        try {
+            const userProfileDoc = await db.collection("students").doc(userTag).get();
+            if (userProfileDoc.exists && userProfileDoc.data().name) {
+                studentRealName = userProfileDoc.data().name;
+            }
+        } catch (profileErr) {
+            console.log("⚠️ Student profile query skipped:", profileErr.message);
+        }
+
+        // 🛑 IF NO NAME IS FOUND: Block payment and ask them to register their name first
+        if (!studentRealName) {
+            const registerPrompt = 
+                `⚠️ *PROFILE REGISTRATION REQUIRED* 🎓\n\n` +
+                `Please enter your name first before generating a payment invoice so your receipt can be processed correctly.\n\n` +
+                `👉 *Reply with:* \`!name Your Full Name\`\n` +
+                `_Example:_ \`!name Tunde Olaniyan\``;
+                
+            return await sock.sendMessage(privateChatJid, { text: registerPrompt });
         }
         
         // 🛡️ CRITICAL BUG FIX: Safely read args without crashing if it's undefined
@@ -79,9 +99,9 @@ async function handlePaymentRequest(sock, m, sender, args) {
             text: `⏳ _Compiling your secure ${planType.toUpperCase()} invoice for Flexi Tutorials..._` 
         });
 
-        // 3. Call your decoupled backend payment cluster
+        // 3. Call your decoupled backend payment cluster with their validated name!
         const response = await axios.post(`${PAYMENT_SERVER_URL}/payments/initialize`, {
-            name: `WhatsApp Student (@${userTag})`,
+            name: studentRealName, 
             phone: userTag,
             planType: planType
         });
@@ -92,7 +112,7 @@ async function handlePaymentRequest(sock, m, sender, args) {
             // Official Flexi Tutors invoice layout
             const tutorialReceiptTemplate = 
                 `💳 *FLEXI TUTORS ACADEMY BILLING* 🎓\n\n` +
-                `Hello @${userTag}, your requested invoice has been compiled:\n\n` +
+                `Hello *${studentRealName}*, your requested invoice has been compiled:\n\n` +
                 `📝 *Subscription Type:* ${displayDuration}\n` +
                 `💰 *Fee Rate:* ₦${displayAmount}\n` +
                 `🗓️ *Access Features:* Group Access & Weekly Mock Portal\n\n` +
