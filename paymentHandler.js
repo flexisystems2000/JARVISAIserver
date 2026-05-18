@@ -1,5 +1,13 @@
 const axios = require('axios');
-const db = require('./services/firestore'); // 🎯 Ensure this path matches your bot's firestore instance setup
+const admin = require('firebase-admin');
+
+// 🔐 Self-contained initialization so you don't need a separate services file
+if (admin.apps.length === 0) {
+    admin.initializeApp({
+        projectId: "jarvisai-1a594" // 🎯 Matches your project ID perfectly
+    });
+}
+const db = admin.firestore();
 
 // 🔥 REPLACE THIS with your live Render payment server URL!
 const PAYMENT_SERVER_URL = "https://jarvis-payments-server.onrender.com"; 
@@ -102,4 +110,4 @@ async function handlePaymentRequest(sock, m, sender, args) {
 }
 
 module.exports = { handlePaymentRequest };
-                    
+        
