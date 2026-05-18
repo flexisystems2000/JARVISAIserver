@@ -639,44 +639,98 @@ _Type !mute 30 min to test the timer!_`;
 
         
 
-// 📝 CORE PROFILE REGISTRATION COMMAND
-if (body.startsWith('!name')) {
-    const fullName = body.replace('!name', '').trim();
-    const studentPhone = sender.split('@')[0];
+// ===============================
+// PROFILE REGISTRATION COMMAND
+// ===============================
 
-    if (!fullName) {
-        return await sock.sendMessage(sender, { 
-            text: "⚠️ *Missing Name Input*\n\nPlease provide your name.\n\n👉 *Usage:* `!name Your Full Name`\n_Example:* `!name Tunde Olaniyan`" 
-        });
-    }
+// Phone Normalizer
+function normalizePhone(input) {
+    return input
+        .replace(/\D/g, '')
+        .replace(/^0/, '234');
+}
+
+// ===============================
+// !name COMMAND
+// Example:
+// !name FLEXI SYSTEMS
+// ===============================
+
+if (body.startsWith("!name ")) {
 
     try {
-        // 📡 CLOUD BACKEND OVERFLOW BRIDGE
-        // Pushes it directly to your backend payment server cluster to write safely to Firestore!
-        const response = await axios.post("https://jarvis-payments-server.onrender.com/payments/register-user", {
-            phone: studentPhone,
-            name: fullName
-        });
-        
-        if (response.data && response.data.success) {
-            const successMessage = 
-                `✅ *PROFILE REGISTERED SUCCESSFULLY* 🎓\n\n` +
-                `Thank you, your name has been saved as:\n*${fullName}*\n\n` +
-                `🚀 You can now proceed to type \`!pay month\` or \`!pay week\` to receive your secure billing invoice!`;
 
-            return await sock.sendMessage(sender, { text: successMessage });
-        } else {
-            throw new Error("Backend server did not return a success response");
+        // Extract full name
+        const suppliedName = body
+            .replace("!name ", "")
+            .trim();
+
+        // Validate name
+        if (!suppliedName || suppliedName.length < 2) {
+
+            await sock.sendMessage(sender, {
+                text:
+`⚠️ INVALID NAME
+
+Please enter a valid name.
+
+Example:
+!name FLEXI SYSTEMS`
+            });
+
+            return;
         }
 
-    } catch (err) {
-        console.error("❌ Cloud registration bridge down:", err.message);
-        return await sock.sendMessage(sender, { 
-            text: "⚠️ *System Fault:* Could not complete registration across cloud clusters right now. Please try again in a few minutes." 
+        // Normalize phone number
+        const phone = normalizePhone(sender);
+
+        // Save to Firestore
+        await db.collection("users").doc(phone).set({
+
+            name: suppliedName,
+            phone: phone,
+            updatedAt: Date.now()
+
+        }, { merge: true });
+
+        console.log("✅ Profile saved for:", phone);
+
+        // Success message
+        await sock.sendMessage(sender, {
+
+            text:
+`✅ PROFILE REGISTERED SUCCESSFULLY 🎓
+
+Thank you, your name has been saved as:
+
+${suppliedName.toUpperCase()}
+
+🚀 You can now proceed to type
+
+!pay month
+or
+!pay week
+
+to receive your secure billing invoice!`
+
+        });
+
+    } catch (error) {
+
+        console.log("❌ Name registration error:", error);
+
+        await sock.sendMessage(sender, {
+
+            text:
+`❌ PROFILE REGISTRATION FAILED
+
+An unexpected error occurred while saving your profile.
+
+Please try again later.`
+
         });
     }
-}
-        
+}        
     
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
