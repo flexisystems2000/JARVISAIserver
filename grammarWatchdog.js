@@ -67,7 +67,7 @@ async function autoCorrectGrammar(textInput, sender = 'unknown') {
         // GEMINI BACKEND REQUEST
         // =========================
         const aiResponse = await axios.post(
-            'https://flexieduconsult-ai-link.onrender.com/grammar',
+            'https://flexieduconsult.com/grammar',
             { text: textInput },
             {
                 timeout: 20000,
