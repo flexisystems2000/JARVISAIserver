@@ -1385,34 +1385,40 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
-        // =========================
+                // =========================
         // KICK
         // =========================
-        patterns: [
-    /^kick .+/i,
-    /^remove .+/i,
-    /^remove (this )?person .+/i,
-    /^kick (this )?person .+/i,
-    /^kick (him|her|them)$/i,
-    /^remove (him|her|them)$/i,
-    /^kick this (guy|person|member)$/i,
-    /^remove this (guy|person|member)$/i,
-    /^get .+ out of the group$/i
-]
+        {
+            intent: "kick",
+            patterns: [
+                /^kick .+/i,
+                /^remove .+/i,
+                /^remove (this )?person .+/i,
+                /^kick (this )?person .+/i,
+                /^kick (him|her|them)$/i,
+                /^remove (him|her|them)$/i,
+                /^kick this (guy|person|member)$/i,
+                /^remove this (guy|person|member)$/i,
+                /^get .+ out of the group$/i
+            ]
+        },
 
         // =========================
         // PROMOTE
         // =========================
-        patterns: [
-    /^promote .+/i,
-    /^make .+ admin$/i,
-    /^make .+ an admin$/i,
-    /^give .+ admin$/i,
-    /^give .+ admin rights$/i,
-    /^make (him|her|them) admin$/i,
-    /^promote (him|her|them)$/i,
-    /^make this (guy|person|member) admin$/i
-]
+        {
+            intent: "promote",
+            patterns: [
+                /^promote .+/i,
+                /^make .+ admin$/i,
+                /^make .+ an admin$/i,
+                /^give .+ admin$/i,
+                /^give .+ admin rights$/i,
+                /^make (him|her|them) admin$/i,
+                /^promote (him|her|them)$/i,
+                /^make this (guy|person|member) admin$/i
+            ]
+        },
 
         // =========================
         // ADD MEMBER
@@ -1429,111 +1435,122 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
-       // =========================
-// 🔒 MUTE / LOCK GROUP
-// =========================
-{
-    intent: "mute",
-    patterns: [
+        // =========================
+        // 🔒 MUTE / LOCK GROUP
+        // =========================
+        {
+            intent: "mute",
+            patterns: [
 
-        // Direct commands
-        /^mute (the )?group$/i,
-        /^lock (the )?group$/i,
-        /^close (the )?group$/i,
+                // Direct commands
+                /^mute (the )?group$/i,
+                /^lock (the )?group$/i,
+                /^close (the )?group$/i,
 
-        // Natural variations
-        /^lock this group$/i,
-        /^close this group$/i,
-        /^mute this group$/i,
-        /^lock our group$/i,
-        /^close our group$/i,
+                // Natural variations
+                /^lock this group$/i,
+                /^close this group$/i,
+                /^mute this group$/i,
+                /^lock our group$/i,
+                /^close our group$/i,
 
-        // Admin-only requests
-        /^make (the )?group admin only$/i,
-        /^make this group admin only$/i,
-        /^make (the )?group admins only$/i,
-        /^make (the )?group admins? only$/i,
-        /^set (the )?group to admin only$/i,
-        /^set this group to admin only$/i,
+                // Admin-only requests
+                /^make (the )?group admin only$/i,
+                /^make this group admin only$/i,
+                /^make (the )?group admins only$/i,
+                /^make (the )?group admins? only$/i,
+                /^set (the )?group to admin only$/i,
+                /^set this group to admin only$/i,
 
-        // Stop members from chatting
-        /^stop members from chatting$/i,
-        /^stop everyone from chatting$/i,
-        /^stop people from chatting$/i,
-        /^prevent members from chatting$/i,
-        /^prevent everyone from chatting$/i,
-        /^don't let members chat$/i,
-        /^do not let members chat$/i,
+                // Stop members from chatting
+                /^stop members from chatting$/i,
+                /^stop everyone from chatting$/i,
+                /^stop people from chatting$/i,
+                /^prevent members from chatting$/i,
+                /^prevent everyone from chatting$/i,
+                /^don't let members chat$/i,
+                /^do not let members chat$/i,
 
-        // Restrict / close conversation
-        /^restrict (the )?group$/i,
-        /^restrict this group$/i,
-        /^disable member messages$/i,
-        /^disable members from chatting$/i,
-        /^turn off member messaging$/i,
+                // Restrict / close conversation
+                /^restrict (the )?group$/i,
+                /^restrict this group$/i,
+                /^disable member messages$/i,
+                /^disable members from chatting$/i,
+                /^turn off member messaging$/i,
 
-        // Temporary lock
-        /^lock (the )?group for \d+/i,
-        /^mute (the )?group for \d+/i,
-        /^close (the )?group for \d+/i
-    ]
-},
+                // Temporary lock
+                /^lock (the )?group for \d+/i,
+                /^mute (the )?group for \d+/i,
+                /^close (the )?group for \d+/i
+            ]
+        },
 
-// =========================
-// 🔓 UNMUTE / UNLOCK GROUP
-// =========================
-{
-    intent: "unmute",
-    patterns: [
+        // =========================
+        // 🔓 UNMUTE / UNLOCK GROUP
+        // =========================
+        {
+            intent: "unmute",
+            patterns: [
 
-        // Direct commands
-        /^unmute (the )?group$/i,
-        /^unlock (the )?group$/i,
-        /^open (the )?group$/i,
+                // Direct commands
+                /^unmute (the )?group$/i,
+                /^unlock (the )?group$/i,
+                /^open (the )?group$/i,
 
-        // Natural variations
-        /^unlock this group$/i,
-        /^open this group$/i,
-        /^unmute this group$/i,
-        /^unlock our group$/i,
-        /^open our group$/i,
+                // Natural variations
+                /^unlock this group$/i,
+                /^open this group$/i,
+                /^unmute this group$/i,
+                /^unlock our group$/i,
+                /^open our group$/i,
 
-        // Allow members to chat
-        /^allow members to chat$/i,
-        /^allow everyone to chat$/i,
-        /^let everyone chat$/i,
-        /^let members chat$/i,
-        /^let people chat$/i,
-        /^allow people to chat$/i,
+                // Allow members to chat
+                /^allow members to chat$/i,
+                /^allow everyone to chat$/i,
+                /^let everyone chat$/i,
+                /^let members chat$/i,
+                /^let people chat$/i,
+                /^allow people to chat$/i,
 
-        // Restore normal messaging
-        /^restore member messaging$/i,
-        /^enable member messages$/i,
-        /^enable members to chat$/i,
-        /^turn on member messaging$/i,
-        /^remove admin only$/i,
-        /^make the group open$/i,
-        /^make this group open$/i,
+                // Restore normal messaging
+                /^restore member messaging$/i,
+                /^enable member messages$/i,
+                /^enable members to chat$/i,
+                /^turn on member messaging$/i,
+                /^remove admin only$/i,
+                /^make the group open$/i,
+                /^make this group open$/i,
 
-        // Open again
-        /^open (the )?group again$/i,
-        /^unlock (the )?group again$/i,
-        /^let everyone chat again$/i
-    ]
-},
+                // Open again
+                /^open (the )?group again$/i,
+                /^unlock (the )?group again$/i,
+                /^let everyone chat again$/i
+            ]
+        },
+
         // =========================
         // RESET WARNINGS
         // =========================
         {
             intent: "reset",
             patterns: [
+
+                // Named target
                 /^reset .+ warnings?$/i,
                 /^clear .+ warnings?$/i,
                 /^remove .+ warnings?$/i,
                 /^clear the warnings? for .+/i,
                 /^reset the warnings? for .+/i,
                 /^remove the strikes? for .+/i,
-                /^clear the strikes? for .+/i
+                /^clear the strikes? for .+/i,
+
+                // Contextual target
+                /^reset (his|her|their) warnings?$/i,
+                /^clear (his|her|their) warnings?$/i,
+                /^remove (his|her|their) warnings?$/i,
+                /^reset (his|her|their) strikes?$/i,
+                /^clear (his|her|their) strikes?$/i,
+                /^remove (his|her|their) strikes?$/i
             ]
         },
 
@@ -1665,85 +1682,92 @@ if (naturalIntent) {
 
     if (naturalIntent === "add") {
 
-    const numberMatch = naturalText.match(/\+?\d[\d\s-]{6,}/);
+        const numberMatch =
+            naturalText.match(/\+?\d[\d\s-]{6,}/);
 
-    if (numberMatch) {
-        const number = numberMatch[0].replace(/\D/g, "");
+        if (numberMatch) {
 
-        args.splice(
-            0,
-            args.length,
-            number
-        );
+            const number =
+                numberMatch[0].replace(/\D/g, "");
+
+            args.splice(
+                0,
+                args.length,
+                number
+            );
+        }
     }
-}
 
 
-// ============================================================
-// 🧠 PHASE 5B — CONTEXT-AWARE TARGET RESOLVER
-// ============================================================
+    // ============================================================
+    // 🧠 PHASE 5B — CONTEXT-AWARE TARGET RESOLVER
+    // ============================================================
 
-const contextInfo =
-    m.message.extendedTextMessage?.contextInfo ||
-    m.message.imageMessage?.contextInfo ||
-    m.message.videoMessage?.contextInfo ||
-    m.message.documentMessage?.contextInfo ||
-    m.message.audioMessage?.contextInfo ||
-    {};
+    const contextInfo =
+        m.message.extendedTextMessage?.contextInfo ||
+        m.message.imageMessage?.contextInfo ||
+        m.message.videoMessage?.contextInfo ||
+        m.message.documentMessage?.contextInfo ||
+        m.message.audioMessage?.contextInfo ||
+        {};
 
-const mentionedTarget =
-    contextInfo.mentionedJid?.[0] || null;
+    const mentionedTarget =
+        contextInfo.mentionedJid?.[0] || null;
 
-const repliedParticipant =
-    contextInfo.participant || null;
+    const repliedParticipant =
+        contextInfo.participant || null;
 
-const quotedMessage =
-    contextInfo.quotedMessage || null;
-
-
-// ------------------------------------------------------------
-// Determine who the command is referring to
-// Priority:
-// 1. Explicit @mention
-// 2. Person whose message was replied to
-// ------------------------------------------------------------
-
-const contextTarget =
-    mentionedTarget ||
-    repliedParticipant ||
-    null;
+    const quotedMessage =
+        contextInfo.quotedMessage || null;
 
 
-// ------------------------------------------------------------
-// Commands that operate on another group member
-// ------------------------------------------------------------
+    // ------------------------------------------------------------
+    // Determine who the command is referring to
+    // Priority:
+    // 1. Explicit @mention
+    // 2. Person whose message was replied to
+    // ------------------------------------------------------------
 
-if (
-    naturalIntent === "kick" ||
-    naturalIntent === "promote" ||
-    naturalIntent === "reset"
-) {
+    const contextTarget =
+        mentionedTarget ||
+        repliedParticipant ||
+        null;
 
-    if (contextTarget) {
 
-        args.splice(
-            0,
-            args.length,
-            contextTarget
-        );
+    // ------------------------------------------------------------
+    // Commands that operate on another group member
+    // ------------------------------------------------------------
 
-        console.log(
-            `🧠 Context Target: ${contextTarget}`
-        );
+    if (
+        naturalIntent === "kick" ||
+        naturalIntent === "promote" ||
+        naturalIntent === "reset"
+    ) {
 
-    } else {
+        if (contextTarget) {
 
-        console.log(
-            "🧠 No contextual target found."
-        );
+            args.splice(
+                0,
+                args.length,
+                contextTarget
+            );
+
+            console.log(
+                `🧠 Context Target: ${contextTarget}`
+            );
+
+        } else {
+
+            console.log(
+                "🧠 No contextual target found."
+            );
+        }
     }
-}
 
+
+    // ============================================================
+    // 🔒 PHASE 5A — MUTE / UNMUTE DURATION EXTRACTION
+    // ============================================================
 
     if (
         naturalIntent === "mute" ||
@@ -1757,7 +1781,8 @@ if (
 
         if (durationMatch) {
 
-            const number = durationMatch[1];
+            const number =
+                durationMatch[1];
 
             let unit =
                 durationMatch[2].toLowerCase();
@@ -1766,10 +1791,12 @@ if (
                 unit.startsWith("sec")
             ) {
                 unit = "sec";
+
             } else if (
                 unit.startsWith("min")
             ) {
                 unit = "min";
+
             } else if (
                 unit.startsWith("hr") ||
                 unit.startsWith("hour")
