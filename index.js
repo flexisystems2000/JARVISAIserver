@@ -492,8 +492,492 @@ if (hasReactionIntent) {
         }
     }
 
-    const command = text.split(/ +/)[0];
-    const args = body.trim().split(/ +/).slice(1);
+    let command = text.split(/ +/)[0];
+const args = body.trim().split(/ +/).slice(1);
+
+// =========================
+// NATURAL-LANGUAGE INTENT SYSTEM
+// PHASE 3 — ALL COMMANDS
+// =========================
+
+let naturalIntent = null;
+let naturalText = text.trim();
+
+// Never override existing !commands
+if (!naturalText.startsWith("!")) {
+
+    // Allow:
+// "Jarvis, who are the admins?"
+// "Jarvis show me the menu"
+// "Jarvis add 08012345678"
+    naturalText = naturalText
+        .replace(/^jarvis[\s,:-]*/i, "")
+        .trim();
+
+    const intentPatterns = [
+
+        // =========================
+        // MENU / HELP
+        // =========================
+        {
+            intent: "menu",
+            patterns: [
+                /^show (me )?(the )?menu\??$/i,
+                /^open (the )?menu\??$/i,
+                /^what can you do\??$/i,
+                /^what can jarvis do\??$/i,
+                /^what are your commands\??$/i,
+                /^show me your commands\??$/i,
+                /^help me\??$/i,
+                /^give me (your )?commands\??$/i
+            ]
+        },
+
+        // =========================
+        // AI
+        // =========================
+        {
+            intent: "ai",
+            patterns: [
+                /^ask (jarvis )?(.+)/i,
+                /^explain .+/i,
+                /^tell me about .+/i,
+                /^what is .+/i,
+                /^what are .+/i,
+                /^who is .+/i,
+                /^why is .+/i,
+                /^why are .+/i,
+                /^how do .+/i,
+                /^how does .+/i,
+                /^how can .+/i,
+                /^solve .+/i,
+                /^answer this .+/i,
+                /^help me with .+/i
+            ]
+        },
+
+        // =========================
+        // TIMETABLE
+        // =========================
+        {
+            intent: "timetable",
+            patterns: [
+                /^show (me )?(the )?timetable\??$/i,
+                /^send (me )?(the )?timetable\??$/i,
+                /^what is (the )?timetable\??$/i,
+                /^show timetable\??$/i,
+                /^send timetable\??$/i,
+                /^tutorial timetable\??$/i
+            ]
+        },
+
+        // =========================
+        // ADMINS
+        // =========================
+        {
+            intent: "listadmins",
+            patterns: [
+                /^who (are|is) (the )?admins?\??$/i,
+                /^who are the group admins\??$/i,
+                /^show (me )?(the )?admins?\??$/i,
+                /^show (me )?(the )?group admins?\??$/i,
+                /^list (the )?admins?\??$/i,
+                /^list (the )?group admins?\??$/i
+            ]
+        },
+
+        // =========================
+        // ONLINE MEMBERS
+        // =========================
+        {
+            intent: "listonline",
+            patterns: [
+                /^who is online\??$/i,
+                /^who's online\??$/i,
+                /^who are online\??$/i,
+                /^show (me )?(the )?online members?\??$/i,
+                /^show (me )?who is online\??$/i,
+                /^show (me )?who's online\??$/i,
+                /^who is active\??$/i,
+                /^show active members\??$/i
+            ]
+        },
+
+        // =========================
+        // GROUP INFO
+        // =========================
+        {
+            intent: "ginfo",
+            patterns: [
+                /^show (me )?(the )?group info\??$/i,
+                /^show (me )?(the )?group information\??$/i,
+                /^what is this group\??$/i,
+                /^tell me about this group\??$/i,
+                /^group info\??$/i,
+                /^group information\??$/i
+            ]
+        },
+
+        // =========================
+        // GROUP JID
+        // =========================
+        {
+            intent: "getjid",
+            patterns: [
+                /^what is (this )?group'?s? id\??$/i,
+                /^show (me )?(this )?group id\??$/i,
+                /^give me (this )?group id\??$/i,
+                /^what is (this )?group jid\??$/i,
+                /^show (me )?(this )?group jid\??$/i
+            ]
+        },
+
+        // =========================
+        // IMAGE GENERATION
+        // =========================
+        {
+            intent: "image",
+            patterns: [
+                /^generate an image (of )?.+/i,
+                /^generate image (of )?.+/i,
+                /^create an image (of )?.+/i,
+                /^create image (of )?.+/i,
+                /^make an image (of )?.+/i,
+                /^make image (of )?.+/i,
+                /^draw (me )?.+/i,
+                /^create a picture (of )?.+/i,
+                /^generate a picture (of )?.+/i
+            ]
+        },
+
+        // =========================
+        // PAYMENT
+        // =========================
+        {
+            intent: "pay",
+            patterns: [
+                /^i want to pay.*$/i,
+                /^i want to make payment.*$/i,
+                /^make payment.*$/i,
+                /^make a payment.*$/i,
+                /^how do i pay.*$/i,
+                /^how can i pay.*$/i,
+                /^i want to subscribe.*$/i,
+                /^i want a subscription.*$/i,
+                /^pay for (the )?tutorial.*$/i,
+                /^pay (weekly|monthly|week|month)$/i
+            ]
+        },
+
+        // =========================
+        // PROFILE / NAME
+        // =========================
+        {
+            intent: "name",
+            patterns: [
+                /^my name is .+/i,
+                /^call me .+/i,
+                /^save my name as .+/i,
+                /^register my name .+/i,
+                /^my full name is .+/i
+            ]
+        },
+
+        // =========================
+        // KICK
+        // =========================
+        {
+            intent: "kick",
+            patterns: [
+                /^kick .+/i,
+                /^remove .+/i,
+                /^remove (this )?person .+/i,
+                /^kick (this )?person .+/i,
+                /^get .+ out of the group$/i
+            ]
+        },
+
+        // =========================
+        // PROMOTE
+        // =========================
+        {
+            intent: "promote",
+            patterns: [
+                /^promote .+/i,
+                /^make .+ admin$/i,
+                /^make .+ an admin$/i,
+                /^give .+ admin$/i,
+                /^give .+ admin rights$/i
+            ]
+        },
+
+        // =========================
+        // ADD MEMBER
+        // =========================
+        {
+            intent: "add",
+            patterns: [
+                /^add \+?\d+/i,
+                /^add 0\d+/i,
+                /^add \d+ to (the )?group$/i,
+                /^add .+ to (the )?group$/i,
+                /^invite \+?\d+/i,
+                /^invite .+ to (the )?group$/i
+            ]
+        },
+
+        // =========================
+        // MUTE / LOCK GROUP
+        // =========================
+        {
+            intent: "mute",
+            patterns: [
+                /^mute (the )?group$/i,
+                /^lock (the )?group$/i,
+                /^close (the )?group$/i,
+                /^stop members from chatting$/i,
+                /^make (the )?group admin only$/i,
+                /^lock (the )?group for \d+/i,
+                /^mute (the )?group for \d+/i
+            ]
+        },
+
+        // =========================
+        // UNMUTE / UNLOCK GROUP
+        // =========================
+        {
+            intent: "unmute",
+            patterns: [
+                /^unmute (the )?group$/i,
+                /^unlock (the )?group$/i,
+                /^open (the )?group$/i,
+                /^allow members to chat$/i,
+                /^let everyone chat$/i,
+                /^open (the )?group again$/i
+            ]
+        },
+
+        // =========================
+        // RESET WARNINGS
+        // =========================
+        {
+            intent: "reset",
+            patterns: [
+                /^reset .+ warnings?$/i,
+                /^clear .+ warnings?$/i,
+                /^remove .+ warnings?$/i,
+                /^clear the warnings? for .+/i,
+                /^reset the warnings? for .+/i,
+                /^remove the strikes? for .+/i,
+                /^clear the strikes? for .+/i
+            ]
+        },
+
+        // =========================
+        // CREATE FILE / NOTE / PDF
+        // =========================
+        {
+            intent: "createfile",
+            patterns: [
+                /^create (a )?file .+/i,
+                /^create (a )?document .+/i,
+                /^generate (a )?pdf .+/i,
+                /^make (a )?pdf .+/i,
+                /^write (a )?note .+/i,
+                /^create (a )?study note .+/i,
+                /^generate (a )?study note .+/i,
+                /^make (a )?study note .+/i
+            ]
+        }
+    ];
+
+    for (const item of intentPatterns) {
+        if (item.patterns.some(pattern => pattern.test(naturalText))) {
+            naturalIntent = item.intent;
+            break;
+        }
+    }
+}
+
+
+// =========================
+// NATURAL LANGUAGE → COMMAND
+// =========================
+
+if (naturalIntent) {
+
+    const naturalCommandMap = {
+        menu: "!menu",
+        ai: "!ai",
+        timetable: "!timetable",
+        listadmins: "!listadmins",
+        listonline: "!listonline",
+        ginfo: "!ginfo",
+        getjid: "!getjid",
+        image: "!image",
+        pay: "!pay",
+        name: "!name",
+        kick: "!kick",
+        promote: "!promote",
+        add: "!add",
+        mute: "!mute",
+        unmute: "!unmute",
+        reset: "!reset",
+        createfile: "__createfile__"
+    };
+
+    command = naturalCommandMap[naturalIntent];
+
+    console.log(
+        `🧠 Natural Intent: ${naturalIntent} → ${command}`
+    );
+
+
+    // =========================
+    // NATURAL ARGUMENT EXTRACTION
+    // =========================
+
+    if (naturalIntent === "ai") {
+
+        let prompt = naturalText
+            .replace(/^ask\s+(jarvis\s+)?/i, "")
+            .trim();
+
+        if (!prompt) {
+            prompt = naturalText;
+        }
+
+        args.splice(0, args.length, ...prompt.split(/\s+/));
+    }
+
+
+    if (naturalIntent === "image") {
+
+        let prompt = naturalText
+            .replace(
+                /^(generate|create|make)\s+(an?\s+)?image\s*(of\s+)?/i,
+                ""
+            )
+            .replace(
+                /^(generate|create|make)\s+(an?\s+)?picture\s*(of\s+)?/i,
+                ""
+            )
+            .replace(/^draw\s+(me\s+)?/i, "")
+            .trim();
+
+        args.splice(0, args.length, ...prompt.split(/\s+/));
+    }
+
+
+    if (naturalIntent === "pay") {
+
+        if (
+            /weekly|week/i.test(naturalText)
+        ) {
+            args.splice(0, args.length, "week");
+        } else {
+            args.splice(0, args.length, "month");
+        }
+    }
+
+
+    if (naturalIntent === "name") {
+
+        let name = naturalText
+            .replace(/^my full name is\s+/i, "")
+            .replace(/^my name is\s+/i, "")
+            .replace(/^call me\s+/i, "")
+            .replace(/^save my name as\s+/i, "")
+            .replace(/^register my name\s+/i, "")
+            .trim();
+
+        args.splice(0, args.length, ...name.split(/\s+/));
+
+        // Make the existing !name handler recognize it
+        body = `!name ${name}`;
+        text = body.toLowerCase();
+    }
+
+
+    if (naturalIntent === "add") {
+
+        const numberMatch = naturalText.match(/\+?\d[\d\s-]{6,}/);
+
+        if (numberMatch) {
+            const number = numberMatch[0].replace(/\D/g, "");
+
+            args.splice(
+                0,
+                args.length,
+                number
+            );
+        }
+    }
+
+
+    if (
+        naturalIntent === "kick" ||
+        naturalIntent === "promote" ||
+        naturalIntent === "reset"
+    ) {
+
+        // Preserve mentioned users when possible.
+        const mentioned =
+            m.message.extendedTextMessage
+                ?.contextInfo
+                ?.mentionedJid?.[0];
+
+        if (mentioned) {
+            args.splice(
+                0,
+                args.length,
+                mentioned
+            );
+        }
+    }
+
+
+    if (
+        naturalIntent === "mute" ||
+        naturalIntent === "unmute"
+    ) {
+
+        const durationMatch =
+            naturalText.match(
+                /(\d+)\s*(sec|secs|second|seconds|min|mins|minute|minutes|hr|hrs|hour|hours)/i
+            );
+
+        if (durationMatch) {
+
+            const number = durationMatch[1];
+
+            let unit =
+                durationMatch[2].toLowerCase();
+
+            if (
+                unit.startsWith("sec")
+            ) {
+                unit = "sec";
+            } else if (
+                unit.startsWith("min")
+            ) {
+                unit = "min";
+            } else if (
+                unit.startsWith("hr") ||
+                unit.startsWith("hour")
+            ) {
+                unit = "hr";
+            }
+
+            args.splice(
+                0,
+                args.length,
+                number,
+                unit
+            );
+        }
+    }
+}
 
     // =========================
     // FILE / AI SYSTEM (FIXED IMAGE + DOC HANDLING)
