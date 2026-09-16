@@ -1591,7 +1591,7 @@ if (!naturalText.startsWith("!")) {
 
     for (const item of Patterns) {
         if (item.patterns.some(pattern => pattern.test(naturalText))) {
-            natural = item.;
+            natural = item;
             break;
         }
     }
