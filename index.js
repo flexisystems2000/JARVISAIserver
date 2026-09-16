@@ -312,6 +312,417 @@ We wish you success ahead from *${groupName}* 🎓`,
 
         const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
+     
+   // ============================================================
+// 🧠 JARVIS AI — PHASE 4 MEDIA INTELLIGENCE
+// Images • Documents • PDFs • Videos • View Once • Captions
+// ============================================================
+
+const rawMessage = m.message || {};
+
+// ------------------------------------------------------------
+// UNWRAP EPHEMERAL / VIEW-ONCE MEDIA
+// ------------------------------------------------------------
+
+let mediaMessage = rawMessage;
+let isViewOnce = false;
+
+// Ephemeral message
+if (mediaMessage.ephemeralMessage?.message) {
+    mediaMessage = mediaMessage.ephemeralMessage.message;
+}
+
+// View Once v1
+if (mediaMessage.viewOnceMessage?.message) {
+    isViewOnce = true;
+    mediaMessage = mediaMessage.viewOnceMessage.message;
+}
+
+// View Once v2
+if (mediaMessage.viewOnceMessageV2?.message) {
+    isViewOnce = true;
+    mediaMessage = mediaMessage.viewOnceMessageV2.message;
+}
+
+// View Once v2 extension
+if (mediaMessage.viewOnceMessageV2Extension?.message) {
+    isViewOnce = true;
+    mediaMessage = mediaMessage.viewOnceMessageV2Extension.message;
+}
+
+
+// ------------------------------------------------------------
+// DETECT MEDIA TYPES
+// ------------------------------------------------------------
+
+const imageMessage =
+    mediaMessage.imageMessage || null;
+
+const videoMessage =
+    mediaMessage.videoMessage || null;
+
+const documentMessage =
+    mediaMessage.documentMessage || null;
+
+const audioMessage =
+    mediaMessage.audioMessage || null;
+
+const hasImage = !!imageMessage;
+const hasVideo = !!videoMessage;
+const hasDocument = !!documentMessage;
+const hasAudio = !!audioMessage;
+
+
+// ------------------------------------------------------------
+// MEDIA CAPTION
+// ------------------------------------------------------------
+
+const mediaCaption =
+    imageMessage?.caption ||
+    videoMessage?.caption ||
+    documentMessage?.caption ||
+    "";
+
+
+// ------------------------------------------------------------
+// NATURAL MEDIA INTENT
+// ------------------------------------------------------------
+
+const mediaRequestWords = [
+    "analyze",
+    "analyse",
+    "explain",
+    "describe",
+    "read",
+    "solve",
+    "answer",
+    "summarize",
+    "summarise",
+    "what is",
+    "what's",
+    "what are",
+    "identify",
+    "look at",
+    "check",
+    "study",
+    "interpret",
+    "calculate",
+    "translate"
+];
+
+const hasExplicitMediaIntent =
+    mediaRequestWords.some(word =>
+        text.includes(word)
+    ) ||
+    text.startsWith("!ai") ||
+    (
+        text.includes("jarvis") &&
+        (hasImage || hasVideo || hasDocument)
+    );
+
+
+// ------------------------------------------------------------
+// VIEW-ONCE DETECTION
+// ------------------------------------------------------------
+
+if (
+    isViewOnce &&
+    (hasImage || hasVideo || hasDocument)
+) {
+
+    console.log(
+        `👀 View Once media detected from ${sender}`
+    );
+
+    // If the user explicitly requested analysis,
+    // continue into the appropriate media handler below.
+
+    if (!hasExplicitMediaIntent) {
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+`👀 *View Once media detected.*
+
+If you want me to analyze it, send it together with a request such as:
+
+• "Jarvis, analyze this"
+• "Jarvis, explain this"
+• "Jarvis, solve this question"`
+            },
+            m
+        );
+
+        return;
+    }
+}
+
+
+// ------------------------------------------------------------
+// IMAGE INTELLIGENCE
+// ------------------------------------------------------------
+
+if (hasImage && hasExplicitMediaIntent) {
+
+    try {
+
+        await sock.sendPresenceUpdate(
+            "composing",
+            jid
+        );
+
+        const imageBuffer =
+            await downloadMedia({
+                imageMessage: imageMessage
+            });
+
+        const imageBase64 =
+            imageBuffer.toString("base64");
+
+        const prompt =
+            mediaCaption ||
+            body ||
+            "Analyze this image carefully and explain what you see.";
+
+        const result = await askAI(
+            prompt,
+            imageBase64,
+            false
+        );
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+`🖼️ *JARVIS AI — IMAGE ANALYSIS*
+
+${result}`
+            },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+
+        console.log(
+            "Image Intelligence Error:",
+            err.message
+        );
+
+        await sock.sendMessage(jid, {
+            text:
+                "⚠️ I couldn't process that image right now."
+        });
+
+        return;
+    }
+}
+
+
+// ------------------------------------------------------------
+// DOCUMENT / PDF INTELLIGENCE
+// ------------------------------------------------------------
+
+if (hasDocument && hasExplicitMediaIntent) {
+
+    try {
+
+        await sock.sendPresenceUpdate(
+            "composing",
+            jid
+        );
+
+        const document = documentMessage;
+
+        const mimeType =
+            document.mimetype || "";
+
+        const fileName =
+            document.fileName || "";
+
+        const isPDF =
+            mimeType.toLowerCase() === "application/pdf" ||
+            fileName.toLowerCase().endsWith(".pdf");
+
+        const documentBuffer =
+            await downloadMedia({
+                documentMessage: document
+            });
+
+        const documentBase64 =
+            documentBuffer.toString("base64");
+
+        const prompt =
+            mediaCaption ||
+            body ||
+            (
+                isPDF
+                    ? "Read this PDF carefully and explain its contents."
+                    : "Read this document carefully and explain its contents."
+            );
+
+        const result = await askAI(
+            prompt,
+            documentBase64,
+            isPDF
+        );
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+`${isPDF ? "📄" : "📁"} *JARVIS AI — DOCUMENT ANALYSIS*
+
+${result}`
+            },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+
+        console.log(
+            "Document Intelligence Error:",
+            err.message
+        );
+
+        await sock.sendMessage(jid, {
+            text:
+                "⚠️ I couldn't read that document right now."
+        });
+
+        return;
+    }
+}
+
+
+// ------------------------------------------------------------
+// VIDEO INTELLIGENCE
+// ------------------------------------------------------------
+
+if (hasVideo && hasExplicitMediaIntent) {
+
+    try {
+
+        await sock.sendPresenceUpdate(
+            "composing",
+            jid
+        );
+
+        const video = videoMessage;
+
+        const duration =
+            Number(video.seconds || 0);
+
+        // Avoid downloading very large videos.
+        if (duration > 180) {
+
+            await sendWithTyping(
+                jid,
+                {
+                    text:
+`🎥 *Video received.*
+
+This video is longer than 3 minutes, so I won't download the entire file automatically.
+
+Please send a shorter clip or extract the important part and send it to me.`
+                },
+                m
+            );
+
+            return;
+        }
+
+        const videoBuffer =
+            await downloadMedia({
+                videoMessage: video
+            });
+
+        const videoBase64 =
+            videoBuffer.toString("base64");
+
+        const prompt =
+            mediaCaption ||
+            body ||
+            "Analyze this video and explain what is happening.";
+
+        const result = await askAI(
+            prompt,
+            videoBase64,
+            false
+        );
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+`🎥 *JARVIS AI — VIDEO ANALYSIS*
+
+${result}`
+            },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+
+        console.log(
+            "Video Intelligence Error:",
+            err.message
+        );
+
+        await sock.sendMessage(jid, {
+            text:
+                "⚠️ I couldn't process that video right now."
+        });
+
+        return;
+    }
+}
+
+
+// ------------------------------------------------------------
+// AUDIO NOTICE
+// ------------------------------------------------------------
+
+if (hasAudio && hasExplicitMediaIntent) {
+
+    await sendWithTyping(
+        jid,
+        {
+            text:
+`🎵 *Audio received.*
+
+I can detect the audio, but audio transcription/analysis is not enabled yet.
+
+🎙️ Audio intelligence will be added in a later phase.`
+        },
+        m
+    );
+
+    return;
+}
+
+
+// ------------------------------------------------------------
+// MEDIA WITHOUT EXPLICIT REQUEST
+// ------------------------------------------------------------
+
+// Do NOT automatically analyze ordinary media.
+// Let the rest of the existing bot continue normally.
+
+if (
+    (hasImage || hasVideo || hasDocument || hasAudio) &&
+    !hasExplicitMediaIntent
+) {
+    // Intentionally do nothing.
+    // This prevents JARVIS from consuming every
+    // image/document/video sent to the chat.
+}
 
     // 🌟 LIVE QUIZ INTERCEPTOR 🌟
     // Intercepts and grades students' choice inputs on Saturday nights
