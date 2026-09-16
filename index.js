@@ -1231,7 +1231,7 @@ if (!naturalText.startsWith("!")) {
         .replace(/^jarvis[\s,:-]*/i, "")
         .trim();
 
-    const Patterns = [
+        const Patterns = [
 
         // =========================
         // MENU / HELP
@@ -1254,7 +1254,7 @@ if (!naturalText.startsWith("!")) {
         // AI
         // =========================
         {
-            : "ai",
+            name: "ai", // 👈 Fixed from just colon
             patterns: [
                 /^ask (jarvis )?(.+)/i,
                 /^explain .+/i,
@@ -1277,7 +1277,7 @@ if (!naturalText.startsWith("!")) {
         // TIMETABLE
         // =========================
         {
-            : "timetable",
+            name: "timetable", // 👈 Fixed
             patterns: [
                 /^show (me )?(the )?timetable\??$/i,
                 /^send (me )?(the )?timetable\??$/i,
@@ -1292,7 +1292,7 @@ if (!naturalText.startsWith("!")) {
         // ADMINS
         // =========================
         {
-            : "listadmins",
+            name: "listadmins", // 👈 Fixed
             patterns: [
                 /^who (are|is) (the )?admins?\??$/i,
                 /^who are the group admins\??$/i,
@@ -1307,7 +1307,7 @@ if (!naturalText.startsWith("!")) {
         // ONLINE MEMBERS
         // =========================
         {
-            : "listonline",
+            name: "listonline", // 👈 Fixed
             patterns: [
                 /^who is online\??$/i,
                 /^who's online\??$/i,
@@ -1324,7 +1324,7 @@ if (!naturalText.startsWith("!")) {
         // GROUP INFO
         // =========================
         {
-            : "ginfo",
+            name: "ginfo", // 👈 Fixed
             patterns: [
                 /^show (me )?(the )?group info\??$/i,
                 /^show (me )?(the )?group information\??$/i,
@@ -1339,7 +1339,7 @@ if (!naturalText.startsWith("!")) {
         // GROUP JID
         // =========================
         {
-            : "getjid",
+            name: "getjid", // 👈 Fixed
             patterns: [
                 /^what is (this )?group'?s? id\??$/i,
                 /^show (me )?(this )?group id\??$/i,
@@ -1353,7 +1353,7 @@ if (!naturalText.startsWith("!")) {
         // IMAGE GENERATION
         // =========================
         {
-            : "image",
+            name: "image", // 👈 Fixed
             patterns: [
                 /^generate an image (of )?.+/i,
                 /^generate image (of )?.+/i,
@@ -1371,7 +1371,7 @@ if (!naturalText.startsWith("!")) {
         // PAYMENT
         // =========================
         {
-            : "pay",
+            name: "pay", // 👈 Fixed
             patterns: [
                 /^i want to pay.*$/i,
                 /^i want to make payment.*$/i,
@@ -1390,7 +1390,7 @@ if (!naturalText.startsWith("!")) {
         // PROFILE / NAME
         // =========================
         {
-            : "name",
+            name: "name", // 👈 Fixed
             patterns: [
                 /^my name is .+/i,
                 /^call me .+/i,
@@ -1400,11 +1400,11 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
-                // =========================
+        // =========================
         // KICK
         // =========================
         {
-            : "kick",
+            name: "kick", // 👈 Fixed
             patterns: [
                 /^kick .+/i,
                 /^remove .+/i,
@@ -1422,7 +1422,7 @@ if (!naturalText.startsWith("!")) {
         // PROMOTE
         // =========================
         {
-            : "promote",
+            name: "promote", // 👈 Fixed
             patterns: [
                 /^promote .+/i,
                 /^make .+ admin$/i,
@@ -1439,7 +1439,7 @@ if (!naturalText.startsWith("!")) {
         // ADD MEMBER
         // =========================
         {
-            : "add",
+            name: "add", // 👈 Fixed
             patterns: [
                 /^add \+?\d+/i,
                 /^add 0\d+/i,
@@ -1454,30 +1454,22 @@ if (!naturalText.startsWith("!")) {
         // 🔒 MUTE / LOCK GROUP
         // =========================
         {
-            : "mute",
+            name: "mute", // 👈 Fixed
             patterns: [
-
-                // Direct commands
                 /^mute (the )?group$/i,
                 /^lock (the )?group$/i,
                 /^close (the )?group$/i,
-
-                // Natural variations
                 /^lock this group$/i,
                 /^close this group$/i,
                 /^mute this group$/i,
                 /^lock our group$/i,
                 /^close our group$/i,
-
-                // Admin-only requests
                 /^make (the )?group admin only$/i,
                 /^make this group admin only$/i,
                 /^make (the )?group admins only$/i,
                 /^make (the )?group admins? only$/i,
                 /^set (the )?group to admin only$/i,
                 /^set this group to admin only$/i,
-
-                // Stop members from chatting
                 /^stop members from chatting$/i,
                 /^stop everyone from chatting$/i,
                 /^stop people from chatting$/i,
@@ -1485,15 +1477,11 @@ if (!naturalText.startsWith("!")) {
                 /^prevent everyone from chatting$/i,
                 /^don't let members chat$/i,
                 /^do not let members chat$/i,
-
-                // Restrict / close conversation
                 /^restrict (the )?group$/i,
                 /^restrict this group$/i,
                 /^disable member messages$/i,
                 /^disable members from chatting$/i,
                 /^turn off member messaging$/i,
-
-                // Temporary lock
                 /^lock (the )?group for \d+/i,
                 /^mute (the )?group for \d+/i,
                 /^close (the )?group for \d+/i
@@ -1504,30 +1492,22 @@ if (!naturalText.startsWith("!")) {
         // 🔓 UNMUTE / UNLOCK GROUP
         // =========================
         {
-            : "unmute",
+            name: "unmute", // 👈 Fixed
             patterns: [
-
-                // Direct commands
                 /^unmute (the )?group$/i,
                 /^unlock (the )?group$/i,
                 /^open (the )?group$/i,
-
-                // Natural variations
                 /^unlock this group$/i,
                 /^open this group$/i,
                 /^unmute this group$/i,
                 /^unlock our group$/i,
                 /^open our group$/i,
-
-                // Allow members to chat
                 /^allow members to chat$/i,
                 /^allow everyone to chat$/i,
                 /^let everyone chat$/i,
                 /^let members chat$/i,
                 /^let people chat$/i,
                 /^allow people to chat$/i,
-
-                // Restore normal messaging
                 /^restore member messaging$/i,
                 /^enable member messages$/i,
                 /^enable members to chat$/i,
@@ -1535,8 +1515,6 @@ if (!naturalText.startsWith("!")) {
                 /^remove admin only$/i,
                 /^make the group open$/i,
                 /^make this group open$/i,
-
-                // Open again
                 /^open (the )?group again$/i,
                 /^unlock (the )?group again$/i,
                 /^let everyone chat again$/i
@@ -1547,10 +1525,8 @@ if (!naturalText.startsWith("!")) {
         // RESET WARNINGS
         // =========================
         {
-            : "reset",
+            name: "reset", // 👈 Fixed
             patterns: [
-
-                // Named target
                 /^reset .+ warnings?$/i,
                 /^clear .+ warnings?$/i,
                 /^remove .+ warnings?$/i,
@@ -1558,8 +1534,6 @@ if (!naturalText.startsWith("!")) {
                 /^reset the warnings? for .+/i,
                 /^remove the strikes? for .+/i,
                 /^clear the strikes? for .+/i,
-
-                // Contextual target
                 /^reset (his|her|their) warnings?$/i,
                 /^clear (his|her|their) warnings?$/i,
                 /^remove (his|her|their) warnings?$/i,
@@ -1569,8 +1543,8 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
-// =========================
-        // DICTIONARY (FINAL) - Make it work even with "Jarvis"
+        // =========================
+        // DICTIONARY
         // =========================
         {
             name: "define",
@@ -1589,7 +1563,6 @@ if (!naturalText.startsWith("!")) {
                 /^look up .+/i,
                 /^meaning of .+/i,
                 /^define (a|the|an)\s+/i,
-                // Extra natural language variations
                 /^jarvis\s+define\s+.+$/i,
                 /^jarvis\s+dictionary\s+.+$/i,
                 /^what does jarvis\s+mean/i,
@@ -1601,7 +1574,7 @@ if (!naturalText.startsWith("!")) {
         // CREATE FILE / NOTE / PDF
         // =========================
         {
-            : "createfile",
+            name: "createfile", // 👈 Fixed
             patterns: [
                 /^create (a )?file .+/i,
                 /^create (a )?document .+/i,
@@ -1614,6 +1587,7 @@ if (!naturalText.startsWith("!")) {
             ]
         }
     ];
+
 
     for (const item of Patterns) {
         if (item.patterns.some(pattern => pattern.test(naturalText))) {
@@ -1630,7 +1604,7 @@ if (!naturalText.startsWith("!")) {
 
 if (natural) {
 
-    const naturalCommandMap = {
+        const naturalCommandMap = {
         menu: "!menu",
         ai: "!ai",
         timetable: "!timetable",
@@ -1647,9 +1621,10 @@ if (natural) {
         mute: "!mute",
         unmute: "!unmute",
         reset: "!reset",
-        createfile: "__createfile__"
-       define: "!define"          // ← NEW LINE ADDED
-};
+        createfile: "__createfile__", // 👈 Added missing comma here
+        define: "!define"              // 👈 Properly mapped dictionary command
+    };
+
 
     command = naturalCommandMap[natural];
 
