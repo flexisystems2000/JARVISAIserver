@@ -1650,6 +1650,37 @@ if (natural) {
         args.splice(0, args.length, ...prompt.split(/\s+/));
     }
 
+// =========================
+// 📖 DICTIONARY ARGUMENT EXTRACTION
+// =========================
+if (natural === "define") {
+
+    let word = naturalText
+        .replace(/^define\s+/i, "")
+        .replace(/^dictionary\s+/i, "")
+        .replace(/^what does\s+/i, "")
+        .replace(/\s+mean\??$/i, "")
+        .replace(/^tell me what\s+/i, "")
+        .replace(/\s+means\??$/i, "")
+        .replace(/^explain the word\s+/i, "")
+        .replace(/^give me the meaning of\s+/i, "")
+        .replace(/^define the word\s+/i, "")
+        .replace(/^lookup\s+/i, "")
+        .replace(/^look up\s+/i, "")
+        .replace(/^meaning of\s+/i, "")
+        .replace(/^what is\s+/i, "")
+        .replace(/^what are\s+/i, "")
+        .replace(/[?.!]+$/g, "")
+        .trim();
+
+    args.splice(
+        0,
+        args.length,
+        word
+    );
+
+    console.log(`📖 Dictionary Word: ${word}`);
+}
 
     if (natural === "image") {
 
