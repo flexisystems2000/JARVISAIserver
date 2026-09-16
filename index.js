@@ -1962,41 +1962,136 @@ if (
 
 // --- PUBLIC COMMAND: DICTIONARY ---
 if (command === "!define" || command === "!dictionary" || natural === "define") {
-    const word = args[0]?.toLowerCase()?.replace(/[^a-z]/g, "");
+
+    const word = args.join(" ")
+        .toLowerCase()
+        .replace(/[^a-z'-]/g, "")
+        .trim();
 
     if (!word) {
-        return sendWithTyping(jid, { 
-            text: "📖 Please specify a word to look up.\n\n*Example:* !define resilient" 
+        return sendWithTyping(jid, {
+            text: "Sure — which word would you like me to explain?"
         }, m);
     }
 
-    await sock.sendMessage(jid, { react: { key: m.key, text: "📖" } });
+    await sock.sendMessage(jid, {
+        react: {
+            key: m.key,
+            text: "📖"
+        }
+    });
 
+    // ==========================================
+    // PRIMARY DICTIONARY API
+    // ==========================================
     try {
-        const response = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
-        const data = response.data[0];
 
-        const phonetic = data.phonetic || data.phonetics?.[0]?.text || "";
-        const meaning = data.meanings[0];
-        const partOfSpeech = meaning.partOfSpeech || "";
-        const definition = meaning.definitions[0]?.definition || "No definition found.";
-        const example = meaning.definitions[0]?.example ? `\n\n*Example:* "${meaning.definitions[0].example}"` : "";
+        console.log(`📖 Looking up: ${word}`);
 
-        const replyText = 
-            `📖 *DICTIONARY LOOKUP*\n\n` +
-            `*Word:* ${data.word.toUpperCase()} ${phonetic ? `(${phonetic})` : ""}\n` +
-            `*Type:* _${partOfSpeech}_\n\n` +
-            `*Definition:* ${definition}${example}\n\n` +
-            `_⚡ Fast-fetched locally_`;
+        const response = await axios.get(
+            `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+            {
+                timeout: 8000
+            }
+        );
 
-        return sendWithTyping(jid, { text: replyText }, m);
+        const data = response.data?.[0];
+
+        if (data) {
+
+            const phonetic =
+                data.phonetic ||
+                data.phonetics?.find(p => p.text)?.text ||
+                "";
+
+            const meaning =
+                data.meanings?.[0];
+
+            const partOfSpeech =
+                meaning?.partOfSpeech || "";
+
+            const definition =
+                meaning?.definitions?.[0]?.definition || "";
+
+            const example =
+                meaning?.definitions?.[0]?.example || "";
+
+            if (definition) {
+
+                let reply =
+                    `*${data.word || word}*`;
+
+                if (phonetic) {
+                    reply += ` ${phonetic}`;
+                }
+
+                if (partOfSpeech) {
+                    reply += `\n_${partOfSpeech}_`;
+                }
+
+                reply += `\n\n${definition}`;
+
+                if (example) {
+                    reply += `\n\nFor example: "${example}"`;
+                }
+
+                return sendWithTyping(jid, {
+                    text: reply
+                }, m);
+            }
+        }
 
     } catch (err) {
-        console.log("Dictionary Error:", err.message);
-        return sendWithTyping(jid, { 
-            text: `⚠️ I couldn't find a definition for "${word}". Check your spelling or try asking AI.` 
-        }, m);
+
+        console.log(
+            `⚠️ Dictionary API failed: ${err.response?.status || err.message}`
+        );
     }
+
+
+    // ==========================================
+    // DATAMUSE FALLBACK
+    // ==========================================
+    try {
+
+        console.log(`🔄 Trying dictionary fallback: ${word}`);
+
+        const fallback = await axios.get(
+            `https://api.datamuse.com/words?sp=${encodeURIComponent(word)}&md=d&max=1`,
+            {
+                timeout: 8000
+            }
+        );
+
+        const result = fallback.data?.[0];
+
+        if (result?.defs?.length) {
+
+            const definition =
+                result.defs[0].replace(/^[a-z]+\t/i, "");
+
+            return sendWithTyping(jid, {
+                text:
+                    `*${word}*\n\n${definition}`
+            }, m);
+        }
+
+    } catch (err) {
+
+        console.log(
+            `⚠️ Dictionary fallback failed: ${err.response?.status || err.message}`
+        );
+    }
+
+
+    // ==========================================
+    // FINAL RESPONSE
+    // ==========================================
+    return sendWithTyping(jid, {
+        text:
+            `I couldn't find a clear definition for *${word}* right now. ` +
+            `Please check the spelling and try again.`
+    }, m);
 }
 
     
