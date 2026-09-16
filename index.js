@@ -543,9 +543,13 @@ if (hasReactionIntent) {
                     base64Media
                 );
 
-                return sock.sendMessage(jid, {
-                    text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`
-                }, { quoted: m });
+                return sendWithTyping(
+    jid,
+    {
+        text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`
+    },
+    m
+);
 
             } catch (err) {
                 console.log("File Error:", err.message);
@@ -923,10 +927,13 @@ if (isStaff && command === "!ai") {
         base64Image
     );
 
-    return sock.sendMessage(jid, {
+    return sendWithTyping(
+    jid,
+    {
         text: `🤖 *JARVIS AI*\n\n${aiReply}`
-    });
-}
+    },
+    m
+);
 
 
 // --- WATCHONLINE COMMAND ---
