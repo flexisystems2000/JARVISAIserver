@@ -288,11 +288,85 @@ We wish you success ahead from *${groupName}* 🎓`,
     const wasQuizMessage = await quizEngine.handleLiveMarking(sock, jid, sender, body, m);
     if (wasQuizMessage) return;
         
-    if (text.includes("jarvis") && !text.startsWith("!")) {
-        await sock.sendMessage(jid, {
-            react: { key: m.key, text: "🤖" }
-        });
+    // =========================
+// CONTEXT-AWARE REACTION SYSTEM
+// =========================
+// JARVIS reacts ONLY when the user explicitly asks for a reaction.
+// Mentioning "Jarvis" by itself will NOT trigger a reaction.
+
+const reactionWords = [
+    "react",
+    "reaction",
+    "react to this",
+    "react to that",
+    "react with",
+    "give a reaction",
+    "drop a reaction"
+];
+
+const hasReactionIntent = reactionWords.some(word =>
+    text.includes(word)
+);
+
+if (hasReactionIntent) {
+    const reactionMap = {
+        "😂": "😂",
+        "🤣": "🤣",
+        "😭": "😭",
+        "❤️": "❤️",
+        "❤": "❤️",
+        "😍": "😍",
+        "😘": "😘",
+        "😎": "😎",
+        "😢": "😢",
+        "😡": "😡",
+        "😮": "😮",
+        "😱": "😱",
+        "👏": "👏",
+        "👍": "👍",
+        "👎": "👎",
+        "🔥": "🔥",
+        "💯": "💯",
+        "🙏": "🙏",
+        "🤔": "🤔",
+        "😅": "😅",
+        "🥰": "🥰",
+        "❤️‍🔥": "❤️‍🔥",
+        "💔": "💔",
+        "🤍": "🤍",
+        "💀": "💀",
+        "🙄": "🙄",
+        "😏": "😏",
+        "🤩": "🤩",
+        "😆": "😆",
+        "😉": "😉",
+        "🫡": "🫡"
+    };
+
+    let selectedReaction = null;
+
+    for (const emoji of Object.keys(reactionMap)) {
+        if (text.includes(emoji)) {
+            selectedReaction = reactionMap[emoji];
+            break;
+        }
     }
+
+    // Default reaction if the user asks for a reaction
+    // but doesn't specify an emoji.
+    if (!selectedReaction) {
+        selectedReaction = "😂";
+    }
+
+    await sock.sendMessage(jid, {
+        react: {
+            key: m.key,
+            text: selectedReaction
+        }
+    });
+
+    return;
+}
 
     // 🕵️‍♂️ AUTOMATED GRAMMAR MONITOR (Modular Interceptor)
     // Runs in the background to automatically correct bad grammar structures
