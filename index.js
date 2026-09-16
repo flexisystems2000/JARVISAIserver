@@ -2884,7 +2884,6 @@ app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
 
 // 🚀 PASTE THE NEW ROUTE RIGHT HERE:
 
-
 app.post("/payment-success", express.json(), async (req, res) => {
     try {
         const { phone, plan } = req.body;
@@ -2898,7 +2897,7 @@ app.post("/payment-success", express.json(), async (req, res) => {
 
         const activationNotice = 
             `🎉 *FLEXI TUTORS PAYSTACK COMPLIANCE* 🎓\n\n` +
-            `Hello @${phone}, your digital payment verification tracking for *${plan}* is completely successful!\n\n` +
+            `Hello @\( {phone}, your digital payment verification tracking for * \){plan}* is completely successful!\n\n` +
             `🚀 Premium system access tokens have been deployed straight to your mobile number profile.\n\n` +
             `👇 *Click the direct link below to jump into the Paid Lectures Group right away:* \n` +
             `${paidClassGroupLink}\n\n` +
@@ -2917,7 +2916,7 @@ app.post("/payment-success", express.json(), async (req, res) => {
         return res.status(500).json({ success: false, error: err.message });
     }
 });
-    
+
 // ==========================================
 // JARVIS ACTION RESPONSE BANKS
 // ==========================================
@@ -2927,6 +2926,8 @@ const kickResponses = [
     (tag) => `I successfully showed @${tag} the door. Good riddance.`,
     (tag) => `Operation complete. I've successfully removed @${tag}.`
 ];
+
+// ... rest of your response banks and app.listen remain the same
 
 const promoteResponses = [
     (tag) => `I successfully promoted @${tag} to admin. Welcome to the inner circle.`,
