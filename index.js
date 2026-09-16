@@ -543,10 +543,13 @@ if (hasReactionIntent) {
                     base64Media
                 );
 
-                return sock.sendMessage(jid, {
-                    text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`
-                }, { quoted: m });
-
+                return sendWithTyping(
+    jid,
+    {
+        text: `🤖 *JARVIS AI*\n\n${aiReply}`
+    },
+    m
+);
             } catch (err) {
                 console.log("File Error:", err.message);
                 return sock.sendMessage(jid, {
