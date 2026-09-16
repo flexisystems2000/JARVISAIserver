@@ -1237,7 +1237,7 @@ if (!naturalText.startsWith("!")) {
         // MENU / HELP
         // =========================
         {
-            : "menu",
+            name: "menu",
             patterns: [
                 /^show (me )?(the )?menu\??$/i,
                 /^open (the )?menu\??$/i,
