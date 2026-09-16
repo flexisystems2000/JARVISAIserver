@@ -313,16 +313,18 @@ We wish you success ahead from *${groupName}* 🎓`,
         const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
      
-   // ============================================================
+    // ============================================================
 // 🧠 JARVIS AI — PHASE 4 MEDIA INTELLIGENCE
-// Images • Documents • PDFs • Videos • View Once • Captions
+// Images • Documents • PDFs • Videos • Audio • View Once
+// Admin/Owner-only View Once Preservation
 // ============================================================
 
 const rawMessage = m.message || {};
 
-// ------------------------------------------------------------
+
+// ============================================================
 // UNWRAP EPHEMERAL / VIEW-ONCE MEDIA
-// ------------------------------------------------------------
+// ============================================================
 
 let mediaMessage = rawMessage;
 let isViewOnce = false;
@@ -344,16 +346,16 @@ if (mediaMessage.viewOnceMessageV2?.message) {
     mediaMessage = mediaMessage.viewOnceMessageV2.message;
 }
 
-// View Once v2 extension
+// View Once v2 Extension
 if (mediaMessage.viewOnceMessageV2Extension?.message) {
     isViewOnce = true;
     mediaMessage = mediaMessage.viewOnceMessageV2Extension.message;
 }
 
 
-// ------------------------------------------------------------
+// ============================================================
 // DETECT MEDIA TYPES
-// ------------------------------------------------------------
+// ============================================================
 
 const imageMessage =
     mediaMessage.imageMessage || null;
@@ -367,15 +369,22 @@ const documentMessage =
 const audioMessage =
     mediaMessage.audioMessage || null;
 
-const hasImage = !!imageMessage;
-const hasVideo = !!videoMessage;
-const hasDocument = !!documentMessage;
-const hasAudio = !!audioMessage;
+const hasImage =
+    !!imageMessage;
+
+const hasVideo =
+    !!videoMessage;
+
+const hasDocument =
+    !!documentMessage;
+
+const hasAudio =
+    !!audioMessage;
 
 
-// ------------------------------------------------------------
+// ============================================================
 // MEDIA CAPTION
-// ------------------------------------------------------------
+// ============================================================
 
 const mediaCaption =
     imageMessage?.caption ||
@@ -384,9 +393,9 @@ const mediaCaption =
     "";
 
 
-// ------------------------------------------------------------
+// ============================================================
 // NATURAL MEDIA INTENT
-// ------------------------------------------------------------
+// ============================================================
 
 const mediaRequestWords = [
     "analyze",
@@ -417,25 +426,281 @@ const hasExplicitMediaIntent =
     text.startsWith("!ai") ||
     (
         text.includes("jarvis") &&
-        (hasImage || hasVideo || hasDocument)
+        (
+            hasImage ||
+            hasVideo ||
+            hasDocument ||
+            hasAudio
+        )
     );
 
 
-// ------------------------------------------------------------
-// VIEW-ONCE DETECTION
-// ------------------------------------------------------------
+// ============================================================
+// 👑 VIEW-ONCE PRESERVATION INTENT
+// ============================================================
+
+const preserveViewOnceWords = [
+    "save this view once",
+    "save this view-once",
+    "save view once",
+    "save view-once",
+
+    "download this view once",
+    "download this view-once",
+    "download view once",
+    "download view-once",
+
+    "keep this view once",
+    "keep this view-once",
+
+    "preserve this view once",
+    "preserve this view-once",
+    "preserve view once",
+    "preserve view-once",
+
+    "send this view once",
+    "send this view-once",
+
+    "resend this view once",
+    "resend this view-once"
+];
+
+const wantsViewOncePreservation =
+    isViewOnce &&
+    preserveViewOnceWords.some(word =>
+        text.includes(word)
+    );
+
+
+// ============================================================
+// 👑 CHECK GROUP ADMIN STATUS
+// ============================================================
+
+let requesterIsGroupAdmin = false;
+
+if (wantsViewOncePreservation) {
+
+    try {
+
+        // Bot owner is always authorized.
+        if (isOwner) {
+            requesterIsGroupAdmin = true;
+        }
+
+        // Check WhatsApp group admin status.
+        if (!requesterIsGroupAdmin) {
+
+            const groupMetadata =
+                await sock.groupMetadata(jid);
+
+            const participant =
+                groupMetadata.participants.find(
+                    p => p.id === sender
+                );
+
+            requesterIsGroupAdmin =
+                participant?.admin === "admin" ||
+                participant?.admin === "superadmin";
+        }
+
+    } catch (err) {
+
+        console.log(
+            "View Once Admin Check Error:",
+            err.message
+        );
+    }
+}
+
+
+// ============================================================
+// 🔒 NON-ADMIN VIEW-ONCE PRESERVATION ATTEMPT
+// ============================================================
+
+if (
+    wantsViewOncePreservation &&
+    !requesterIsGroupAdmin
+) {
+
+    await sendWithTyping(
+        jid,
+        {
+            text:
+`🔒 *VIEW ONCE PRESERVATION*
+
+Only a group admin or JARVIS owner can ask me to preserve and resend View Once media.`
+        },
+        m
+    );
+
+    return;
+}
+
+
+// ============================================================
+// 📥 ADMIN/OWNER VIEW-ONCE PRESERVATION
+// ============================================================
+
+if (
+    wantsViewOncePreservation &&
+    requesterIsGroupAdmin
+) {
+
+    try {
+
+        await sock.sendPresenceUpdate(
+            "composing",
+            jid
+        );
+
+
+        // ====================================================
+        // 🖼️ VIEW-ONCE IMAGE
+        // ====================================================
+
+        if (hasImage) {
+
+            const imageBuffer =
+                await downloadMedia({
+                    imageMessage: imageMessage
+                });
+
+            await sendWithTyping(
+                jid,
+                {
+                    image: imageBuffer,
+                    caption:
+`📌 *VIEW ONCE PRESERVED*
+
+Preserved by JARVIS at the request of a group admin.`
+                },
+                m
+            );
+
+            console.log(
+                `👑 View Once image preserved by admin: ${sender}`
+            );
+
+            return;
+        }
+
+
+        // ====================================================
+        // 🎥 VIEW-ONCE VIDEO
+        // ====================================================
+
+        if (hasVideo) {
+
+            const videoBuffer =
+                await downloadMedia({
+                    videoMessage: videoMessage
+                });
+
+            await sendWithTyping(
+                jid,
+                {
+                    video: videoBuffer,
+                    caption:
+`📌 *VIEW ONCE PRESERVED*
+
+Preserved by JARVIS at the request of a group admin.`
+                },
+                m
+            );
+
+            console.log(
+                `👑 View Once video preserved by admin: ${sender}`
+            );
+
+            return;
+        }
+
+
+        // ====================================================
+        // 📄 VIEW-ONCE DOCUMENT
+        // ====================================================
+
+        if (hasDocument) {
+
+            const documentBuffer =
+                await downloadMedia({
+                    documentMessage: documentMessage
+                });
+
+            await sendWithTyping(
+                jid,
+                {
+                    document: documentBuffer,
+                    mimetype:
+                        documentMessage.mimetype ||
+                        "application/octet-stream",
+                    fileName:
+                        documentMessage.fileName ||
+                        "view-once-file",
+                    caption:
+`📌 *VIEW ONCE PRESERVED*
+
+Preserved by JARVIS at the request of a group admin.`
+                },
+                m
+            );
+
+            console.log(
+                `👑 View Once document preserved by admin: ${sender}`
+            );
+
+            return;
+        }
+
+
+        // ====================================================
+        // ⚠️ UNSUPPORTED VIEW-ONCE TYPE
+        // ====================================================
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+                    "⚠️ I detected the View Once media, but I don't currently support preserving this media type."
+            },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+
+        console.log(
+            "View Once Preservation Error:",
+            err.message
+        );
+
+        await sock.sendMessage(jid, {
+            text:
+                "⚠️ I couldn't preserve that View Once media."
+        });
+
+        return;
+    }
+}
+
+
+// ============================================================
+// 👀 VIEW-ONCE DETECTION
+// ============================================================
 
 if (
     isViewOnce &&
-    (hasImage || hasVideo || hasDocument)
+    (
+        hasImage ||
+        hasVideo ||
+        hasDocument
+    )
 ) {
 
     console.log(
         `👀 View Once media detected from ${sender}`
     );
-
-    // If the user explicitly requested analysis,
-    // continue into the appropriate media handler below.
 
     if (!hasExplicitMediaIntent) {
 
@@ -443,13 +708,14 @@ if (
             jid,
             {
                 text:
-`👀 *View Once media detected.*
+`👀 *VIEW ONCE MEDIA DETECTED*
 
-If you want me to analyze it, send it together with a request such as:
+You can ask me to analyze it.
 
-• "Jarvis, analyze this"
-• "Jarvis, explain this"
-• "Jarvis, solve this question"`
+A group admin can also ask me to preserve it with:
+
+• "Jarvis, save this view once"
+• "Jarvis, preserve this view once"`
             },
             m
         );
@@ -459,11 +725,14 @@ If you want me to analyze it, send it together with a request such as:
 }
 
 
-// ------------------------------------------------------------
-// IMAGE INTELLIGENCE
-// ------------------------------------------------------------
+// ============================================================
+// 🖼️ IMAGE INTELLIGENCE
+// ============================================================
 
-if (hasImage && hasExplicitMediaIntent) {
+if (
+    hasImage &&
+    hasExplicitMediaIntent
+) {
 
     try {
 
@@ -485,11 +754,12 @@ if (hasImage && hasExplicitMediaIntent) {
             body ||
             "Analyze this image carefully and explain what you see.";
 
-        const result = await askAI(
-            prompt,
-            imageBase64,
-            false
-        );
+        const result =
+            await askAI(
+                prompt,
+                imageBase64,
+                false
+            );
 
         await sendWithTyping(
             jid,
@@ -521,11 +791,14 @@ ${result}`
 }
 
 
-// ------------------------------------------------------------
-// DOCUMENT / PDF INTELLIGENCE
-// ------------------------------------------------------------
+// ============================================================
+// 📄 DOCUMENT / PDF INTELLIGENCE
+// ============================================================
 
-if (hasDocument && hasExplicitMediaIntent) {
+if (
+    hasDocument &&
+    hasExplicitMediaIntent
+) {
 
     try {
 
@@ -534,7 +807,8 @@ if (hasDocument && hasExplicitMediaIntent) {
             jid
         );
 
-        const document = documentMessage;
+        const document =
+            documentMessage;
 
         const mimeType =
             document.mimetype || "";
@@ -543,8 +817,11 @@ if (hasDocument && hasExplicitMediaIntent) {
             document.fileName || "";
 
         const isPDF =
-            mimeType.toLowerCase() === "application/pdf" ||
-            fileName.toLowerCase().endsWith(".pdf");
+            mimeType.toLowerCase() ===
+                "application/pdf" ||
+            fileName
+                .toLowerCase()
+                .endsWith(".pdf");
 
         const documentBuffer =
             await downloadMedia({
@@ -563,11 +840,12 @@ if (hasDocument && hasExplicitMediaIntent) {
                     : "Read this document carefully and explain its contents."
             );
 
-        const result = await askAI(
-            prompt,
-            documentBase64,
-            isPDF
-        );
+        const result =
+            await askAI(
+                prompt,
+                documentBase64,
+                isPDF
+            );
 
         await sendWithTyping(
             jid,
@@ -599,11 +877,14 @@ ${result}`
 }
 
 
-// ------------------------------------------------------------
-// VIDEO INTELLIGENCE
-// ------------------------------------------------------------
+// ============================================================
+// 🎥 VIDEO INTELLIGENCE
+// ============================================================
 
-if (hasVideo && hasExplicitMediaIntent) {
+if (
+    hasVideo &&
+    hasExplicitMediaIntent
+) {
 
     try {
 
@@ -612,23 +893,24 @@ if (hasVideo && hasExplicitMediaIntent) {
             jid
         );
 
-        const video = videoMessage;
+        const video =
+            videoMessage;
 
         const duration =
             Number(video.seconds || 0);
 
-        // Avoid downloading very large videos.
+        // Prevent very large videos from being downloaded.
         if (duration > 180) {
 
             await sendWithTyping(
                 jid,
                 {
                     text:
-`🎥 *Video received.*
+`🎥 *VIDEO RECEIVED*
 
 This video is longer than 3 minutes, so I won't download the entire file automatically.
 
-Please send a shorter clip or extract the important part and send it to me.`
+Please send a shorter clip or extract the important part.`
                 },
                 m
             );
@@ -649,11 +931,12 @@ Please send a shorter clip or extract the important part and send it to me.`
             body ||
             "Analyze this video and explain what is happening.";
 
-        const result = await askAI(
-            prompt,
-            videoBase64,
-            false
-        );
+        const result =
+            await askAI(
+                prompt,
+                videoBase64,
+                false
+            );
 
         await sendWithTyping(
             jid,
@@ -685,19 +968,22 @@ ${result}`
 }
 
 
-// ------------------------------------------------------------
-// AUDIO NOTICE
-// ------------------------------------------------------------
+// ============================================================
+// 🎵 AUDIO NOTICE
+// ============================================================
 
-if (hasAudio && hasExplicitMediaIntent) {
+if (
+    hasAudio &&
+    hasExplicitMediaIntent
+) {
 
     await sendWithTyping(
         jid,
         {
             text:
-`🎵 *Audio received.*
+`🎵 *AUDIO RECEIVED*
 
-I can detect the audio, but audio transcription/analysis is not enabled yet.
+I can detect the audio, but audio transcription and analysis are not enabled yet.
 
 🎙️ Audio intelligence will be added in a later phase.`
         },
@@ -708,20 +994,25 @@ I can detect the audio, but audio transcription/analysis is not enabled yet.
 }
 
 
-// ------------------------------------------------------------
-// MEDIA WITHOUT EXPLICIT REQUEST
-// ------------------------------------------------------------
+// ============================================================
+// 📦 MEDIA WITHOUT EXPLICIT REQUEST
+// ============================================================
 
-// Do NOT automatically analyze ordinary media.
-// Let the rest of the existing bot continue normally.
+// Do not automatically analyze ordinary media.
+// The existing bot can continue processing normally.
 
 if (
-    (hasImage || hasVideo || hasDocument || hasAudio) &&
+    (
+        hasImage ||
+        hasVideo ||
+        hasDocument ||
+        hasAudio
+    ) &&
     !hasExplicitMediaIntent
 ) {
     // Intentionally do nothing.
-    // This prevents JARVIS from consuming every
-    // image/document/video sent to the chat.
+    // This prevents JARVIS from consuming
+    // every media message automatically.
 }
 
     // 🌟 LIVE QUIZ INTERCEPTOR 🌟
