@@ -1428,37 +1428,98 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
-        // =========================
-        // MUTE / LOCK GROUP
-        // =========================
-        {
-            intent: "mute",
-            patterns: [
-                /^mute (the )?group$/i,
-                /^lock (the )?group$/i,
-                /^close (the )?group$/i,
-                /^stop members from chatting$/i,
-                /^make (the )?group admin only$/i,
-                /^lock (the )?group for \d+/i,
-                /^mute (the )?group for \d+/i
-            ]
-        },
+       // =========================
+// 🔒 MUTE / LOCK GROUP
+// =========================
+{
+    intent: "mute",
+    patterns: [
 
-        // =========================
-        // UNMUTE / UNLOCK GROUP
-        // =========================
-        {
-            intent: "unmute",
-            patterns: [
-                /^unmute (the )?group$/i,
-                /^unlock (the )?group$/i,
-                /^open (the )?group$/i,
-                /^allow members to chat$/i,
-                /^let everyone chat$/i,
-                /^open (the )?group again$/i
-            ]
-        },
+        // Direct commands
+        /^mute (the )?group$/i,
+        /^lock (the )?group$/i,
+        /^close (the )?group$/i,
 
+        // Natural variations
+        /^lock this group$/i,
+        /^close this group$/i,
+        /^mute this group$/i,
+        /^lock our group$/i,
+        /^close our group$/i,
+
+        // Admin-only requests
+        /^make (the )?group admin only$/i,
+        /^make this group admin only$/i,
+        /^make (the )?group admins only$/i,
+        /^make (the )?group admins? only$/i,
+        /^set (the )?group to admin only$/i,
+        /^set this group to admin only$/i,
+
+        // Stop members from chatting
+        /^stop members from chatting$/i,
+        /^stop everyone from chatting$/i,
+        /^stop people from chatting$/i,
+        /^prevent members from chatting$/i,
+        /^prevent everyone from chatting$/i,
+        /^don't let members chat$/i,
+        /^do not let members chat$/i,
+
+        // Restrict / close conversation
+        /^restrict (the )?group$/i,
+        /^restrict this group$/i,
+        /^disable member messages$/i,
+        /^disable members from chatting$/i,
+        /^turn off member messaging$/i,
+
+        // Temporary lock
+        /^lock (the )?group for \d+/i,
+        /^mute (the )?group for \d+/i,
+        /^close (the )?group for \d+/i
+    ]
+},
+
+// =========================
+// 🔓 UNMUTE / UNLOCK GROUP
+// =========================
+{
+    intent: "unmute",
+    patterns: [
+
+        // Direct commands
+        /^unmute (the )?group$/i,
+        /^unlock (the )?group$/i,
+        /^open (the )?group$/i,
+
+        // Natural variations
+        /^unlock this group$/i,
+        /^open this group$/i,
+        /^unmute this group$/i,
+        /^unlock our group$/i,
+        /^open our group$/i,
+
+        // Allow members to chat
+        /^allow members to chat$/i,
+        /^allow everyone to chat$/i,
+        /^let everyone chat$/i,
+        /^let members chat$/i,
+        /^let people chat$/i,
+        /^allow people to chat$/i,
+
+        // Restore normal messaging
+        /^restore member messaging$/i,
+        /^enable member messages$/i,
+        /^enable members to chat$/i,
+        /^turn on member messaging$/i,
+        /^remove admin only$/i,
+        /^make the group open$/i,
+        /^make this group open$/i,
+
+        // Open again
+        /^open (the )?group again$/i,
+        /^unlock (the )?group again$/i,
+        /^let everyone chat again$/i
+    ]
+},
         // =========================
         // RESET WARNINGS
         // =========================
@@ -1603,25 +1664,84 @@ if (naturalIntent) {
 
     if (naturalIntent === "add") {
 
-        const numberMatch = naturalText.match(/\+?\d[\d\s-]{6,}/);
+    const numberMatch = naturalText.match(/\+?\d[\d\s-]{6,}/);
 
-        if (numberMatch) {
-            const number = numberMatch[0].replace(/\D/g, "");
+    if (numberMatch) {
+        const number = numberMatch[0].replace(/\D/g, "");
 
-            args.splice(
-                0,
-                args.length,
-                number
-            );
-        }
+        args.splice(
+            0,
+            args.length,
+            number
+        );
     }
+}
 
 
-    if (
-        naturalIntent === "kick" ||
-        naturalIntent === "promote" ||
-        naturalIntent === "reset"
-    ) {
+// ============================================================
+// 🧠 PHASE 5B — CONTEXT-AWARE TARGET RESOLVER
+// ============================================================
+
+const contextInfo =
+    m.message.extendedTextMessage?.contextInfo ||
+    m.message.imageMessage?.contextInfo ||
+    m.message.videoMessage?.contextInfo ||
+    m.message.documentMessage?.contextInfo ||
+    m.message.audioMessage?.contextInfo ||
+    {};
+
+const mentionedTarget =
+    contextInfo.mentionedJid?.[0] || null;
+
+const repliedParticipant =
+    contextInfo.participant || null;
+
+const quotedMessage =
+    contextInfo.quotedMessage || null;
+
+
+// ------------------------------------------------------------
+// Determine who the command is referring to
+// Priority:
+// 1. Explicit @mention
+// 2. Person whose message was replied to
+// ------------------------------------------------------------
+
+const contextTarget =
+    mentionedTarget ||
+    repliedParticipant ||
+    null;
+
+
+// ------------------------------------------------------------
+// Commands that operate on another group member
+// ------------------------------------------------------------
+
+if (
+    naturalIntent === "kick" ||
+    naturalIntent === "promote" ||
+    naturalIntent === "reset"
+) {
+
+    if (contextTarget) {
+
+        args.splice(
+            0,
+            args.length,
+            contextTarget
+        );
+
+        console.log(
+            `🧠 Context Target: ${contextTarget}`
+        );
+
+    } else {
+
+        console.log(
+            "🧠 No contextual target found."
+        );
+    }
+}
 
         // Preserve mentioned users when possible.
         const mentioned =
