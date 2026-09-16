@@ -2252,8 +2252,8 @@ if (isStaff && command === "!ai") {
         text: `🤖 *JARVIS AI*\n\n${aiReply}`
     },
     m
-);
-
+  );
+}
 
 // --- WATCHONLINE COMMAND ---
 if (command === "!listonline") {
