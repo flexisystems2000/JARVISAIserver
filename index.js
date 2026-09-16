@@ -1743,21 +1743,6 @@ if (
     }
 }
 
-        // Preserve mentioned users when possible.
-        const mentioned =
-            m.message.extendedTextMessage
-                ?.contextInfo
-                ?.mentionedJid?.[0];
-
-        if (mentioned) {
-            args.splice(
-                0,
-                args.length,
-                mentioned
-            );
-        }
-    }
-
 
     if (
         naturalIntent === "mute" ||
