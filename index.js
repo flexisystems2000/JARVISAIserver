@@ -1388,30 +1388,31 @@ if (!naturalText.startsWith("!")) {
         // =========================
         // KICK
         // =========================
-        {
-            intent: "kick",
-            patterns: [
-                /^kick .+/i,
-                /^remove .+/i,
-                /^remove (this )?person .+/i,
-                /^kick (this )?person .+/i,
-                /^get .+ out of the group$/i
-            ]
-        },
+        patterns: [
+    /^kick .+/i,
+    /^remove .+/i,
+    /^remove (this )?person .+/i,
+    /^kick (this )?person .+/i,
+    /^kick (him|her|them)$/i,
+    /^remove (him|her|them)$/i,
+    /^kick this (guy|person|member)$/i,
+    /^remove this (guy|person|member)$/i,
+    /^get .+ out of the group$/i
+]
 
         // =========================
         // PROMOTE
         // =========================
-        {
-            intent: "promote",
-            patterns: [
-                /^promote .+/i,
-                /^make .+ admin$/i,
-                /^make .+ an admin$/i,
-                /^give .+ admin$/i,
-                /^give .+ admin rights$/i
-            ]
-        },
+        patterns: [
+    /^promote .+/i,
+    /^make .+ admin$/i,
+    /^make .+ an admin$/i,
+    /^give .+ admin$/i,
+    /^give .+ admin rights$/i,
+    /^make (him|her|them) admin$/i,
+    /^promote (him|her|them)$/i,
+    /^make this (guy|person|member) admin$/i
+]
 
         // =========================
         // ADD MEMBER
