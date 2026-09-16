@@ -1251,29 +1251,6 @@ if (!naturalText.startsWith("!")) {
         },
 
         // =========================
-        // AI
-        // =========================
-        {
-            name: "ai", // 👈 Fixed from just colon
-            patterns: [
-                /^ask (jarvis )?(.+)/i,
-                /^explain .+/i,
-                /^tell me about .+/i,
-                /^what is .+/i,
-                /^what are .+/i,
-                /^who is .+/i,
-                /^why is .+/i,
-                /^why are .+/i,
-                /^how do .+/i,
-                /^how does .+/i,
-                /^how can .+/i,
-                /^solve .+/i,
-                /^answer this .+/i,
-                /^help me with .+/i
-            ]
-        },
-
-        // =========================
         // TIMETABLE
         // =========================
         {
@@ -1555,6 +1532,8 @@ if (!naturalText.startsWith("!")) {
                 /^dictionary\s+/i,
                 /^what does .+ mean/i,
                 /^what is .+ mean/i,
+                  /^what is .+/i,
+                 /^what are .+/i,
                 /^tell me what .+ means/i,
                 /^explain the word .+/i,
                 /^give me the meaning of .+/i,
@@ -1566,10 +1545,31 @@ if (!naturalText.startsWith("!")) {
                 /^jarvis\s+define\s+.+$/i,
                 /^jarvis\s+dictionary\s+.+$/i,
                 /^what does jarvis\s+mean/i,
+                 /^explain .+/i,
                 /^define the word jarvis/i
             ]
         },
 
+        // =========================
+        // AI
+        // =========================
+        {
+            name: "ai", // 👈 Fixed from just colon
+            patterns: [
+                /^ask (jarvis )?(.+)/i,
+ 
+                /^tell me about .+/i,
+                /^who is .+/i,
+                /^why is .+/i,
+                /^why are .+/i,
+                /^how do .+/i,
+                /^how does .+/i,
+                /^how can .+/i,
+                /^solve .+/i,
+                /^answer this .+/i,
+                /^help me with .+/i
+            ]
+        },
         // =========================
         // CREATE FILE / NOTE / PDF
         // =========================
