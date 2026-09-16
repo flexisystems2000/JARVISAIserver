@@ -122,6 +122,36 @@ async function downloadMedia(message) {
 
 let sock;
 
+// =========================
+// JARVIS TYPING SIMULATION
+// =========================
+async function sendWithTyping(jid, message, quotedMessage = null) {
+    try {
+        await sock.sendPresenceUpdate('composing', jid);
+
+        const textLength = message?.text?.length || 0;
+
+        const typingDelay = Math.min(
+            Math.max(800, textLength * 12),
+            5000
+        );
+
+        await new Promise(resolve =>
+            setTimeout(resolve, typingDelay)
+        );
+
+        return await sock.sendMessage(
+            jid,
+            message,
+            quotedMessage
+                ? { quoted: quotedMessage }
+                : undefined
+        );
+
+    } finally {
+        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+    }
+}
 
 // --- BOT START ---
 async function startJARVIS() {
