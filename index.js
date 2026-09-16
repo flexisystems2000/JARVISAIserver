@@ -2508,8 +2508,9 @@ if (command === "!reset") {
         text: responseText,
         mentions: [target]
     });
+   }
+});
 }
-
     // --- WEB DASHBOARD ROUTES ---
 
 const FB_SCRIPTS = `
