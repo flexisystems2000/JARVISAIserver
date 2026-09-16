@@ -2918,7 +2918,7 @@ app.post("/payment-success", express.json(), async (req, res) => {
     }
 });
     
-} // <-- This is the absolute final curly bracket of your startJARVIS function
+} 
 
 // ==========================================
 // JARVIS ACTION RESPONSE BANKS
