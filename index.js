@@ -128,30 +128,17 @@ let sock;
 async function sendWithTyping(jid, message, quotedMessage = null) {
     try {
         await sock.sendPresenceUpdate('composing', jid);
-
         const textLength = message?.text?.length || 0;
+        const typingDelay = Math.min(Math.max(800, textLength * 12), 5000);
 
-        const typingDelay = Math.min(
-            Math.max(800, textLength * 12),
-            5000
-        );
+        await new Promise(resolve => setTimeout(resolve, typingDelay));
 
-        await new Promise(resolve =>
-            setTimeout(resolve, typingDelay)
-        );
-
-        return await sock.sendMessage(
-            jid,
-            message,
-            quotedMessage
-                ? { quoted: quotedMessage }
-                : undefined
-        );
-
+        return await sock.sendMessage(jid, message, quotedMessage ? { quoted: quotedMessage } : undefined);
     } finally {
         await sock.sendPresenceUpdate('paused', jid).catch(() => {});
     }
 }
+
 
 // --- BOT START ---
 async function startJARVIS() {
@@ -243,6 +230,34 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || m.key.remoteJid;
 
     activityTracker.set(sender, Date.now());
+
+       // ==========================================
+    // JARVIS ONLINE STATUS CHECK
+    // ==========================================
+    const rawMsgCheck = m.message.conversation || m.message.extendedTextMessage?.text || "";
+    const msgLower = rawMsgCheck.toLowerCase().trim();
+
+    const isOnlineQuery = 
+        (msgLower.includes("jarvis") && msgLower.includes("online")) ||
+        (msgLower.includes("jarvis") && msgLower.includes("there")) ||
+        msgLower.includes("@jarvis") || 
+        msgLower === "jarvis status";
+
+    if (isOnlineQuery) {
+        const jarvisOnlineResponses = [
+            "Systems are fully operational and online, sir.",
+            "All diagnostics green. I am completely at your service.",
+            "Online and monitoring all secure channels.",
+            "Network protocols active. Standing by for your command.",
+            "Affirmative. I'm online and running at peak efficiency."
+        ];
+        
+        const randomIndex = Math.floor(Math.random() * jarvisOnlineResponses.length);
+        const replyText = jarvisOnlineResponses[randomIndex];
+
+        await sendWithTyping(jid, { text: replyText }, m);
+        return;
+    }
 
     // =========================
     // ANTI STATUS MENTION SYSTEM (FIXED SAFETY)
@@ -394,7 +409,7 @@ const mediaCaption =
 
 
 // ============================================================
-// NATURAL MEDIA INTENT
+// NATURAL MEDIA 
 // ============================================================
 
 const mediaRequestWords = [
@@ -419,7 +434,7 @@ const mediaRequestWords = [
     "translate"
 ];
 
-const hasExplicitMediaIntent =
+const hasExplicitMedia =
     mediaRequestWords.some(word =>
         text.includes(word)
     ) ||
@@ -436,7 +451,7 @@ const hasExplicitMediaIntent =
 
 
 // ============================================================
-// 👑 VIEW-ONCE PRESERVATION INTENT
+// 👑 VIEW-ONCE PRESERVATION 
 // ============================================================
 
 const preserveViewOnceWords = [
@@ -702,7 +717,7 @@ if (
         `👀 View Once media detected from ${sender}`
     );
 
-    if (!hasExplicitMediaIntent) {
+    if (!hasExplicitMedia) {
 
         await sendWithTyping(
             jid,
@@ -731,7 +746,7 @@ A group admin can also ask me to preserve it with:
 
 if (
     hasImage &&
-    hasExplicitMediaIntent
+    hasExplicitMedia
 ) {
 
     try {
@@ -797,7 +812,7 @@ ${result}`
 
 if (
     hasDocument &&
-    hasExplicitMediaIntent
+    hasExplicitMedia
 ) {
 
     try {
@@ -883,7 +898,7 @@ ${result}`
 
 if (
     hasVideo &&
-    hasExplicitMediaIntent
+    hasExplicitMedia
 ) {
 
     try {
@@ -974,7 +989,7 @@ ${result}`
 
 if (
     hasAudio &&
-    hasExplicitMediaIntent
+    hasExplicitMedia
 ) {
 
     await sendWithTyping(
@@ -1008,9 +1023,9 @@ if (
         hasDocument ||
         hasAudio
     ) &&
-    !hasExplicitMediaIntent
+    !hasExplicitMedia
 ) {
-    // Intentionally do nothing.
+    // ionally do nothing.
     // This prevents JARVIS from consuming
     // every media message automatically.
 }
@@ -1036,11 +1051,11 @@ const reactionWords = [
     "drop a reaction"
 ];
 
-const hasReactionIntent = reactionWords.some(word =>
+const hasReaction = reactionWords.some(word =>
     text.includes(word)
 );
 
-if (hasReactionIntent) {
+if (hasReaction) {
     const reactionMap = {
         "😂": "😂",
         "🤣": "🤣",
@@ -1198,11 +1213,11 @@ if (hasReactionIntent) {
 const args = body.trim().split(/ +/).slice(1);
 
 // =========================
-// NATURAL-LANGUAGE INTENT SYSTEM
+// NATURAL-LANGUAGE  SYSTEM
 // PHASE 3 — ALL COMMANDS
 // =========================
 
-let naturalIntent = null;
+let natural = null;
 let naturalText = text.trim();
 
 // Never override existing !commands
@@ -1216,13 +1231,13 @@ if (!naturalText.startsWith("!")) {
         .replace(/^jarvis[\s,:-]*/i, "")
         .trim();
 
-    const intentPatterns = [
+    const Patterns = [
 
         // =========================
         // MENU / HELP
         // =========================
         {
-            intent: "menu",
+            : "menu",
             patterns: [
                 /^show (me )?(the )?menu\??$/i,
                 /^open (the )?menu\??$/i,
@@ -1239,7 +1254,7 @@ if (!naturalText.startsWith("!")) {
         // AI
         // =========================
         {
-            intent: "ai",
+            : "ai",
             patterns: [
                 /^ask (jarvis )?(.+)/i,
                 /^explain .+/i,
@@ -1262,7 +1277,7 @@ if (!naturalText.startsWith("!")) {
         // TIMETABLE
         // =========================
         {
-            intent: "timetable",
+            : "timetable",
             patterns: [
                 /^show (me )?(the )?timetable\??$/i,
                 /^send (me )?(the )?timetable\??$/i,
@@ -1277,7 +1292,7 @@ if (!naturalText.startsWith("!")) {
         // ADMINS
         // =========================
         {
-            intent: "listadmins",
+            : "listadmins",
             patterns: [
                 /^who (are|is) (the )?admins?\??$/i,
                 /^who are the group admins\??$/i,
@@ -1292,7 +1307,7 @@ if (!naturalText.startsWith("!")) {
         // ONLINE MEMBERS
         // =========================
         {
-            intent: "listonline",
+            : "listonline",
             patterns: [
                 /^who is online\??$/i,
                 /^who's online\??$/i,
@@ -1309,7 +1324,7 @@ if (!naturalText.startsWith("!")) {
         // GROUP INFO
         // =========================
         {
-            intent: "ginfo",
+            : "ginfo",
             patterns: [
                 /^show (me )?(the )?group info\??$/i,
                 /^show (me )?(the )?group information\??$/i,
@@ -1324,7 +1339,7 @@ if (!naturalText.startsWith("!")) {
         // GROUP JID
         // =========================
         {
-            intent: "getjid",
+            : "getjid",
             patterns: [
                 /^what is (this )?group'?s? id\??$/i,
                 /^show (me )?(this )?group id\??$/i,
@@ -1338,7 +1353,7 @@ if (!naturalText.startsWith("!")) {
         // IMAGE GENERATION
         // =========================
         {
-            intent: "image",
+            : "image",
             patterns: [
                 /^generate an image (of )?.+/i,
                 /^generate image (of )?.+/i,
@@ -1356,7 +1371,7 @@ if (!naturalText.startsWith("!")) {
         // PAYMENT
         // =========================
         {
-            intent: "pay",
+            : "pay",
             patterns: [
                 /^i want to pay.*$/i,
                 /^i want to make payment.*$/i,
@@ -1375,7 +1390,7 @@ if (!naturalText.startsWith("!")) {
         // PROFILE / NAME
         // =========================
         {
-            intent: "name",
+            : "name",
             patterns: [
                 /^my name is .+/i,
                 /^call me .+/i,
@@ -1389,7 +1404,7 @@ if (!naturalText.startsWith("!")) {
         // KICK
         // =========================
         {
-            intent: "kick",
+            : "kick",
             patterns: [
                 /^kick .+/i,
                 /^remove .+/i,
@@ -1407,7 +1422,7 @@ if (!naturalText.startsWith("!")) {
         // PROMOTE
         // =========================
         {
-            intent: "promote",
+            : "promote",
             patterns: [
                 /^promote .+/i,
                 /^make .+ admin$/i,
@@ -1424,7 +1439,7 @@ if (!naturalText.startsWith("!")) {
         // ADD MEMBER
         // =========================
         {
-            intent: "add",
+            : "add",
             patterns: [
                 /^add \+?\d+/i,
                 /^add 0\d+/i,
@@ -1439,7 +1454,7 @@ if (!naturalText.startsWith("!")) {
         // 🔒 MUTE / LOCK GROUP
         // =========================
         {
-            intent: "mute",
+            : "mute",
             patterns: [
 
                 // Direct commands
@@ -1489,7 +1504,7 @@ if (!naturalText.startsWith("!")) {
         // 🔓 UNMUTE / UNLOCK GROUP
         // =========================
         {
-            intent: "unmute",
+            : "unmute",
             patterns: [
 
                 // Direct commands
@@ -1532,7 +1547,7 @@ if (!naturalText.startsWith("!")) {
         // RESET WARNINGS
         // =========================
         {
-            intent: "reset",
+            : "reset",
             patterns: [
 
                 // Named target
@@ -1554,11 +1569,39 @@ if (!naturalText.startsWith("!")) {
             ]
         },
 
+// =========================
+        // DICTIONARY (FINAL) - Make it work even with "Jarvis"
+        // =========================
+        {
+            name: "define",
+            patterns: [
+                /^define\s+.+$/i,
+                /^define\s+/i,
+                /^dictionary\s+.+$/i,
+                /^dictionary\s+/i,
+                /^what does .+ mean/i,
+                /^what is .+ mean/i,
+                /^tell me what .+ means/i,
+                /^explain the word .+/i,
+                /^give me the meaning of .+/i,
+                /^define the word .+/i,
+                /^lookup .+/i,
+                /^look up .+/i,
+                /^meaning of .+/i,
+                /^define (a|the|an)\s+/i,
+                // Extra natural language variations
+                /^jarvis\s+define\s+.+$/i,
+                /^jarvis\s+dictionary\s+.+$/i,
+                /^what does jarvis\s+mean/i,
+                /^define the word jarvis/i
+            ]
+        },
+
         // =========================
         // CREATE FILE / NOTE / PDF
         // =========================
         {
-            intent: "createfile",
+            : "createfile",
             patterns: [
                 /^create (a )?file .+/i,
                 /^create (a )?document .+/i,
@@ -1572,9 +1615,9 @@ if (!naturalText.startsWith("!")) {
         }
     ];
 
-    for (const item of intentPatterns) {
+    for (const item of Patterns) {
         if (item.patterns.some(pattern => pattern.test(naturalText))) {
-            naturalIntent = item.intent;
+            natural = item.;
             break;
         }
     }
@@ -1585,7 +1628,7 @@ if (!naturalText.startsWith("!")) {
 // NATURAL LANGUAGE → COMMAND
 // =========================
 
-if (naturalIntent) {
+if (natural) {
 
     const naturalCommandMap = {
         menu: "!menu",
@@ -1605,12 +1648,13 @@ if (naturalIntent) {
         unmute: "!unmute",
         reset: "!reset",
         createfile: "__createfile__"
-    };
+       define: "!define"          // ← NEW LINE ADDED
+};
 
-    command = naturalCommandMap[naturalIntent];
+    command = naturalCommandMap[natural];
 
     console.log(
-        `🧠 Natural Intent: ${naturalIntent} → ${command}`
+        `🧠 Natural : ${natural} → ${command}`
     );
 
 
@@ -1618,7 +1662,7 @@ if (naturalIntent) {
     // NATURAL ARGUMENT EXTRACTION
     // =========================
 
-    if (naturalIntent === "ai") {
+    if (natural === "ai") {
 
         let prompt = naturalText
             .replace(/^ask\s+(jarvis\s+)?/i, "")
@@ -1632,7 +1676,7 @@ if (naturalIntent) {
     }
 
 
-    if (naturalIntent === "image") {
+    if (natural === "image") {
 
         let prompt = naturalText
             .replace(
@@ -1650,7 +1694,7 @@ if (naturalIntent) {
     }
 
 
-    if (naturalIntent === "pay") {
+    if (natural === "pay") {
 
         if (
             /weekly|week/i.test(naturalText)
@@ -1662,7 +1706,7 @@ if (naturalIntent) {
     }
 
 
-    if (naturalIntent === "name") {
+    if (natural === "name") {
 
         let name = naturalText
             .replace(/^my full name is\s+/i, "")
@@ -1680,7 +1724,7 @@ if (naturalIntent) {
     }
 
 
-    if (naturalIntent === "add") {
+    if (natural === "add") {
 
         const numberMatch =
             naturalText.match(/\+?\d[\d\s-]{6,}/);
@@ -1739,9 +1783,9 @@ if (naturalIntent) {
     // ------------------------------------------------------------
 
     if (
-        naturalIntent === "kick" ||
-        naturalIntent === "promote" ||
-        naturalIntent === "reset"
+        natural === "kick" ||
+        natural === "promote" ||
+        natural === "reset"
     ) {
 
         if (contextTarget) {
@@ -1770,8 +1814,8 @@ if (naturalIntent) {
     // ============================================================
 
     if (
-        naturalIntent === "mute" ||
-        naturalIntent === "unmute"
+        natural === "mute" ||
+        natural === "unmute"
     ) {
 
         const durationMatch =
@@ -1910,37 +1954,42 @@ if (
     );
 }
 
-    
-// --- NEW: askAI NIGERIA PROTOCOL (7 PM WAT) ---
-const nigeriaTime = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Africa/Lagos',
-    hour: 'numeric',
-    hour12: false
-}).format(new Date());
+// --- PUBLIC COMMAND: DICTIONARY ---
+if (command === "!define" || command === "!dictionary" || natural === "define") {
+    const word = args[0]?.toLowerCase()?.replace(/[^a-z]/g, "");
 
-const currentHourWAT = parseInt(nigeriaTime);
+    if (!word) {
+        return sendWithTyping(jid, { 
+            text: "📖 Please specify a word to look up.\n\n*Example:* !define resilient" 
+        }, m);
+    }
 
-// FIX: prevent undefined crash
-if (isStaff && !isNaN(currentHourWAT)) {
+    await sock.sendMessage(jid, { react: { key: m.key, text: "📖" } });
 
-    if (currentHourWAT >= 19 && !protocolFired && !text.startsWith("!")) {
-        const subjects = ["math", "physics", "chemistry", "biology", "english", "economics", "government"];
-        const foundSubject = subjects.find(s => text.includes(s));
+    try {
+        const response = await axios.get(`https://api.dictionaryapi.dev/api/v2/entries/en/${word}`);
+        const data = response.data[0];
 
-        if (foundSubject) {
-            const adminTag = `@${sender.split('@')[0]}`;
+        const phonetic = data.phonetic || data.phonetics?.[0]?.text || "";
+        const meaning = data.meanings[0];
+        const partOfSpeech = meaning.partOfSpeech || "";
+        const definition = meaning.definitions[0]?.definition || "No definition found.";
+        const example = meaning.definitions[0]?.example ? `\n\n*Example:* "${meaning.definitions[0].example}"` : "";
 
-            await sock.sendMessage(jid, {
-                text:
-`================
-*askAI PROTOCOL ONLINE*
-================
-${adminTag} Kindly use !ai to fetch PostUTME questions for ${foundSubject.toUpperCase()}`,
-                mentions: [sender]
-            });
+        const replyText = 
+            `📖 *DICTIONARY LOOKUP*\n\n` +
+            `*Word:* ${data.word.toUpperCase()} ${phonetic ? `(${phonetic})` : ""}\n` +
+            `*Type:* _${partOfSpeech}_\n\n` +
+            `*Definition:* ${definition}${example}\n\n` +
+            `_⚡ Fast-fetched locally_`;
 
-            protocolFired = true;
-        }
+        return sendWithTyping(jid, { text: replyText }, m);
+
+    } catch (err) {
+        console.log("Dictionary Error:", err.message);
+        return sendWithTyping(jid, { 
+            text: `⚠️ I couldn't find a definition for "${word}". Check your spelling or try asking AI.` 
+        }, m);
     }
 }
 
@@ -2255,6 +2304,43 @@ if (isStaff && command === "!ai") {
   );
 }
 
+// --- KICK / PROMOTE ---
+if (command === "!kick" || command === "!promote") {
+    let target =
+        m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
+        m.message.extendedTextMessage?.contextInfo?.participant;
+
+    if (!target && args[0]) {
+        target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
+    }
+
+    if (!target || target.includes(OWNER_NUMBER)) {
+        return sock.sendMessage(jid, { text: "❌ Target invalid." });
+    }
+
+    const action = command === "!kick" ? "remove" : "promote";
+
+    try {
+        await sock.groupParticipantsUpdate(jid, [target], action);
+
+        // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+        const actionBank = action === "remove" ? kickResponses : promoteResponses;
+        const responseText = getRandomResponse(actionBank, target.split('@')[0]);
+
+        await sock.sendMessage(jid, {
+            text: responseText,
+            mentions: [target]
+        });
+
+    } catch (err) {
+        console.log("Group Action Error:", err.message);
+        await sock.sendMessage(jid, {
+            text: "❌ Failed. Am I admin?"
+        });
+    }
+}
+
+
 // --- WATCHONLINE COMMAND ---
 if (command === "!listonline") {
     if (!metadata) return;
@@ -2278,47 +2364,13 @@ if (command === "!listonline") {
 
         //===Get Group ID Number 
 if (command === "!getjid") {
-    return sock.sendMessage(jid, { 
-        text: `🎯 This group's JID is:\n\n*${jid}*` 
-    }, { quoted: m });
+    return sendWithTyping(jid, { text: `🎯 This group's JID is:\n\n*${jid}*` }, m);
 }
 // --- GROUP INFO ---
 if (command === "!ginfo") {
     return sock.sendMessage(jid, {
         text: `*📊 ${BOT_NAME} REPORT*\n\nGroup: ${metadata?.subject}\nMembers: ${metadata?.participants?.length}\nPowered by: ${POWERED_BY}`
     });
-}
-
-
-// --- KICK / PROMOTE ---
-if (command === "!kick" || command === "!promote") {
-    let target =
-        m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
-        m.message.extendedTextMessage?.contextInfo?.participant;
-
-    if (!target && args[0]) {
-        target = args[0].replace(/[^0-9]/g, '') + "@s.whatsapp.net";
-    }
-
-    if (!target || target.includes(OWNER_NUMBER)) {
-        return sock.sendMessage(jid, { text: "❌ Target invalid." });
-    }
-
-    const action = command === "!kick" ? "remove" : "promote";
-
-    try {
-        await sock.groupParticipantsUpdate(jid, [target], action);
-
-        await sock.sendMessage(jid, {
-            text: `✅ Successfully ${action === "remove" ? "removed" : "promoted"}.`
-        });
-
-    } catch (err) {
-        console.log("Group Action Error:", err.message);
-        await sock.sendMessage(jid, {
-            text: "❌ Failed. Am I admin?"
-        });
-    }
 }
 
 
@@ -2362,9 +2414,9 @@ if (command === "!mute" || command === "!unmute") {
         ? 'announcement'
         : 'not_announcement';
 
-    const statusText = command === "!mute"
-        ? "🔒 Group Locked"
-        : "🔓 Group Unlocked";
+    // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+    const actionBank = command === "!mute" ? muteResponses : unmuteResponses;
+    const statusText = getRandomResponse(actionBank);
 
     if (!duration || isNaN(duration)) {
         await sock.groupSettingUpdate(jid, action);
@@ -2390,6 +2442,7 @@ if (command === "!mute" || command === "!unmute") {
     }
 
     await sock.groupSettingUpdate(jid, action);
+    await sock.sendMessage(jid, { text: statusText }); // Sends the random mute/unmute message
 
     setTimeout(async () => {
         const reverse = action === 'announcement'
@@ -2399,7 +2452,7 @@ if (command === "!mute" || command === "!unmute") {
         await sock.groupSettingUpdate(jid, reverse);
 
         await sock.sendMessage(jid, {
-            text: "🔄 Auto-reversed group setting"
+            text: "Timer's up. I've automatically reversed the group settings."
         });
     }, milliseconds);
 }
@@ -2473,12 +2526,15 @@ if (command === "!reset") {
 
     await Warn.deleteOne({ userId: target });
 
+    // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+    const responseText = getRandomResponse(resetResponses, target.split('@')[0]);
+
     return sock.sendMessage(jid, {
-        text: `✅ Strikes cleared for @${target.split('@')[0]}`,
+        text: responseText,
         mentions: [target]
     });
-            }
-    });
+}
+
     // --- WEB DASHBOARD ROUTES ---
 
 const FB_SCRIPTS = `
@@ -2829,6 +2885,7 @@ app.get('/pair', async (req, res) => {
     }
 });
 
+
 // 🌟🌟🌟 PASTE THE WEBHOOK ROUTE BLOCK DIRECTLY HERE 🌟🌟🌟
 app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
     try {
@@ -2851,6 +2908,7 @@ app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
 });
 
 // 🚀 PASTE THE NEW ROUTE RIGHT HERE:
+
 
 app.post("/payment-success", express.json(), async (req, res) => {
     try {
@@ -2886,6 +2944,47 @@ app.post("/payment-success", express.json(), async (req, res) => {
 });
     
 } // <-- This is the absolute final curly bracket of your startJARVIS function
+
+// ==========================================
+// JARVIS ACTION RESPONSE BANKS
+// ==========================================
+const kickResponses = [
+    (tag) => `I successfully removed @${tag}. Out they go.`,
+    (tag) => `Done. I've successfully kicked @${tag} from the group.`,
+    (tag) => `I successfully showed @${tag} the door. Good riddance.`,
+    (tag) => `Operation complete. I've successfully removed @${tag}.`
+];
+
+const promoteResponses = [
+    (tag) => `I successfully promoted @${tag} to admin. Welcome to the inner circle.`,
+    (tag) => `Done. I've successfully granted admin status to @${tag}.`,
+    (tag) => `I successfully elevated @${tag}. They are now an admin.`
+];
+
+const muteResponses = [
+    () => `I've locked the group down. Only admins have the floor right now.`,
+    () => `Protocol active: I've successfully locked the group. Silence is golden.`,
+    () => `I've locked the group. Member messaging is temporarily restricted.`
+];
+
+const unmuteResponses = [
+    () => `I've unlocked the group. Everyone can speak freely again.`,
+    () => `Restrictions lifted. I've successfully opened the group back up.`,
+    () => `I've unlocked the group. The floor is open.`
+];
+
+const resetResponses = [
+    (tag) => `I successfully cleared the slate. All warnings for @${tag} have been wiped.`,
+    (tag) => `Done. I've successfully reset the strike count for @${tag}.`,
+    (tag) => `Clean record restored. I successfully cleared the warnings for @${tag}.`
+];
+
+// Helper function to pick a random item from any bank
+function getRandomResponse(bank, param) {
+    const randomIndex = Math.floor(Math.random() * bank.length);
+    return bank[randomIndex](param);
+}
+
 
 // ---------------- START ----------------
 app.listen(port, () => {
