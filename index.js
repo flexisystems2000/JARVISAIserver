@@ -1192,7 +1192,7 @@ if (hasReaction) {
         try {
             metadata = groupCache.get(jid);
 
-            if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000) {
+            if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000) {
                 metadata = await sock.groupMetadata(jid);
                 metadata.lastFetch = Date.now();
                 groupCache.set(jid, metadata);
