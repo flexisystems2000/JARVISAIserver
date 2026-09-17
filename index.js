@@ -345,7 +345,16 @@ We wish you success ahead from *${groupName}* 🎓`,
                     text: `🚫 Final strike reached. Removing user...`
                 });
 
-                await sock.groupParticipantsUpdate(groupJid, [participant], "remove");
+                const result = await sock.groupParticipantsUpdate(
+    jid,
+    [target],
+    action
+);
+
+console.log(
+    "GROUP ACTION RESULT:",
+    JSON.stringify(result, null, 2)
+);
             }
 
             return;
