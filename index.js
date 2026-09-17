@@ -2477,6 +2477,13 @@ if (isStaff && command === "!ai") {
 
 // --- KICK / PROMOTE ---
 if (command === "!kick" || command === "!promote") {
+    // 🛡️ AUTHORIZATION CHECK: Ensure only staff/admins can run this
+    if (!isStaff) {
+        return sock.sendMessage(jid, { 
+            text: "❌ This command is restricted to group admins." 
+        }, { quoted: m });
+    }
+
     let target =
         m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] ||
         m.message.extendedTextMessage?.contextInfo?.participant;
@@ -2486,7 +2493,7 @@ if (command === "!kick" || command === "!promote") {
     }
 
     if (!target || target.includes(OWNER_NUMBER)) {
-        return sock.sendMessage(jid, { text: "❌ Target invalid." });
+        return sock.sendMessage(jid, { text: "❌ Target invalid." }, { quoted: m });
     }
 
     const action = command === "!kick" ? "remove" : "promote";
@@ -2494,22 +2501,23 @@ if (command === "!kick" || command === "!promote") {
     try {
         await sock.groupParticipantsUpdate(jid, [target], action);
 
-        // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+        // 🌟 USE THE RANDOM RESPONSE BANK HERE 🌟
         const actionBank = action === "remove" ? kickResponses : promoteResponses;
         const responseText = getRandomResponse(actionBank, target.split('@')[0]);
 
         await sock.sendMessage(jid, {
             text: responseText,
             mentions: [target]
-        });
+        }, { quoted: m });
 
     } catch (err) {
         console.log("Group Action Error:", err.message);
         await sock.sendMessage(jid, {
             text: "❌ Failed. Am I admin?"
-        });
+        }, { quoted: m });
     }
 }
+
 
 
 // --- WATCHONLINE COMMAND ---
@@ -2578,6 +2586,13 @@ if (command === "!image") {
 
 // --- MUTE / UNMUTE ---
 if (command === "!mute" || command === "!unmute") {
+    // 🛡️ AUTHORIZATION CHECK: Ensure only staff/admins can lock or unlock the group
+    if (!isStaff) {
+        return sock.sendMessage(jid, { 
+            text: "❌ This command is restricted to group admins." 
+        }, { quoted: m });
+    }
+
     const duration = args[0];
     const unit = args[1]?.toLowerCase();
 
@@ -2585,13 +2600,13 @@ if (command === "!mute" || command === "!unmute") {
         ? 'announcement'
         : 'not_announcement';
 
-    // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+    // 🌟 USE THE RANDOM RESPONSE BANK HERE 🌟
     const actionBank = command === "!mute" ? muteResponses : unmuteResponses;
     const statusText = getRandomResponse(actionBank);
 
     if (!duration || isNaN(duration)) {
         await sock.groupSettingUpdate(jid, action);
-        return sock.sendMessage(jid, { text: statusText });
+        return sock.sendMessage(jid, { text: statusText }, { quoted: m });
     }
 
     let milliseconds;
@@ -2609,11 +2624,11 @@ if (command === "!mute" || command === "!unmute") {
         default:
             return sock.sendMessage(jid, {
                 text: `❌ Use: ${command} [number] [sec/min/hr]`
-            });
+            }, { quoted: m });
     }
 
     await sock.groupSettingUpdate(jid, action);
-    await sock.sendMessage(jid, { text: statusText }); // Sends the random mute/unmute message
+    await sock.sendMessage(jid, { text: statusText }, { quoted: m }); // Sends the random mute/unmute message
 
     setTimeout(async () => {
         const reverse = action === 'announcement'
@@ -2629,14 +2644,22 @@ if (command === "!mute" || command === "!unmute") {
 }
 
 
+
 // --- ADD USER ---
 if (command === "!add") {
+    // 🛡️ AUTHORIZATION CHECK: Ensure only staff/admins can add members
+    if (!isStaff) {
+        return sock.sendMessage(jid, { 
+            text: "❌ This command is restricted to group admins." 
+        }, { quoted: m });
+    }
+
     let target = args[0];
 
     if (!target) {
         return sock.sendMessage(jid, {
             text: "❌ Provide number e.g. !add 08012345678"
-        });
+        }, { quoted: m });
     }
 
     target = target.replace(/[^0-9]/g, '');
@@ -2658,53 +2681,60 @@ if (command === "!add") {
 
         if (result?.status === "200") {
             return sock.sendMessage(jid, {
-                text: `✅ Added @${target}`,
+                text: `I successfully added @${target}`,
                 mentions: [targetJid]
-            });
+            }, { quoted: m });
         } else if (result?.status === "403") {
             return sock.sendMessage(jid, {
-                text: "⚠️ Privacy restriction"
-            });
+                text: "⚠️This person has some privacy restriction installed in the WhatsApp number"
+            }, { quoted: m });
         } else if (result?.status === "409") {
             return sock.sendMessage(jid, {
-                text: "ℹ️ Already in group"
-            });
+                text: "ℹ️This person is already in group"
+            }, { quoted: m });
         } else {
             return sock.sendMessage(jid, {
-                text: "❌ Failed to add user"
-            });
+                text: "❌I'm sorry, I can't add this user at the moment"
+            }, { quoted: m });
         }
 
     } catch (err) {
         console.log("Add Error:", err.message);
         return sock.sendMessage(jid, {
             text: "❌ Error: Am I admin?"
-        });
+        }, { quoted: m });
     }
 }
 
 
 // --- RESET WARN ---
 if (command === "!reset") {
+    // 🛡️ AUTHORIZATION CHECK: Ensure only staff/admins can reset warnings
+    if (!isStaff) {
+        return sock.sendMessage(jid, { 
+            text: "❌ This command is restricted to group admins." 
+        }, { quoted: m });
+    }
+
     let target =
         m.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
 
     if (!target) {
         return sock.sendMessage(jid, {
             text: "❌ Tag someone to reset warnings"
-        });
+        }, { quoted: m });
     }
 
     await Warn.deleteOne({ userId: target });
 
-    // 🌟 USE THE NEW RANDOM RESPONSE BANK HERE 🌟
+    // 🌟 USE THE RANDOM RESPONSE BANK HERE 🌟
     const responseText = getRandomResponse(resetResponses, target.split('@')[0]);
 
     return sock.sendMessage(jid, {
         text: responseText,
         mentions: [target]
-    });
-   }
+    }, { quoted: m });
+}
 });
 }
     // --- WEB DASHBOARD ROUTES ---
