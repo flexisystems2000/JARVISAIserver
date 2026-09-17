@@ -102,6 +102,44 @@ setInterval(() => {
     }
 }, 60000);
 
+// --- VIEW-ONCE RETRIEVER FUNCTION ---
+async function vvCommand(sock, from, msg) {
+    const loadEmojis = ['⏳', '🔓', '👁️'];
+    for (const emoji of loadEmojis) {
+        await sock.sendMessage(from, { react: { text: emoji, key: msg.key } }).catch(() => {});
+    }
+
+    const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    if (!quoted) {
+        return await sock.sendMessage(from, { text: "❌ Please reply to a View-Once message." }, { quoted: msg });
+    }
+
+    const viewOnce = quoted.viewOnceMessageV2 || quoted.viewOnceMessage || quoted.viewOnceMessageV2Extension; 
+    const message = viewOnce ? viewOnce.message : quoted; 
+    let vType = Object.keys(message)[0]; 
+
+    if (['imageMessage', 'videoMessage', 'audioMessage'].includes(vType)) { 
+        try { 
+            const stream = await downloadContentFromMessage(message[vType], vType.replace('Message', '')); 
+            let buffer = Buffer.from([]); 
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]); 
+
+            if (vType === 'imageMessage') {
+                await sock.sendMessage(from, { image: buffer, caption: "✅ View-Once Image Downloaded" }, { quoted: msg }); 
+            } else if (vType === 'videoMessage') { 
+                await sock.sendMessage(from, { video: buffer, caption: "✅ View-Once Video Downloaded" }, { quoted: msg }); 
+            } else if (vType === 'audioMessage') { 
+                await sock.sendMessage(from, { audio: buffer, mimetype: 'audio/mp4' }, { quoted: msg }); 
+            } 
+        } catch (e) { 
+            console.log("VV Error:", e.message);
+            await sock.sendMessage(from, { text: "❌ Failed to download View-Once media." }, { quoted: msg }); 
+        } 
+    } else { 
+        await sock.sendMessage(from, { text: "❌ Not a View-Once media message." }, { quoted: msg }); 
+    } 
+}
+
 
 // --- MEDIA DOWNLOADER ---
 async function downloadMedia(message) {
@@ -1499,6 +1537,22 @@ if (!naturalText.startsWith("!")) {
         },
 
         // =========================
+        // VIEW ONCE / VV
+        // =========================
+        {
+            name: "vv",
+            patterns: [
+                /^save (this )?view[- ]?once\??$/i,
+                /^download (this )?view[- ]?once\??$/i,
+                /^open (this )?view[- ]?once\??$/i,
+                /^reveal (this )?view[- ]?once\??$/i,
+                /^show (me )?(this )?view[- ]?once\??$/i,
+                /^fetch (this )?view[- ]?once\??$/i,
+                /^vv$/i
+            ]
+        },
+
+        // =========================
         // RESET WARNINGS
         // =========================
         {
@@ -1622,7 +1676,8 @@ if (natural) {
         unmute: "!unmute",
         reset: "!reset",
         createfile: "__createfile__", // 👈 Added missing comma here
-        define: "!define"              // 👈 Properly mapped dictionary command
+        define: "!define",              // 👈 Properly mapped dictionary command
+        vv: "!vv"
     };
 
 
@@ -2092,6 +2147,12 @@ if (command === "!define" || command === "!dictionary" || natural === "define") 
             `I couldn't find a clear definition for *${word}* right now. ` +
             `Please check the spelling and try again.`
     }, m);
+}
+
+   // --- COMMAND: VIEW ONCE RETRIEVER (!vv) ---
+if (command === "!vv" || text === "vv" || text === "save view once") {
+    await vvCommand(sock, jid, m);
+    return;
 }
 
     
