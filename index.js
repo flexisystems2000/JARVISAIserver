@@ -11,6 +11,8 @@ const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
@@ -19,6 +21,7 @@ const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 
 const app = express();
 const port = process.env.PORT || 3000;
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // --- SYSTEM GUARDS ---
@@ -160,20 +163,237 @@ async function downloadMedia(message) {
 
 let sock;
 
+// ============================================================
+// 💬 JARVIS DASHBOARD CHAT STORAGE
+// ------------------------------------------------------------
+// Lightweight JSON storage for WhatsApp group conversations.
+// This is independent of the existing MongoDB warning/config
+// system.
+// ============================================================
+
+const CHAT_DATA_DIR = path.join(__dirname, 'data');
+const CHAT_DATA_FILE = path.join(CHAT_DATA_DIR, 'chats.json');
+
+function ensureChatStorage() {
+    try {
+        if (!fs.existsSync(CHAT_DATA_DIR)) {
+            fs.mkdirSync(CHAT_DATA_DIR, { recursive: true });
+        }
+
+        if (!fs.existsSync(CHAT_DATA_FILE)) {
+            fs.writeFileSync(
+                CHAT_DATA_FILE,
+                JSON.stringify({}, null, 2),
+                'utf8'
+            );
+        }
+    } catch (err) {
+        console.log("❌ Chat storage initialization error:", err.message);
+    }
+}
+
+ensureChatStorage();
+
+function loadChatData() {
+    try {
+        ensureChatStorage();
+
+        const raw = fs.readFileSync(
+            CHAT_DATA_FILE,
+            'utf8'
+        );
+
+        if (!raw.trim()) return {};
+
+        return JSON.parse(raw);
+    } catch (err) {
+        console.log("❌ Chat JSON read error:", err.message);
+        return {};
+    }
+}
+
+function saveChatData(data) {
+    try {
+        ensureChatStorage();
+
+        fs.writeFileSync(
+            CHAT_DATA_FILE,
+            JSON.stringify(data, null, 2),
+            'utf8'
+        );
+
+        return true;
+    } catch (err) {
+        console.log("❌ Chat JSON write error:", err.message);
+        return false;
+    }
+}
+
+
+// ============================================================
+// 💬 SAVE DASHBOARD CHAT MESSAGE
+// ============================================================
+
+function saveDashboardMessage({
+    groupJid,
+    messageId = '',
+    senderJid = '',
+    senderName = '',
+    text = '',
+    direction = 'incoming',
+    timestamp = Date.now()
+}) {
+
+    if (!groupJid || !text) {
+        return null;
+    }
+
+    if (!groupJid.endsWith('@g.us')) {
+        return null;
+    }
+
+    const data = loadChatData();
+
+    if (!data[groupJid]) {
+        data[groupJid] = [];
+    }
+
+    // Prevent duplicate messages
+    if (
+        messageId &&
+        data[groupJid].some(
+            message => message.messageId === messageId
+        )
+    ) {
+        return data[groupJid].find(
+            message => message.messageId === messageId
+        );
+    }
+
+    const message = {
+        groupJid,
+        messageId:
+            messageId ||
+            `${direction}-${Date.now()}-${Math.random()
+                .toString(36)
+                .slice(2, 10)}`,
+
+        senderJid,
+        senderName,
+        text,
+        direction,
+        timestamp: new Date(timestamp).toISOString()
+    };
+
+    data[groupJid].push(message);
+
+    // Keep the JSON file reasonably sized.
+    // The dashboard keeps the latest 500 messages per group.
+    if (data[groupJid].length > 500) {
+        data[groupJid] =
+            data[groupJid].slice(-500);
+    }
+
+    saveChatData(data);
+
+    return message;
+}
+
 // =========================
 // JARVIS TYPING SIMULATION
 // =========================
-async function sendWithTyping(jid, message, quotedMessage = null) {
+async function sendWithTyping(
+    jid,
+    message,
+    quotedMessage = null
+) {
+
     try {
-        await sock.sendPresenceUpdate('composing', jid);
-        const textLength = message?.text?.length || 0;
-        const typingDelay = Math.min(Math.max(800, textLength * 12), 5000);
 
-        await new Promise(resolve => setTimeout(resolve, typingDelay));
+        await sock.sendPresenceUpdate(
+            'composing',
+            jid
+        );
 
-        return await sock.sendMessage(jid, message, quotedMessage ? { quoted: quotedMessage } : undefined);
+        const textLength =
+            message?.text?.length || 0;
+
+        const typingDelay =
+            Math.min(
+                Math.max(
+                    800,
+                    textLength * 12
+                ),
+                5000
+            );
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    typingDelay
+                )
+        );
+
+
+        const result =
+            await sock.sendMessage(
+                jid,
+                message,
+                quotedMessage
+                    ? {
+                        quoted:
+                            quotedMessage
+                    }
+                    : undefined
+            );
+
+
+        // ========================================================
+        // 💬 DASHBOARD — SAVE JARVIS OUTGOING TEXT
+        // ========================================================
+
+        if (
+            jid &&
+            jid.endsWith('@g.us') &&
+            message?.text
+        ) {
+
+            saveDashboardMessage({
+
+                groupJid:
+                    jid,
+
+                messageId:
+                    result?.key?.id || '',
+
+                senderJid:
+                    sock.user?.id || '',
+
+                senderName:
+                    sock.user?.name ||
+                    'JARVIS AI',
+
+                text:
+                    message.text,
+
+                direction:
+                    'outgoing',
+
+                timestamp:
+                    Date.now()
+            });
+        }
+
+
+        return result;
+
     } finally {
-        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+
+        await sock.sendPresenceUpdate(
+            'paused',
+            jid
+        ).catch(() => {});
     }
 }
 
@@ -268,6 +488,77 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || m.key.remoteJid;
 
     activityTracker.set(sender, Date.now());
+    
+       // ============================================================
+// 💬 DASHBOARD — SAVE INCOMING GROUP MESSAGE
+// ============================================================
+
+if (
+    jid &&
+    jid.endsWith('@g.us')
+) {
+
+    const incomingText =
+        m.message?.conversation ||
+        m.message?.extendedTextMessage?.text ||
+        m.message?.imageMessage?.caption ||
+        m.message?.videoMessage?.caption ||
+        m.message?.documentMessage?.caption ||
+        '';
+
+    if (incomingText.trim()) {
+
+        let senderName =
+            sender?.split('@')[0] ||
+            'Unknown';
+
+        try {
+
+            const metadata =
+                groupCache.get(jid);
+
+            const participant =
+                metadata?.participants?.find(
+                    p =>
+                        p.id === sender
+                );
+
+            if (participant?.notify) {
+                senderName =
+                    participant.notify;
+            }
+
+        } catch (_) {}
+
+        saveDashboardMessage({
+
+            groupJid:
+                jid,
+
+            messageId:
+                m.key.id,
+
+            senderJid:
+                sender,
+
+            senderName:
+                senderName,
+
+            text:
+                incomingText.trim(),
+
+            direction:
+                'incoming',
+
+            timestamp:
+                m.messageTimestamp
+                    ? Number(
+                        m.messageTimestamp
+                    ) * 1000
+                    : Date.now()
+        });
+    }
+}
 
        // ==========================================
     // JARVIS ONLINE STATUS CHECK
@@ -1182,33 +1473,37 @@ if (hasReaction) {
     }
         
 
-    // =========================
-    // GROUP METADATA / STAFF CHECK (FIXED)
-    // =========================
-    let metadata;
-    let isStaff = isOwner;
+// =========================
+// GROUP METADATA / STAFF CHECK (REAL-TIME REFRESH FIX)
+// =========================
+let metadata;
+let isStaff = isOwner;
 
-    if (jid.endsWith('@g.us')) {
-        try {
-            metadata = groupCache.get(jid);
+if (jid.endsWith('@g.us')) {
+    try {
+        metadata = groupCache.get(jid);
 
-            if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000) {
-                metadata = await sock.groupMetadata(jid);
-                metadata.lastFetch = Date.now();
-                groupCache.set(jid, metadata);
-            }
+        // Always fetch fresh metadata if cache is older than 5 mins, 
+        // OR force an immediate re-fetch if someone attempts an administrative action
+        const isTryingAdminAction = ["!kick", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
 
-            const admins =
-                (metadata.participants || [])
-                    .filter(p => p.admin)
-                    .map(p => p.id);
-
-            isStaff = isOwner || admins.includes(sender);
-
-        } catch (err) {
-            isStaff = isOwner;
+        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000 || isTryingAdminAction) {
+            metadata = await sock.groupMetadata(jid);
+            metadata.lastFetch = Date.now();
+            groupCache.set(jid, metadata);
         }
+
+        const admins =
+            (metadata.participants || [])
+                .filter(p => p.admin)
+                .map(p => p.id);
+
+        isStaff = isOwner || admins.includes(sender);
+
+    } catch (err) {
+        isStaff = isOwner;
     }
+}
 
     // =========================
     // WATCHDOG (FIXED SAFETY + LOWER FALSE POSITIVES)
@@ -2737,6 +3032,386 @@ if (command === "!reset") {
 }
 });
 }
+
+// ============================================================
+// 🤖 JARVIS DASHBOARD API
+// ============================================================
+
+
+// ============================================================
+// 📡 WHATSAPP STATUS
+// ============================================================
+
+app.get('/api/status', (req, res) => {
+
+    const connected =
+        !!sock &&
+        !!sock.user;
+
+    res.json({
+        connected,
+        online: connected,
+        status: connected
+            ? 'connected'
+            : 'waiting'
+    });
+});
+
+
+// ============================================================
+// 👥 GET WHATSAPP GROUPS
+// ============================================================
+
+app.get('/api/groups', async (req, res) => {
+
+    try {
+
+        if (!sock || !sock.user) {
+            return res.status(503).json({
+                error: "WhatsApp is not connected.",
+                groups: []
+            });
+        }
+
+        let groups = {};
+
+        // Get fresh groups directly from WhatsApp
+        if (
+            typeof sock.groupFetchAllParticipating ===
+            'function'
+        ) {
+            groups =
+                await sock.groupFetchAllParticipating();
+        }
+
+        // Fallback to existing group cache
+        if (
+            !groups ||
+            Object.keys(groups).length === 0
+        ) {
+
+            for (
+                const [jid, metadata]
+                of groupCache.entries()
+            ) {
+
+                if (jid.endsWith('@g.us')) {
+                    groups[jid] = metadata;
+                }
+            }
+        }
+
+        const result =
+            Object.entries(groups)
+
+                .filter(([jid]) =>
+                    jid.endsWith('@g.us')
+                )
+
+                .map(([jid, metadata]) => ({
+
+                    jid,
+
+                    name:
+                        metadata?.subject ||
+                        metadata?.name ||
+                        jid,
+
+                    description:
+                        metadata?.desc || '',
+
+                    participants:
+                        Array.isArray(
+                            metadata?.participants
+                        )
+                            ? metadata.participants.length
+                            : 0
+                }))
+
+                .sort((a, b) =>
+                    a.name.localeCompare(b.name)
+                );
+
+        res.json({
+            groups: result,
+            count: result.length
+        });
+
+    } catch (err) {
+
+        console.log(
+            "❌ Dashboard groups error:",
+            err.message
+        );
+
+        res.status(500).json({
+            error: "Unable to load WhatsApp groups.",
+            groups: []
+        });
+    }
+});
+
+
+// ============================================================
+// 💬 GET GROUP MESSAGE HISTORY
+// ============================================================
+
+app.get(
+    '/api/groups/:jid/messages',
+    (req, res) => {
+
+        try {
+
+            const jid =
+                decodeURIComponent(
+                    req.params.jid
+                );
+
+            if (!jid.endsWith('@g.us')) {
+
+                return res.status(400).json({
+                    error: "Invalid group JID."
+                });
+            }
+
+            const data =
+                loadChatData();
+
+            const messages =
+                data[jid] || [];
+
+            // Dashboard normally needs the latest 200.
+            const latestMessages =
+                messages.slice(-200);
+
+            res.json({
+                messages: latestMessages
+            });
+
+        } catch (err) {
+
+            console.log(
+                "❌ Dashboard message error:",
+                err.message
+            );
+
+            res.status(500).json({
+                error:
+                    "Unable to load chat history."
+            });
+        }
+    }
+);
+
+
+// ============================================================
+// 📤 SEND MESSAGE FROM DASHBOARD
+// ============================================================
+
+app.post(
+    '/api/groups/:jid/messages',
+    async (req, res) => {
+
+        try {
+
+            const jid =
+                decodeURIComponent(
+                    req.params.jid
+                );
+
+            const messageText =
+                typeof req.body?.text === 'string'
+                    ? req.body.text.trim()
+                    : '';
+
+            // Validate group
+            if (!jid.endsWith('@g.us')) {
+
+                return res.status(400).json({
+                    error:
+                        "Invalid WhatsApp group."
+                });
+            }
+
+            // Validate message
+            if (!messageText) {
+
+                return res.status(400).json({
+                    error:
+                        "Message cannot be empty."
+                });
+            }
+
+            if (messageText.length > 4000) {
+
+                return res.status(400).json({
+                    error:
+                        "Message is too long. Maximum is 4000 characters."
+                });
+            }
+
+            // Check WhatsApp connection
+            if (!sock || !sock.user) {
+
+                return res.status(503).json({
+                    error:
+                        "WhatsApp is not connected."
+                });
+            }
+
+
+            // Send to WhatsApp
+            const sent =
+                await sock.sendMessage(
+                    jid,
+                    {
+                        text: messageText
+                    }
+                );
+
+
+            // Save outgoing message
+            const savedMessage =
+                saveDashboardMessage({
+
+                    groupJid: jid,
+
+                    messageId:
+                        sent?.key?.id || '',
+
+                    senderJid:
+                        sock.user?.id || '',
+
+                    senderName:
+                        sock.user?.name ||
+                        "JARVIS AI",
+
+                    text:
+                        messageText,
+
+                    direction:
+                        'outgoing',
+
+                    timestamp:
+                        Date.now()
+                });
+
+
+            res.json({
+
+                success: true,
+
+                message:
+                    savedMessage
+            });
+
+        } catch (err) {
+
+            console.log(
+                "❌ Dashboard send error:",
+                err.message
+            );
+
+            res.status(500).json({
+
+                error:
+                    "Unable to send message to WhatsApp."
+            });
+        }
+    }
+);
+
+
+// ============================================================
+// 📊 DASHBOARD METRICS
+// ============================================================
+
+app.get('/api/metrics', async (req, res) => {
+
+    try {
+
+        const data =
+            loadChatData();
+
+        let totalMessages = 0;
+
+        for (
+            const jid of Object.keys(data)
+        ) {
+
+            if (
+                Array.isArray(data[jid])
+            ) {
+                totalMessages +=
+                    data[jid].length;
+            }
+        }
+
+
+        let groupCount = 0;
+
+        if (
+            sock &&
+            sock.user &&
+            typeof sock.groupFetchAllParticipating ===
+                'function'
+        ) {
+
+            try {
+
+                const groups =
+                    await sock.groupFetchAllParticipating();
+
+                groupCount =
+                    Object.keys(
+                        groups || {}
+                    ).length;
+
+            } catch (_) {}
+        }
+
+        if (!groupCount) {
+            groupCount =
+                groupCache.size;
+        }
+
+
+        res.json({
+
+            messages:
+                totalMessages,
+
+            messageCount:
+                totalMessages,
+
+            // These remain zero until we connect
+            // them to your existing AI/command counters.
+            ai: 0,
+            aiTasks: 0,
+
+            commands: 0,
+            commandCount: 0,
+
+            groups:
+                groupCount,
+
+            groupCount:
+                groupCount
+        });
+
+    } catch (err) {
+
+        console.log(
+            "❌ Dashboard metrics error:",
+            err.message
+        );
+
+        res.status(500).json({
+            error:
+                "Unable to load dashboard metrics."
+        });
+    }
+});
     // --- WEB DASHBOARD ROUTES ---
 
 const FB_SCRIPTS = `
@@ -2748,284 +3423,1812 @@ const FB_SCRIPTS = `
     </script>
 `;
 
-// ---------------- LOGIN ----------------
-app.get('/login', (req, res) => {
-    res.send(`
-<html>
-<head>
-<title>Login</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-body{
-    font-family:sans-serif;
-    background:#f0f2f5;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-    margin:0;
-}
-.card{
-    background:white;
-    padding:30px;
-    border-radius:15px;
-    width:90%;
-    max-width:400px;
-    box-shadow:0 10px 25px rgba(0,0,0,0.1);
-    box-sizing:border-box;
-}
-header{
-    background:#002b5c;
-    color:white;
-    padding:15px;
-    text-align:center;
-    margin:-30px -30px 20px -30px;
-    border-radius:15px 15px 0 0;
-}
-input{
-    width:100%;
-    padding:12px;
-    margin:8px 0;
-    border:1px solid #ddd;
-    border-radius:8px;
-    box-sizing:border-box;
-}
-button{
-    width:100%;
-    padding:12px;
-    background:#002b5c;
-    color:white;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-    font-weight:bold;
-}
-.google-btn{
-    background:#fff;
-    color:#757575;
-    border:1px solid #ddd;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:10px;
-    margin-top:15px;
-}
-.divider{
-    margin:20px 0;
-    border-top:1px solid #eee;
-    position:relative;
-    text-align:center;
-}
-.divider span{
-    position:absolute;
-    top:-10px;
-    left:42%;
-    background:white;
-    padding:0 10px;
-    font-size:12px;
-    color:#aaa;
-}
-</style>
-</head>
-<body>
-
-<div class="card">
-<header>LOGIN</header>
-
-<input id="email" type="email" placeholder="Email Address">
-<input id="pass" type="password" placeholder="Password">
-
-<button onclick="login()">Login</button>
-
-<div class="divider"><span>OR</span></div>
-
-<button class="google-btn" onclick="loginWithGoogle()">
-<img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" width="18">
-Sign in with Google
-</button>
-
-<p style="text-align:center;font-size:12px;margin-top:15px;">
-Don't have an account? <a href="/signup">Sign up</a>
-</p>
-</div>
-
-${FB_SCRIPTS}
-
-<script>
-function login(){
-    const e = document.getElementById('email').value;
-    const p = document.getElementById('pass').value;
-
-    firebase.auth().signInWithEmailAndPassword(e,p)
-    .then(u=>{
-        localStorage.setItem('userName', u.user.displayName || 'Admin');
-        window.location.href='/';
-    })
-    .catch(err=>alert(err.message));
-}
-
-function loginWithGoogle(){
-    const provider = new firebase.auth.GoogleAuthProvider();
-    firebase.auth().signInWithPopup(provider)
-    .then(result=>{
-        localStorage.setItem('userName', result.user.displayName);
-        window.location.href='/';
-    })
-    .catch(err=>alert("Google Error: "+err.message));
-}
-</script>
-
-</body>
-</html>
-`);
-});
 
 
-// ---------------- SIGNUP ----------------
-app.get('/signup', (req, res) => {
-    res.send(`
-<html>
-<head>
-<title>Sign Up</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-body{
-    font-family:sans-serif;
-    background:#f0f2f5;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-    margin:0;
-}
-.card{
-    background:white;
-    padding:30px;
-    border-radius:15px;
-    width:90%;
-    max-width:400px;
-    box-shadow:0 10px 25px rgba(0,0,0,0.1);
-}
-header{
-    background:#002b5c;
-    color:white;
-    padding:15px;
-    text-align:center;
-    margin:-30px -30px 20px -30px;
-    border-radius:15px 15px 0 0;
-}
-input{
-    width:100%;
-    padding:12px;
-    margin:8px 0;
-    border:1px solid #ddd;
-    border-radius:8px;
-}
-button{
-    width:100%;
-    padding:12px;
-    background:#002b5c;
-    color:white;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
-}
-</style>
-</head>
-<body>
-
-<div class="card">
-<header>CREATE ACCOUNT</header>
-
-<input id="name" placeholder="Full Name">
-<input id="email" type="email" placeholder="Email">
-<input id="pass" type="password" placeholder="Password">
-<input id="confirm" type="password" placeholder="Confirm Password">
-
-<button onclick="signup()">Create Account</button>
-</div>
-
-${FB_SCRIPTS}
-
-<script>
-function signup(){
-    const n=document.getElementById('name').value;
-    const e=document.getElementById('email').value;
-    const p=document.getElementById('pass').value;
-
-    if(p !== document.getElementById('confirm').value){
-        return alert("Passwords don't match");
-    }
-
-    firebase.auth().createUserWithEmailAndPassword(e,p)
-    .then(u=>{
-        u.user.updateProfile({displayName:n}).then(()=>{
-            alert("Account created");
-            window.location.href="/login";
-        });
-    })
-    .catch(err=>alert(err.message));
-}
-</script>
-
-</body>
-</html>
-`);
-});
-
-
-// ---------------- DASHBOARD ----------------
+// ============================================================
+// 🤖 JARVIS AI COMMAND CENTER
+// ============================================================
 app.get('/', (req, res) => {
     res.send(`
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-<title>Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+
+<title>JARVIS AI Command Center</title>
+
 <style>
-body{margin:0;font-family:sans-serif;background:#f4f7f9;}
-header{background:#002b5c;color:white;padding:20px;text-align:center;}
-.container{padding:20px;max-width:800px;margin:auto;}
-.welcome{font-size:24px;color:#002b5c;margin-bottom:20px;font-weight:bold;}
-.card{background:white;padding:20px;border-radius:12px;margin-bottom:20px;box-shadow:0 2px 10px rgba(0,0,0,0.05);}
-.btn{display:block;text-align:center;padding:15px;background:#003f88;color:white;text-decoration:none;border-radius:8px;font-weight:bold;margin-top:10px;}
+*{
+    box-sizing:border-box;
+}
+
+:root{
+    --bg:#050912;
+    --panel:rgba(10,20,36,.72);
+    --panel2:rgba(12,27,48,.58);
+    --border:rgba(0,220,255,.16);
+    --cyan:#00e5ff;
+    --blue:#1677ff;
+    --green:#00e676;
+    --text:#eefaff;
+    --muted:#7e9bad;
+    --danger:#ff4d6d;
+}
+
+html,body{
+    margin:0;
+    padding:0;
+    width:100%;
+    min-height:100%;
+    background:
+        radial-gradient(circle at 15% 15%,rgba(0,229,255,.09),transparent 30%),
+        radial-gradient(circle at 85% 80%,rgba(22,119,255,.10),transparent 32%),
+        var(--bg);
+    color:var(--text);
+    font-family:Arial,Helvetica,sans-serif;
+}
+
+body{
+    min-height:100vh;
+    overflow-x:hidden;
+}
+
+button,
+input{
+    font:inherit;
+}
+
+button{
+    cursor:pointer;
+}
+
+.topbar{
+    position:sticky;
+    top:0;
+    z-index:100;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:18px 24px;
+    background:rgba(5,9,18,.78);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+    border-bottom:1px solid var(--border);
+}
+
+.brand{
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.logo{
+    width:42px;
+    height:42px;
+    border-radius:14px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:21px;
+    background:linear-gradient(135deg,#00e5ff,#1677ff);
+    color:#001018;
+    box-shadow:0 0 25px rgba(0,229,255,.35);
+}
+
+.brand h1{
+    margin:0;
+    font-size:18px;
+    letter-spacing:1.4px;
+}
+
+.brand span{
+    display:block;
+    margin-top:3px;
+    font-size:11px;
+    color:var(--muted);
+    letter-spacing:1px;
+}
+
+.status{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:9px 13px;
+    border:1px solid rgba(0,230,118,.25);
+    border-radius:999px;
+    background:rgba(0,230,118,.07);
+    color:#7dffb3;
+    font-size:11px;
+    font-weight:bold;
+    letter-spacing:1px;
+}
+
+.status-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:var(--green);
+    box-shadow:0 0 12px var(--green);
+}
+
+.container{
+    width:min(1180px,calc(100% - 32px));
+    margin:0 auto;
+    padding:30px 0 50px;
+}
+
+.hero{
+    margin-bottom:22px;
+}
+
+.hero h2{
+    margin:0;
+    font-size:clamp(25px,4vw,38px);
+    letter-spacing:-.5px;
+}
+
+.hero p{
+    margin:8px 0 0;
+    color:var(--muted);
+    font-size:14px;
+}
+
+.glass{
+    background:linear-gradient(
+        145deg,
+        rgba(15,30,51,.78),
+        rgba(7,15,28,.60)
+    );
+    border:1px solid var(--border);
+    border-radius:22px;
+    box-shadow:
+        0 18px 60px rgba(0,0,0,.25),
+        inset 0 1px 0 rgba(255,255,255,.025);
+    backdrop-filter:blur(18px);
+    -webkit-backdrop-filter:blur(18px);
+}
+
+.section{
+    padding:20px;
+    margin-bottom:20px;
+}
+
+.section-title{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:15px;
+}
+
+.section-title h3{
+    margin:0;
+    font-size:14px;
+    letter-spacing:1px;
+}
+
+.section-title span{
+    font-size:10px;
+    color:var(--muted);
+    letter-spacing:1px;
+}
+
+/* GRAPH */
+
+.graph-card{
+    overflow:hidden;
+}
+
+.graph{
+    height:230px;
+    position:relative;
+    overflow:hidden;
+    border-radius:15px;
+    background:
+        linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
+        linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+    background-size:42px 42px;
+    border:1px solid rgba(255,255,255,.04);
+}
+
+.graph svg{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+}
+
+.graph-line{
+    fill:none;
+    stroke:var(--cyan);
+    stroke-width:3;
+    filter:drop-shadow(0 0 7px rgba(0,229,255,.7));
+}
+
+.graph-area{
+    fill:url(#areaGradient);
+    opacity:.22;
+}
+
+.graph-label{
+    position:absolute;
+    left:14px;
+    top:13px;
+    padding:6px 9px;
+    border-radius:8px;
+    background:rgba(0,229,255,.08);
+    border:1px solid rgba(0,229,255,.13);
+    color:var(--cyan);
+    font-size:10px;
+    font-weight:bold;
+    letter-spacing:1px;
+}
+
+/* METRICS */
+
+.metrics{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:14px;
+    margin-bottom:20px;
+}
+
+.metric{
+    padding:18px;
+    min-height:105px;
+    position:relative;
+    overflow:hidden;
+}
+
+.metric:after{
+    content:"";
+    position:absolute;
+    width:80px;
+    height:80px;
+    right:-35px;
+    bottom:-35px;
+    border-radius:50%;
+    background:rgba(0,229,255,.08);
+    filter:blur(8px);
+}
+
+.metric-label{
+    color:var(--muted);
+    font-size:10px;
+    letter-spacing:1.3px;
+}
+
+.metric-value{
+    margin-top:10px;
+    font-size:27px;
+    font-weight:700;
+    color:white;
+}
+
+.metric-value.cyan{
+    color:var(--cyan);
+    text-shadow:0 0 18px rgba(0,229,255,.25);
+}
+
+/* PAIRING */
+
+.pairing{
+    display:grid;
+    grid-template-columns:1fr auto;
+    gap:20px;
+    align-items:center;
+}
+
+.pair-info h3{
+    margin:0 0 7px;
+}
+
+.pair-info p{
+    margin:0;
+    color:var(--muted);
+    font-size:12px;
+}
+
+.pair-controls{
+    display:flex;
+    flex-wrap:wrap;
+    gap:9px;
+    justify-content:flex-end;
+}
+
+.pair-controls input{
+    width:220px;
+    padding:13px 15px;
+    border-radius:12px;
+    border:1px solid rgba(0,229,255,.15);
+    outline:none;
+    background:rgba(0,0,0,.24);
+    color:white;
+}
+
+.pair-controls input:focus{
+    border-color:var(--cyan);
+    box-shadow:0 0 0 3px rgba(0,229,255,.07);
+}
+
+.btn{
+    border:0;
+    padding:13px 18px;
+    border-radius:12px;
+    color:white;
+    font-weight:bold;
+    background:linear-gradient(135deg,#007f9b,#1468dc);
+    box-shadow:0 8px 25px rgba(0,126,180,.18);
+}
+
+.btn:hover{
+    filter:brightness(1.1);
+}
+
+.pair-code{
+    margin-top:13px;
+    min-height:25px;
+    color:var(--cyan);
+    font-size:20px;
+    font-weight:bold;
+    letter-spacing:3px;
+}
+
+/* CHATS ENTRY */
+
+.chat-entry{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:20px;
+    padding:22px;
+}
+
+.chat-entry-left{
+    display:flex;
+    align-items:center;
+    gap:15px;
+}
+
+.chat-icon{
+    width:52px;
+    height:52px;
+    border-radius:16px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:rgba(0,229,255,.08);
+    border:1px solid rgba(0,229,255,.16);
+    font-size:24px;
+    box-shadow:0 0 25px rgba(0,229,255,.08);
+}
+
+.chat-entry h3{
+    margin:0 0 5px;
+}
+
+.chat-entry p{
+    margin:0;
+    color:var(--muted);
+    font-size:12px;
+}
+
+.open-chat{
+    min-width:130px;
+}
+
+/* CHAT WORKSPACE */
+
+#chatWorkspace{
+    display:none;
+    position:fixed;
+    inset:0;
+    z-index:200;
+    background:
+        radial-gradient(circle at 10% 20%,rgba(0,229,255,.07),transparent 30%),
+        radial-gradient(circle at 90% 80%,rgba(22,119,255,.08),transparent 30%),
+        var(--bg);
+}
+
+.chat-layout{
+    display:grid;
+    grid-template-columns:340px 1fr;
+    width:100%;
+    height:100%;
+}
+
+.groups-panel{
+    border-right:1px solid var(--border);
+    background:rgba(5,12,23,.72);
+    backdrop-filter:blur(20px);
+    -webkit-backdrop-filter:blur(20px);
+    overflow:hidden;
+}
+
+.groups-header{
+    padding:20px;
+    border-bottom:1px solid var(--border);
+}
+
+.groups-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+}
+
+.groups-top h2{
+    margin:0;
+    font-size:18px;
+}
+
+.back-home{
+    border:1px solid rgba(0,229,255,.14);
+    background:rgba(0,229,255,.05);
+    color:var(--cyan);
+    border-radius:10px;
+    padding:8px 10px;
+}
+
+.search{
+    width:100%;
+    margin-top:15px;
+    padding:12px 13px;
+    border-radius:11px;
+    border:1px solid rgba(255,255,255,.07);
+    background:rgba(0,0,0,.23);
+    color:white;
+    outline:none;
+}
+
+.groups-list{
+    height:calc(100% - 130px);
+    overflow-y:auto;
+    padding:10px;
+}
+
+.group-item{
+    padding:14px;
+    border-radius:13px;
+    margin-bottom:6px;
+    cursor:pointer;
+    border:1px solid transparent;
+}
+
+.group-item:hover,
+.group-item.active{
+    background:rgba(0,229,255,.07);
+    border-color:rgba(0,229,255,.13);
+}
+
+.group-name{
+    font-size:13px;
+    font-weight:bold;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.group-meta{
+    margin-top:5px;
+    font-size:10px;
+    color:var(--muted);
+}
+
+/* CONVERSATION */
+
+.conversation{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    background:rgba(4,10,19,.54);
+}
+
+.conversation-header{
+    min-height:75px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:13px 20px;
+    border-bottom:1px solid var(--border);
+    background:rgba(8,17,31,.72);
+    backdrop-filter:blur(15px);
+}
+
+.mobile-back{
+    display:none;
+    border:0;
+    background:transparent;
+    color:var(--cyan);
+    font-size:22px;
+}
+
+.group-avatar{
+    width:43px;
+    height:43px;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(135deg,#063b52,#123a79);
+    border:1px solid rgba(0,229,255,.15);
+}
+
+.conversation-title{
+    min-width:0;
+}
+
+.conversation-title h3{
+    margin:0;
+    font-size:14px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.conversation-title span{
+    display:block;
+    margin-top:4px;
+    color:var(--muted);
+    font-size:10px;
+}
+
+.messages{
+    flex:1;
+    overflow-y:auto;
+    padding:22px;
+    display:flex;
+    flex-direction:column;
+    gap:7px;
+}
+
+.message{
+    max-width:min(72%,600px);
+    padding:9px 12px;
+    border-radius:13px;
+    font-size:13px;
+    line-height:1.45;
+    word-break:break-word;
+}
+
+.message.incoming{
+    align-self:flex-start;
+    background:rgba(19,33,53,.9);
+    border:1px solid rgba(255,255,255,.05);
+    border-bottom-left-radius:4px;
+}
+
+.message.outgoing{
+    align-self:flex-end;
+    background:linear-gradient(135deg,rgba(0,112,145,.72),rgba(16,73,143,.72));
+    border:1px solid rgba(0,229,255,.11);
+    border-bottom-right-radius:4px;
+}
+
+.sender{
+    margin-bottom:3px;
+    color:var(--cyan);
+    font-size:10px;
+    font-weight:bold;
+}
+
+.message-time{
+    margin-top:4px;
+    text-align:right;
+    color:rgba(255,255,255,.42);
+    font-size:9px;
+}
+
+.empty{
+    margin:auto;
+    text-align:center;
+    color:var(--muted);
+    font-size:13px;
+}
+
+.composer{
+    display:flex;
+    gap:10px;
+    padding:14px;
+    border-top:1px solid var(--border);
+    background:rgba(5,12,22,.82);
+}
+
+.composer input{
+    flex:1;
+    min-width:0;
+    border:1px solid rgba(255,255,255,.08);
+    border-radius:13px;
+    padding:13px 15px;
+    background:rgba(0,0,0,.25);
+    color:white;
+    outline:none;
+}
+
+.composer input:focus{
+    border-color:rgba(0,229,255,.4);
+}
+
+.send{
+    width:52px;
+    border:0;
+    border-radius:13px;
+    color:white;
+    background:linear-gradient(135deg,#007c9a,#1466d8);
+    font-size:18px;
+}
+
+.loading{
+    text-align:center;
+    padding:25px;
+    color:var(--muted);
+    font-size:12px;
+}
+
+@media(max-width:800px){
+
+    .container{
+        width:min(100% - 20px,700px);
+        padding-top:20px;
+    }
+
+    .topbar{
+        padding:14px 15px;
+    }
+
+    .metrics{
+        grid-template-columns:repeat(2,1fr);
+    }
+
+    .pairing{
+        grid-template-columns:1fr;
+    }
+
+    .pair-controls{
+        justify-content:flex-start;
+    }
+
+    .chat-layout{
+        grid-template-columns:1fr;
+    }
+
+    .groups-panel{
+        display:block;
+        width:100%;
+    }
+
+    .conversation{
+        display:none;
+    }
+
+    #chatWorkspace.mobile-conversation .groups-panel{
+        display:none;
+    }
+
+    #chatWorkspace.mobile-conversation .conversation{
+        display:flex;
+    }
+
+    .mobile-back{
+        display:block;
+    }
+
+    .message{
+        max-width:85%;
+    }
+}
+
+@media(max-width:500px){
+
+    .metrics{
+        gap:9px;
+    }
+
+    .metric{
+        padding:14px;
+    }
+
+    .metric-value{
+        font-size:23px;
+    }
+
+    .pair-controls{
+        flex-direction:column;
+    }
+
+    .pair-controls input,
+    .pair-controls .btn{
+        width:100%;
+    }
+
+    .chat-entry{
+        align-items:flex-start;
+        flex-direction:column;
+    }
+
+    .open-chat{
+        width:100%;
+    }
+
+    .graph{
+        height:190px;
+    }
+}
 </style>
 </head>
+
 <body>
 
-<header>🤖 JARVIS AI PORTAL</header>
+<div class="topbar">
+    <div class="brand">
+        <div class="logo">J</div>
+        <div>
+            <h1>JARVIS AI</h1>
+            <span>COMMAND CENTER</span>
+        </div>
+    </div>
 
-<div class="container">
-<div class="welcome" id="greet">Welcome</div>
-
-<div class="card">
-<h3>Connection Status</h3>
-<p id="linked">Linked Number: Not Set</p>
-
-<input id="num" placeholder="234..." style="padding:10px;width:60%;">
-<button onclick="getPair()">Pair</button>
-
-<div id="code" style="font-size:22px;margin-top:10px;color:#003f88;font-weight:bold;">-- -- -- --</div>
+    <div class="status" id="systemStatus">
+        <span class="status-dot"></span>
+        <span id="statusText">SYSTEM ONLINE</span>
+    </div>
 </div>
 
-<div class="card">
-<h3>Quick Actions</h3>
-<a href="/chat" class="btn">Chat with JARVIS</a>
-</div>
+<main class="container" id="home">
+
+    <div class="hero">
+        <h2>JARVIS AI Command Center</h2>
+        <p>Monitor your WhatsApp AI system and manage conversations from one place.</p>
+    </div>
+
+    <section class="glass section graph-card">
+
+        <div class="section-title">
+            <h3>PROCESSING ACTIVITY</h3>
+            <span>SYSTEM LIVE</span>
+        </div>
+
+        <div class="graph">
+            <div class="graph-label">LIVE ACTIVITY</div>
+
+            <svg viewBox="0 0 1000 230" preserveAspectRatio="none">
+                <defs>
+                    <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#00e5ff"/>
+                        <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+
+                <path
+                    id="graphArea"
+                    class="graph-area"
+                    d=""
+                />
+
+                <path
+                    id="graphLine"
+                    class="graph-line"
+                    d=""
+                />
+            </svg>
+        </div>
+
+    </section>
+
+    <section class="metrics">
+
+        <div class="glass metric">
+            <div class="metric-label">MESSAGES</div>
+            <div class="metric-value cyan" id="messagesMetric">0</div>
+        </div>
+
+        <div class="glass metric">
+            <div class="metric-label">AI TASKS</div>
+            <div class="metric-value" id="aiMetric">0</div>
+        </div>
+
+        <div class="glass metric">
+            <div class="metric-label">COMMANDS</div>
+            <div class="metric-value" id="commandsMetric">0</div>
+        </div>
+
+        <div class="glass metric">
+            <div class="metric-label">GROUPS</div>
+            <div class="metric-value" id="groupsMetric">0</div>
+        </div>
+
+    </section>
+
+    <section class="glass section">
+
+        <div class="section-title">
+            <h3>WHATSAPP PAIRING</h3>
+            <span id="pairStatus">READY</span>
+        </div>
+
+        <div class="pairing">
+
+            <div class="pair-info">
+                <h3>Connect JARVIS to WhatsApp</h3>
+                <p>
+                    Enter the WhatsApp number attached to the account
+                    you want to pair with JARVIS.
+                </p>
+
+                <div class="pair-code" id="pairCode"></div>
+            </div>
+
+            <div class="pair-controls">
+
+                <input
+                    id="pairingNumber"
+                    type="text"
+                    inputmode="numeric"
+                    placeholder="2348012345678"
+                >
+
+                <button
+                    class="btn"
+                    id="pairButton"
+                    onclick="requestPairCode()"
+                >
+                    GET PAIRING CODE
+                </button>
+
+            </div>
+
+        </div>
+
+    </section>
+
+    <section class="glass chat-entry">
+
+        <div class="chat-entry-left">
+
+            <div class="chat-icon">💬</div>
+
+            <div>
+                <h3>WhatsApp Chats</h3>
+                <p>
+                    Open your WhatsApp groups and manage conversations
+                    directly from the JARVIS dashboard.
+                </p>
+            </div>
+
+        </div>
+
+        <button
+            class="btn open-chat"
+            id="openChats"
+            onclick="openChatWorkspace()"
+        >
+            OPEN CHATS
+        </button>
+
+    </section>
+
+</main>
+
+
+<!-- ============================================================
+     CHAT WORKSPACE
+============================================================ -->
+
+<div id="chatWorkspace">
+
+    <div class="chat-layout">
+
+        <!-- GROUP LIST -->
+
+        <aside class="groups-panel">
+
+            <div class="groups-header">
+
+                <div class="groups-top">
+
+                    <h2>WhatsApp Groups</h2>
+
+                    <button
+                        class="back-home"
+                        onclick="closeChatWorkspace()"
+                    >
+                        ← Home
+                    </button>
+
+                </div>
+
+                <input
+                    class="search"
+                    id="groupSearch"
+                    placeholder="Search groups..."
+                    oninput="filterGroups()"
+                >
+
+            </div>
+
+            <div
+                class="groups-list"
+                id="groupsList"
+            >
+                <div class="loading">
+                    Loading groups...
+                </div>
+            </div>
+
+        </aside>
+
+
+        <!-- CONVERSATION -->
+
+        <section class="conversation">
+
+            <div class="conversation-header">
+
+                <button
+                    class="mobile-back"
+                    onclick="mobileBackToGroups()"
+                >
+                    ←
+                </button>
+
+                <div class="group-avatar">
+                    💬
+                </div>
+
+                <div class="conversation-title">
+
+                    <h3 id="conversationName">
+                        Select a group
+                    </h3>
+
+                    <span id="conversationMeta">
+                        Choose a WhatsApp group to view messages
+                    </span>
+
+                </div>
+
+            </div>
+
+            <div
+                class="messages"
+                id="messages"
+            >
+                <div class="empty">
+                    Select a group to open the conversation.
+                </div>
+            </div>
+
+            <div class="composer">
+
+                <input
+                    id="messageInput"
+                    type="text"
+                    placeholder="Type a message..."
+                    autocomplete="off"
+                    disabled
+                >
+
+                <button
+                    class="send"
+                    id="sendButton"
+                    onclick="sendMessage()"
+                    disabled
+                >
+                    ➤
+                </button>
+
+            </div>
+
+        </section>
+
+    </div>
 
 </div>
+
 
 <script>
-const u = localStorage.getItem('userName');
-if(!u) window.location.href='/login';
 
-document.getElementById('greet').innerText = "Welcome back, " + u;
+let groups = [];
+let selectedGroup = null;
 
-async function getPair(){
-    const n=document.getElementById('num').value;
-    const res=await fetch('/pair?number='+n);
-    document.getElementById('code').innerText=await res.text();
-    document.getElementById('linked').innerText="Linked: +"+n;
+let messageTimer = null;
+let metricsTimer = null;
+let statusTimer = null;
+
+
+/* ============================================================
+   HELPERS
+============================================================ */
+
+function escapeHtml(value){
+
+    return String(value ?? '')
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;')
+        .replace(/'/g,'&#039;');
+
 }
+
+
+function formatNumber(value){
+
+    return Number(value || 0).toLocaleString();
+
+}
+
+
+function formatMessageTime(timestamp){
+
+    if(!timestamp){
+        return '';
+    }
+
+    const date = new Date(timestamp);
+
+    if(Number.isNaN(date.getTime())){
+        return '';
+    }
+
+    return date.toLocaleTimeString([],{
+        hour:'2-digit',
+        minute:'2-digit'
+    });
+
+}
+
+
+/* ============================================================
+   PAIRING
+============================================================ */
+
+async function requestPairCode(){
+
+    const input =
+        document.getElementById('pairingNumber');
+
+    const button =
+        document.getElementById('pairButton');
+
+    const code =
+        document.getElementById('pairCode');
+
+    const pairStatus =
+        document.getElementById('pairStatus');
+
+    const number =
+        input.value.replace(/[^0-9]/g,'');
+
+    if(!number){
+
+        code.textContent =
+            'Enter a WhatsApp number first.';
+
+        return;
+    }
+
+    button.disabled = true;
+    button.textContent = 'REQUESTING...';
+
+    pairStatus.textContent = 'REQUESTING';
+
+    code.textContent = 'Generating pairing code...';
+
+    try{
+
+        const response =
+            await fetch(
+                '/pair?number=' +
+                encodeURIComponent(number)
+            );
+
+        const text =
+            await response.text();
+
+        code.textContent = text;
+
+        pairStatus.textContent = 'CODE READY';
+
+    }catch(error){
+
+        console.error(error);
+
+        code.textContent =
+            'Unable to generate pairing code.';
+
+        pairStatus.textContent = 'ERROR';
+
+    }finally{
+
+        button.disabled = false;
+        button.textContent = 'GET PAIRING CODE';
+
+    }
+
+}
+
+
+/* ============================================================
+   CHAT WORKSPACE
+============================================================ */
+
+async function openChatWorkspace(){
+
+    document.getElementById('home').style.display = 'none';
+
+    document.getElementById('chatWorkspace').style.display = 'block';
+
+    await loadGroups();
+
+}
+
+
+function closeChatWorkspace(){
+
+    stopMessagePolling();
+
+    document.getElementById('chatWorkspace').style.display = 'none';
+
+    document.getElementById('chatWorkspace')
+        .classList.remove('mobile-conversation');
+
+    document.getElementById('home').style.display = 'block';
+
+    selectedGroup = null;
+
+}
+
+
+function mobileBackToGroups(){
+
+    document.getElementById('chatWorkspace')
+        .classList.remove('mobile-conversation');
+
+}
+
+
+/* ============================================================
+   GROUPS
+============================================================ */
+
+async function loadGroups(){
+
+    const list =
+        document.getElementById('groupsList');
+
+    list.innerHTML =
+        '<div class="loading">Loading WhatsApp groups...</div>';
+
+    try{
+
+        const response =
+            await fetch('/api/groups');
+
+        const data =
+            await response.json();
+
+        if(!response.ok){
+
+            throw new Error(
+                data.error ||
+                'Unable to load groups'
+            );
+
+        }
+
+        groups =
+            Array.isArray(data)
+                ? data
+                : (data.groups || []);
+
+        renderGroups(groups);
+
+        document.getElementById('groupsMetric')
+            .textContent =
+            formatNumber(groups.length);
+
+    }catch(error){
+
+        console.error(error);
+
+        list.innerHTML =
+            '<div class="loading">' +
+            escapeHtml(error.message) +
+            '</div>';
+
+    }
+
+}
+
+
+function renderGroups(items){
+
+    const list =
+        document.getElementById('groupsList');
+
+    if(!items.length){
+
+        list.innerHTML =
+            '<div class="loading">No WhatsApp groups found.</div>';
+
+        return;
+    }
+
+    list.innerHTML =
+        items.map(group => {
+
+            const active =
+                selectedGroup &&
+                selectedGroup.jid === group.jid
+                    ? 'active'
+                    : '';
+
+            return \`
+                <div
+                    class="group-item \${active}"
+                    onclick="selectGroup('\${escapeJs(group.jid)}')"
+                >
+                    <div class="group-name">
+                        \${escapeHtml(group.name || group.jid)}
+                    </div>
+
+                    <div class="group-meta">
+                        \${formatNumber(group.participants || 0)}
+                        participants
+                    </div>
+                </div>
+            \`;
+
+        }).join('');
+
+}
+
+
+function escapeJs(value){
+
+    return String(value || '')
+        .replace(/\\\\/g,'\\\\\\\\')
+        .replace(/'/g,"\\\\'")
+        .replace(/"/g,'&quot;')
+        .replace(/\\n/g,'\\\\n')
+        .replace(/\\r/g,'\\\\r');
+
+}
+
+
+function filterGroups(){
+
+    const query =
+        document.getElementById('groupSearch')
+            .value
+            .trim()
+            .toLowerCase();
+
+    const filtered =
+        groups.filter(group =>
+            String(group.name || group.jid)
+                .toLowerCase()
+                .includes(query)
+        );
+
+    renderGroups(filtered);
+
+}
+
+
+/* ============================================================
+   SELECT GROUP
+============================================================ */
+
+async function selectGroup(jid){
+
+    selectedGroup =
+        groups.find(group =>
+            group.jid === jid
+        ) || {
+            jid,
+            name: jid
+        };
+
+    document.getElementById('conversationName')
+        .textContent =
+        selectedGroup.name || jid;
+
+    document.getElementById('conversationMeta')
+        .textContent =
+        formatNumber(
+            selectedGroup.participants || 0
+        ) +
+        ' participants';
+
+    document.getElementById('messageInput')
+        .disabled = false;
+
+    document.getElementById('sendButton')
+        .disabled = false;
+
+    document.getElementById('chatWorkspace')
+        .classList.add('mobile-conversation');
+
+    renderGroups(
+        groups.filter(group => {
+
+            const query =
+                document.getElementById('groupSearch')
+                    .value
+                    .trim()
+                    .toLowerCase();
+
+            return String(group.name || group.jid)
+                .toLowerCase()
+                .includes(query);
+
+        })
+    );
+
+    await loadMessages();
+
+    startMessagePolling();
+
+}
+
+
+/* ============================================================
+   MESSAGES
+============================================================ */
+
+async function loadMessages(){
+
+    if(!selectedGroup){
+        return;
+    }
+
+    try{
+
+        const response =
+            await fetch(
+                '/api/groups/' +
+                encodeURIComponent(
+                    selectedGroup.jid
+                ) +
+                '/messages'
+            );
+
+        const data =
+            await response.json();
+
+        if(!response.ok){
+
+            throw new Error(
+                data.error ||
+                'Unable to load messages'
+            );
+
+        }
+
+        renderMessages(
+            Array.isArray(data)
+                ? data
+                : (data.messages || [])
+        );
+
+    }catch(error){
+
+        console.error(error);
+
+        document.getElementById('messages')
+            .innerHTML =
+            '<div class="empty">' +
+            escapeHtml(error.message) +
+            '</div>';
+
+    }
+
+}
+
+
+function renderMessages(messages){
+
+    const box =
+        document.getElementById('messages');
+
+    if(!messages.length){
+
+        box.innerHTML =
+            '<div class="empty">' +
+            'No stored messages for this group yet.' +
+            '</div>';
+
+        return;
+    }
+
+    box.innerHTML =
+        messages.map(message => {
+
+            const outgoing =
+                message.direction === 'outgoing';
+
+            return \`
+                <div class="message \${outgoing ? 'outgoing' : 'incoming'}">
+
+                    \${!outgoing && message.senderName
+                        ? \`
+                            <div class="sender">
+                                \${escapeHtml(message.senderName)}
+                            </div>
+                          \`
+                        : ''
+                    }
+
+                    <div>
+                        \${escapeHtml(message.text || '')}
+                    </div>
+
+                    <div class="message-time">
+                        \${formatMessageTime(message.timestamp)}
+                    </div>
+
+                </div>
+            \`;
+
+        }).join('');
+
+    box.scrollTop =
+        box.scrollHeight;
+
+}
+
+
+function startMessagePolling(){
+
+    stopMessagePolling();
+
+    messageTimer =
+        setInterval(
+            loadMessages,
+            2500
+        );
+
+}
+
+
+function stopMessagePolling(){
+
+    if(messageTimer){
+
+        clearInterval(messageTimer);
+
+        messageTimer = null;
+
+    }
+
+}
+
+
+/* ============================================================
+   SEND MESSAGE
+============================================================ */
+
+async function sendMessage(){
+
+    if(!selectedGroup){
+        return;
+    }
+
+    const input =
+        document.getElementById('messageInput');
+
+    const button =
+        document.getElementById('sendButton');
+
+    const text =
+        input.value.trim();
+
+    if(!text){
+        return;
+    }
+
+    input.disabled = true;
+    button.disabled = true;
+
+    try{
+
+        const response =
+            await fetch(
+                '/api/groups/' +
+                encodeURIComponent(
+                    selectedGroup.jid
+                ) +
+                '/messages',
+                {
+                    method:'POST',
+                    headers:{
+                        'Content-Type':'application/json'
+                    },
+                    body:JSON.stringify({
+                        text
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if(!response.ok){
+
+            throw new Error(
+                data.error ||
+                'Unable to send message'
+            );
+
+        }
+
+        input.value = '';
+
+        await loadMessages();
+
+    }catch(error){
+
+        console.error(error);
+
+        alert(error.message);
+
+    }finally{
+
+        input.disabled = false;
+        button.disabled = false;
+
+        input.focus();
+
+    }
+
+}
+
+
+document.getElementById('messageInput')
+    .addEventListener('keydown',event => {
+
+        if(event.key === 'Enter'){
+
+            event.preventDefault();
+
+            sendMessage();
+
+        }
+
+    });
+
+
+/* ============================================================
+   METRICS
+============================================================ */
+
+async function loadMetrics(){
+
+    try{
+
+        const response =
+            await fetch('/api/metrics');
+
+        const data =
+            await response.json();
+
+        if(!response.ok){
+            return;
+        }
+
+        document.getElementById('messagesMetric')
+            .textContent =
+            formatNumber(
+                data.messages ??
+                data.totalMessages ??
+                0
+            );
+
+        document.getElementById('aiMetric')
+            .textContent =
+            formatNumber(
+                data.aiTasks ??
+                data.ai ??
+                0
+            );
+
+        document.getElementById('commandsMetric')
+            .textContent =
+            formatNumber(
+                data.commands ??
+                0
+            );
+
+        if(
+            typeof data.groups !== 'undefined'
+        ){
+
+            document.getElementById('groupsMetric')
+                .textContent =
+                formatNumber(data.groups);
+
+        }
+
+    }catch(error){
+
+        console.error(
+            'Metrics error:',
+            error
+        );
+
+    }
+
+}
+
+
+/* ============================================================
+   STATUS
+============================================================ */
+
+async function loadStatus(){
+
+    try{
+
+        const response =
+            await fetch('/api/status');
+
+        const data =
+            await response.json();
+
+        const statusText =
+            document.getElementById('statusText');
+
+        const status =
+            document.getElementById('systemStatus');
+
+        const connected =
+            Boolean(
+                data.connected ||
+                data.online ||
+                data.status === 'connected'
+            );
+
+        if(connected){
+
+            statusText.textContent =
+                'SYSTEM ONLINE';
+
+            status.style.color =
+                '#7dffb3';
+
+        }else{
+
+            statusText.textContent =
+                'SYSTEM OFFLINE';
+
+            status.style.color =
+                '#ff8198';
+
+        }
+
+    }catch(error){
+
+        document.getElementById('statusText')
+            .textContent =
+            'SYSTEM OFFLINE';
+
+    }
+
+}
+
+
+/* ============================================================
+   MOCK PROCESSING GRAPH
+   This intentionally remains simulated.
+============================================================ */
+
+const graphPoints =
+    Array.from(
+        {length:45},
+        () => 25 + Math.random() * 55
+    );
+
+
+function updateGraph(){
+
+    for(let i = 0; i < graphPoints.length - 1; i++){
+
+        graphPoints[i] =
+            graphPoints[i + 1];
+
+    }
+
+    const last =
+        graphPoints[graphPoints.length - 1];
+
+    let next =
+        last +
+        (Math.random() - .5) * 28;
+
+    next =
+        Math.max(
+            12,
+            Math.min(90,next)
+        );
+
+    graphPoints[graphPoints.length - 1] =
+        next;
+
+    const width = 1000;
+    const height = 230;
+
+    const step =
+        width /
+        (graphPoints.length - 1);
+
+    let line = '';
+
+    graphPoints.forEach((value,index) => {
+
+        const x =
+            index * step;
+
+        const y =
+            height -
+            (value / 100) * height;
+
+        line +=
+            (index === 0 ? 'M' : 'L') +
+            x +
+            ' ' +
+            y +
+            ' ';
+
+    });
+
+    const area =
+        line +
+        'L ' +
+        width +
+        ' ' +
+        height +
+        ' L 0 ' +
+        height +
+        ' Z';
+
+    document.getElementById('graphLine')
+        .setAttribute('d',line);
+
+    document.getElementById('graphArea')
+        .setAttribute('d',area);
+
+}
+
+
+updateGraph();
+
+setInterval(
+    updateGraph,
+    700
+);
+
+
+/* ============================================================
+   START DASHBOARD POLLING
+============================================================ */
+
+loadMetrics();
+loadStatus();
+
+metricsTimer =
+    setInterval(
+        loadMetrics,
+        3000
+    );
+
+statusTimer =
+    setInterval(
+        loadStatus,
+        5000
+    );
+
 </script>
 
 </body>
@@ -3033,45 +5236,6 @@ async function getPair(){
 `);
 });
 
-
-// ---------------- CHAT ----------------
-app.get('/chat', (req, res) => {
-    res.send(`
-<html>
-<head>
-<title>Chat</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-body{margin:0;font-family:sans-serif;display:flex;flex-direction:column;height:100vh;}
-header{background:#002b5c;color:white;padding:15px;text-align:center;}
-#box{flex:1;background:#e5ddd5;padding:20px;overflow-y:auto;}
-.inp{padding:20px;background:white;display:flex;gap:10px;}
-input{flex:1;padding:12px;border-radius:20px;border:1px solid #ddd;}
-</style>
-</head>
-<body>
-
-<header>JARVIS CHAT</header>
-
-<div id="box">
-<p style="background:white;padding:10px;border-radius:8px;display:inline-block;">
-Hello Admin
-</p>
-</div>
-
-<div class="inp">
-<input placeholder="Type...">
-<button>Send</button>
-</div>
-
-<script>
-if(!localStorage.getItem('userName')) window.location.href='/login';
-</script>
-
-</body>
-</html>
-`);
-});    
 // ... (rest of your code above)
 
 // ---------------- PAIR ----------------
@@ -3122,13 +5286,13 @@ app.post("/payment-success", express.json(), async (req, res) => {
         const studentJid = `${phone}@s.whatsapp.net`;
         const paidClassGroupLink = "https://chat.whatsapp.com/JC7W3YORbIr4GtoktECpaU";
 
-        const activationNotice = 
-            `🎉 *FLEXI TUTORS PAYSTACK COMPLIANCE* 🎓\n\n` +
-            `Hello @\( {phone}, your digital payment verification tracking for * \){plan}* is completely successful!\n\n` +
-            `🚀 Premium system access tokens have been deployed straight to your mobile number profile.\n\n` +
-            `👇 *Click the direct link below to jump into the Paid Lectures Group right away:* \n` +
-            `${paidClassGroupLink}\n\n` +
-            `Welcome to the inner circle! Let's get you ready to clear those boards!`;
+       const activationNotice = 
+    `🎉 *FLEXI TUTORS PAYSTACK COMPLIANCE* 🎓\n\n` +
+    `Hello @${phone}, your digital payment verification tracking for *${plan}* is completely successful!\n\n` +
+    `🚀 Premium system access tokens have been deployed straight to your mobile number profile.\n\n` +
+    `👇 *Click the direct link below to jump into the Paid Lectures Group right away:* \n` +
+    `${paidClassGroupLink}\n\n` +
+    `Welcome to the inner circle! Let's get you ready to clear those boards!`;
 
         await sock.sendMessage(studentJid, { 
             text: activationNotice,
