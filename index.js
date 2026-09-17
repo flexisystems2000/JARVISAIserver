@@ -1182,37 +1182,33 @@ if (hasReaction) {
     }
         
 
-// =========================
-// GROUP METADATA / STAFF CHECK (REAL-TIME REFRESH FIX)
-// =========================
-let metadata;
-let isStaff = isOwner;
+    // =========================
+    // GROUP METADATA / STAFF CHECK (FIXED)
+    // =========================
+    let metadata;
+    let isStaff = isOwner;
 
-if (jid.endsWith('@g.us')) {
-    try {
-        metadata = groupCache.get(jid);
+    if (jid.endsWith('@g.us')) {
+        try {
+            metadata = groupCache.get(jid);
 
-        // Always fetch fresh metadata if cache is older than 5 mins, 
-        // OR force an immediate re-fetch if someone attempts an administrative action
-        const isTryingAdminAction = ["!kick", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
+            if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000) {
+                metadata = await sock.groupMetadata(jid);
+                metadata.lastFetch = Date.now();
+                groupCache.set(jid, metadata);
+            }
 
-        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000 || isTryingAdminAction) {
-            metadata = await sock.groupMetadata(jid);
-            metadata.lastFetch = Date.now();
-            groupCache.set(jid, metadata);
+            const admins =
+                (metadata.participants || [])
+                    .filter(p => p.admin)
+                    .map(p => p.id);
+
+            isStaff = isOwner || admins.includes(sender);
+
+        } catch (err) {
+            isStaff = isOwner;
         }
-
-        const admins =
-            (metadata.participants || [])
-                .filter(p => p.admin)
-                .map(p => p.id);
-
-        isStaff = isOwner || admins.includes(sender);
-
-    } catch (err) {
-        isStaff = isOwner;
     }
-}
 
     // =========================
     // WATCHDOG (FIXED SAFETY + LOWER FALSE POSITIVES)
