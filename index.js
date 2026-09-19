@@ -1474,6 +1474,10 @@ if (hasReaction) {
     }
         
 
+    let command = text.split(/ +/)[0];
+const args = body.trim().split(/ +/).slice(1);
+
+
 // =========================
 // GROUP METADATA / STAFF CHECK (REAL-TIME REFRESH FIX)
 // =========================
@@ -1553,9 +1557,6 @@ isStaff =
             return;
         }
     }
-
-    let command = text.split(/ +/)[0];
-const args = body.trim().split(/ +/).slice(1);
 
 // =========================
 // NATURAL-LANGUAGE  SYSTEM
