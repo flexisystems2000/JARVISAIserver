@@ -3033,6 +3033,7 @@ if (command === "!reset") {
         mentions: [target]
     }, { quoted: m });
 }
+}
 });
 }
 
