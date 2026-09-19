@@ -453,20 +453,36 @@ async function startJARVIS() {
 
                 const userTag = num.split('@')[0];
 
-                if (anu.action === 'add') {
-                    await sock.sendMessage(jid, {
-                        text:
-`👋 @${userTag}
+if (anu.action === 'add') {
+    await sock.sendMessage(jid, {
+        text:
+`👋 Hi @${userTag}, welcome to *${groupName}*! 🎉
 
-🤖 *Welcome to ${groupName}*
+This group was created for JAMB, WAEC & JUPEB candidates.
 
-Success in your Post-UTME starts here.
+📌 *GROUP RULES*
+• Don't post links.
+• Abusive words are not allowed.
+• Respect all members and admins.
+• No spam or unnecessary messages.
+• Keep discussions relevant to the purpose of the group.
 
-_Powered by ${POWERED_BY}_ 🚀`,
-                        mentions: [num]
-                    });
+📚 *JOIN YOUR DEPARTMENT GROUP*
 
-                } else if (anu.action === 'remove') {
+🔬 *SCIENCE DEPARTMENT*
+https://chat.whatsapp.com/FE7tVCSQgim7uUJouZqtmy
+
+💼 *COMMERCIAL DEPARTMENT*
+https://chat.whatsapp.com/FnOcPasgCi6LuMCSheF8LT
+
+📖 *ART DEPARTMENT*
+https://chat.whatsapp.com/CrrJvOI3mz3JhqMNBd7bVy
+
+🤖 *JARVIS AI*
+_Powered by ${POWERED_BY}_`,
+        mentions: [num]
+    });
+} else if (anu.action === 'remove') {
                     await sock.sendMessage(jid, {
                         text:
 `👋 Goodbye @${userTag}
@@ -667,6 +683,241 @@ console.log(
         const text = body.toLowerCase().trim();
     const isOwner = sender.includes(OWNER_NUMBER);
      
+  
+    // ============================================================
+// 🗓️ PHASE 3 — DEPARTMENT TIMETABLE SYSTEM
+// ============================================================
+
+const departmentTimetables = {
+    science: {
+        name: "SCIENCE DEPARTMENT",
+        emoji: "🔬",
+        image: "https://i.postimg.cc/9f7K6kfy/IMG-20260920-004437-377.png"
+    },
+
+    commercial: {
+        name: "COMMERCIAL DEPARTMENT",
+        emoji: "💼",
+        image: "https://i.postimg.cc/rpr3BHp1/IMG-20260920-004448-295.png"
+    },
+
+    art: {
+        name: "ART DEPARTMENT",
+        emoji: "📖",
+        image: "https://i.postimg.cc/MGQNCLGb/IMG-20260920-004500-164.png"
+    }
+};
+
+const timetableText = body.trim().toLowerCase();
+
+let selectedDepartment = null;
+
+// ============================================================
+// 🔬 SCIENCE
+// ============================================================
+if (
+    /\bscience\b/.test(timetableText) &&
+    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
+) {
+    selectedDepartment = departmentTimetables.science;
+}
+
+// ============================================================
+// 💼 COMMERCIAL
+// ============================================================
+else if (
+    /\b(commercial|commerce)\b/.test(timetableText) &&
+    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
+) {
+    selectedDepartment = departmentTimetables.commercial;
+}
+
+// ============================================================
+// 📖 ART
+// ============================================================
+else if (
+    /\b(art|arts)\b/.test(timetableText) &&
+    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
+) {
+    selectedDepartment = departmentTimetables.art;
+}
+
+// ============================================================
+// 🗓️ GENERAL TIMETABLE REQUEST
+// ============================================================
+
+const isGeneralTimetableRequest = [
+    /^!timetable$/i,
+    /^timetable$/i,
+    /^show timetable$/i,
+    /^show me the timetable$/i,
+    /^send timetable$/i,
+    /^send me the timetable$/i,
+    /^what is the timetable\??$/i,
+    /^what's the timetable\??$/i,
+    /^what is the schedule\??$/i,
+    /^class timetable$/i
+].some(pattern => pattern.test(timetableText));
+
+if (isGeneralTimetableRequest && !selectedDepartment) {
+    await sendWithTyping(
+        jid,
+        {
+            text:
+`🗓️ *TUTORIAL TIMETABLE*
+
+Please specify your department:
+
+🔬 *Science Department*
+💼 *Commercial Department*
+📖 *Art Department*
+
+You can ask:
+
+• "Science timetable"
+• "Commercial timetable"
+• "Art timetable"
+
+🤖 *JARVIS AI*
+_Powered by ${POWERED_BY}_`
+        },
+        m
+    );
+
+    return;
+}
+
+// ============================================================
+// 📸 SEND DEPARTMENT TIMETABLE
+// ============================================================
+
+if (selectedDepartment) {
+    try {
+        const response = await axios.get(
+            selectedDepartment.image,
+            {
+                responseType: "arraybuffer"
+            }
+        );
+
+        await sendWithTyping(
+            jid,
+            {
+                image: Buffer.from(response.data),
+                caption:
+`🗓️ *${selectedDepartment.emoji} ${selectedDepartment.name}*
+
+📚 Here is your tutorial timetable.
+
+🤖 *JARVIS AI*
+_Powered by ${POWERED_BY}_`
+            },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+        console.log(
+            "❌ Timetable System Error:",
+            err.message
+        );
+
+        await sock.sendMessage(
+            jid,
+            {
+                text:
+`❌ Sorry, I couldn't load the *${selectedDepartment.name}* timetable right now.
+
+Please try again later.`
+            },
+            { quoted: m }
+        );
+
+        return;
+    }
+}
+
+    // ============================================================
+// 🕐 JARVIS TIME SYSTEM — AFRICA/LAGOS
+// ------------------------------------------------------------
+// Uses the server's clock and converts it to Nigeria time.
+// No external API call is required.
+// ============================================================
+
+const timeQueryPatterns = [
+    /^!time$/i,
+    /^time$/i,
+    /^time now$/i,
+    /^what time is it\??$/i,
+    /^what's the time\??$/i,
+    /^what is the time\??$/i,
+    /^what is the current time\??$/i,
+    /^what's the current time\??$/i,
+    /^current time\??$/i,
+    /^tell me the time\??$/i,
+    /^jarvis,?\s+what time is it\??$/i,
+    /^jarvis,?\s+what's the time\??$/i,
+    /^jarvis,?\s+what is the time\??$/i
+];
+
+const isTimeQuery = timeQueryPatterns.some(
+    pattern => pattern.test(body.trim())
+);
+
+if (isTimeQuery) {
+    try {
+        const now = new Date();
+
+        const nigeriaTime = now.toLocaleTimeString("en-NG", {
+            timeZone: "Africa/Lagos",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: true
+        });
+
+        const nigeriaDate = now.toLocaleDateString("en-NG", {
+            timeZone: "Africa/Lagos",
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric"
+        });
+
+        const timeReply =
+`🕐 *Current Time*
+
+🇳🇬 *Nigeria:* ${nigeriaTime}
+
+📅 ${nigeriaDate}
+
+🤖 *JARVIS AI*
+_Powered by ${POWERED_BY}_`;
+
+        await sendWithTyping(
+            jid,
+            { text: timeReply },
+            m
+        );
+
+        return;
+
+    } catch (err) {
+        console.log("❌ Time System Error:", err.message);
+
+        await sock.sendMessage(
+            jid,
+            {
+                text: "❌ I couldn't determine the current time."
+            },
+            { quoted: m }
+        );
+
+        return;
+    }
+}
+
     // ============================================================
 // 🧠 JARVIS AI — PHASE 4 MEDIA INTELLIGENCE
 // Images • Documents • PDFs • Videos • Audio • View Once
@@ -2462,37 +2713,6 @@ if (command === "!vv" || text === "vv" || text === "save view once") {
     await vvCommand(sock, jid, m);
     return;
 }
-
-    
-// --- PUBLIC COMMAND: TIMETABLE ---
-if (command === "!timetable") {
-    try {
-        const timetableUrl = 'https://i.postimg.cc/vTyBtTzS/IMG-20260511-WA0031.jpg';
-
-        const response = await axios.get(timetableUrl, {
-            responseType: 'arraybuffer'
-        });
-
-        await sock.sendMessage(jid, {
-            image: Buffer.from(response.data),
-            caption:
-                `🗓️ *POST UTME TUTORIALS 2025/2026*\n\n` +
-                `✅ *Starts:* 11th July\n` +
-                `💰 *Fee:* ₦6,000 monthly\n\n` +
-                `📢 Join WhatsApp group:\n` +
-                `https://chat.whatsapp.com/KoI4QtlwggOFtGyoE0MYY4\n\n` +
-                `_Powered by ${POWERED_BY}_`
-        });
-
-    } catch (err) {
-        console.log("Timetable Error:", err.message);
-
-        await sock.sendMessage(jid, {
-            text: "❌ Failed to load timetable image."
-        });
-    }
-}
-
 
         
     // --- LIST ADMINS COMMAND (Everyone can use) ---
