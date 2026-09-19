@@ -1492,7 +1492,7 @@ if (jid.endsWith('@g.us')) {
         // OR force an immediate re-fetch if someone attempts an administrative action
         const isTryingAdminAction = ["!kick", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
 
-        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 300000 || isTryingAdminAction) {
+        if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000 || isTryingAdminAction) {
             metadata = await sock.groupMetadata(jid);
             metadata.lastFetch = Date.now();
             groupCache.set(jid, metadata);
