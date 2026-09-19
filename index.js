@@ -3,7 +3,8 @@ const {
     useMultiFileAuthState, 
     fetchLatestBaileysVersion, 
     DisconnectReason,
-    downloadContentFromMessage
+    downloadContentFromMessage,
+    areJidsSameUser
 } = require('@whiskeysockets/baileys');
 
 const { Boom } = require('@hapi/boom');
@@ -1493,16 +1494,18 @@ if (jid.endsWith('@g.us')) {
             groupCache.set(jid, metadata);
         }
 
-        const admins =
-            (metadata.participants || [])
-                .filter(p => p.admin)
-                .map(p => p.id);
+        const admins = (metadata.participants || [])
+    .filter(p => p.admin)
+    .map(p => p.id)
+    .filter(Boolean);
 
-        isStaff = isOwner || admins.includes(sender);
+isStaff =
+    isOwner ||
+    admins.some(adminJid => areJidsSameUser(adminJid, sender));
 
     } catch (err) {
-        isStaff = isOwner;
-    }
+    console.log("❌ STAFF CHECK ERROR:", err.message);
+    isStaff = isOwner;
 }
 
     // =========================
