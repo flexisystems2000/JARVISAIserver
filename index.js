@@ -5505,25 +5505,75 @@ app.get('/pair', async (req, res) => {
 
 
 // 🌟🌟🌟 PASTE THE WEBHOOK ROUTE BLOCK DIRECTLY HERE 🌟🌟🌟
-app.post('/webhook/trigger-quiz', express.json(), async (req, res) => {
-    try {
-        const { subject, quizText, answers } = req.body;
-        
-        if (!subject || !answers) {
-            return res.status(400).json({ success: false, error: "Incomplete quiz data payload" });
-        }
+app.post(
+    "/webhook/trigger-quiz",
+    express.json(),
+    async (req, res) => {
 
-        const trigger = await quizEngine.fireQuiz(sock, { subject, quizText, answers });
-        
-        if (trigger.success) {
-            res.json({ success: true, message: "Quiz pushed to group successfully" });
-        } else {
-            res.status(500).json({ success: false, error: trigger.error });
+        try {
+
+            const {
+                subject,
+                groupJid
+            } = req.body;
+
+
+            if (!subject) {
+
+                return res.status(400).json({
+                    success: false,
+                    error: "Quiz subject is required"
+                });
+            }
+
+
+            const targetGroup =
+                groupJid ||
+                "12036342497643845@g.us";
+
+
+            const result =
+                await quizEngine.fireQuiz(
+                    sock,
+                    {
+                        subject,
+                        groupJid: targetGroup
+                    }
+                );
+
+
+            if (!result.success) {
+
+                return res.status(400).json(
+                    result
+                );
+            }
+
+
+            return res.json({
+                success: true,
+                message:
+                    "Quiz started successfully",
+                subject: result.subject,
+                groupJid: result.groupJid
+            });
+
+
+        } catch (err) {
+
+            console.log(
+                "❌ Trigger Quiz Error:",
+                err.message
+            );
+
+
+            return res.status(500).json({
+                success: false,
+                error: err.message
+            });
         }
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
     }
-});
+);
 
 // 🚀 PASTE THE NEW ROUTE RIGHT HERE:
 
