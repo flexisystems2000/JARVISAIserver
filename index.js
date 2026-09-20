@@ -448,14 +448,39 @@ async function startJARVIS() {
 
             const groupName = metadata.subject;
 
-            for (const num of anu.participants) {
-                if (num === sock.user.id.split(':')[0] + '@s.whatsapp.net') continue;
+             for (const participant of anu.participants) {
 
-                const userTag = num.split('@')[0];
+    // Baileys may provide a participant object
+    // rather than a plain JID string.
+    const participantJid =
+        typeof participant === 'string'
+            ? participant
+            : participant?.id || participant?.phoneNumber || participant?.lid;
 
-if (anu.action === 'add') {
-    await sock.sendMessage(jid, {
-        text:
+    if (!participantJid) {
+        console.log("⚠️ Invalid participant received:", participant);
+        continue;
+    }
+
+    // Don't greet JARVIS itself
+    const botJid = sock.user?.id?.split(':')[0];
+
+    if (
+        botJid &&
+        (
+            participantJid === `${botJid}@s.whatsapp.net` ||
+            participantJid === `${botJid}@lid`
+        )
+    ) {
+        continue;
+    }
+
+    const userTag = participantJid.split('@')[0];
+
+    if (anu.action === 'add') {
+
+        await sock.sendMessage(jid, {
+            text:
 `👋 Hi @${userTag}, welcome to *${groupName}*! 🎉
 
 This group was created for JAMB, WAEC & JUPEB candidates.
@@ -480,18 +505,20 @@ https://chat.whatsapp.com/CrrJvOI3mz3JhqMNBd7bVy
 
 🤖 *JARVIS AI*
 _Powered by ${POWERED_BY}_`,
-        mentions: [num]
-    });
-} else if (anu.action === 'remove') {
-                    await sock.sendMessage(jid, {
-                        text:
+            mentions: [participantJid]
+        });
+
+    } else if (anu.action === 'remove') {
+
+        await sock.sendMessage(jid, {
+            text:
 `👋 Goodbye @${userTag}
 
 We wish you success ahead from *${groupName}* 🎓`,
-                        mentions: [num]
-                    });
-                }
-            }
+            mentions: [participantJid]
+        });
+    }
+}
         } catch (err) {
             console.log("Automation Error:", err.message);
         }
