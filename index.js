@@ -1756,6 +1756,314 @@ if (hasReaction) {
 const args = body.trim().split(/ +/).slice(1);
 
 
+// ============================================================
+// 🧠 JARVIS LIVE QUIZ COMMAND SYSTEM
+// ------------------------------------------------------------
+// Usage:
+//
+// !quiz Mathematics
+// !quiz English
+// !quiz Chemistry
+// !quiz Physics
+// !quiz Biology
+// !quiz Commerce
+// !quiz Government
+// !quiz Economics
+// !quiz Accounting
+// !quiz Literature in English
+// !quiz Geography
+// !quiz Civic Education
+// !quiz CRK
+// !quiz IRK
+// !quiz Insurance
+// !quiz History
+//
+// The actual subject → ALOC slug mapping is handled by
+// quizEngine.js.
+// ============================================================
+
+if (
+    command === "!quiz"
+) {
+
+    try {
+
+        // ----------------------------------------------------
+        // QUIZ MUST BE STARTED INSIDE A GROUP
+        // ----------------------------------------------------
+
+        if (
+            !jid ||
+            !jid.endsWith("@g.us")
+        ) {
+
+            await sendWithTyping(
+                jid,
+                {
+                    text:
+`❌ *QUIZ COMMAND*
+
+The live quiz can only be started inside a WhatsApp group.
+
+Example:
+
+*!quiz Mathematics*`
+                },
+                m
+            );
+
+            return;
+
+        }
+
+
+        // ----------------------------------------------------
+        // SUBJECT WAS NOT PROVIDED
+        // ----------------------------------------------------
+
+        if (
+            !args.length
+        ) {
+
+            const subjects =
+                quizEngine
+                    .getAvailableSubjects()
+                    .map(
+                        subject =>
+                            `• ${subject.name}`
+                    )
+                    .join("\n");
+
+
+            await sendWithTyping(
+                jid,
+                {
+                    text:
+`🧠 *JARVIS LIVE QUIZ*
+
+Please specify the subject you want to quiz.
+
+📚 *AVAILABLE SUBJECTS*
+
+${subjects}
+
+Example:
+
+*!quiz Mathematics*
+
+*!quiz Government*
+
+*!quiz Literature in English*`
+                },
+                m
+            );
+
+            return;
+
+        }
+
+
+        // ----------------------------------------------------
+        // SUPPORT SUBJECT NAMES CONTAINING SPACES
+        // ----------------------------------------------------
+        //
+        // !quiz Literature in English
+        // !quiz Civic Education
+        // !quiz Financial Accounting
+        //
+        // Everything after !quiz is treated as the
+        // requested subject.
+        // ----------------------------------------------------
+
+        const requestedSubject =
+            args
+                .join(" ")
+                .trim();
+
+
+        console.log(
+            "🧠 QUIZ COMMAND RECEIVED:",
+            requestedSubject
+        );
+
+
+        // ----------------------------------------------------
+        // RESOLVE SUBJECT THROUGH quizEngine.js
+        // ----------------------------------------------------
+
+        const resolvedSubject =
+            quizEngine.resolveSubject(
+                requestedSubject
+            );
+
+
+        if (
+            !resolvedSubject
+        ) {
+
+            const subjects =
+                quizEngine
+                    .getAvailableSubjects()
+                    .map(
+                        subject =>
+                            `• ${subject.name}`
+                    )
+                    .join("\n");
+
+
+            await sendWithTyping(
+                jid,
+                {
+                    text:
+`❌ *UNKNOWN QUIZ SUBJECT*
+
+I couldn't find:
+
+*"${requestedSubject}"*
+
+📚 *AVAILABLE SUBJECTS*
+
+${subjects}
+
+Example:
+
+*!quiz Mathematics*
+
+*!quiz English*
+
+*!quiz Government*`
+                },
+                m
+            );
+
+            return;
+
+        }
+
+
+        // ----------------------------------------------------
+        // START THE QUIZ
+        // ----------------------------------------------------
+
+        await sendWithTyping(
+            jid,
+            {
+                text:
+`⏳ *JARVIS QUIZ SYSTEM*
+
+Preparing *${resolvedSubject.name}* questions...
+
+📚 Subject:
+*${resolvedSubject.name}*
+
+🔗 ALOC:
+\`${resolvedSubject.slug}\`
+
+Please wait...`
+            },
+            m
+        );
+
+
+        const result =
+            await quizEngine.fireQuiz(
+                sock,
+                {
+                    subject:
+                        resolvedSubject.slug,
+
+                    groupJid:
+                        jid
+                }
+            );
+
+
+        // ----------------------------------------------------
+        // QUIZ ENGINE ERROR
+        // ----------------------------------------------------
+
+        if (
+            !result ||
+            !result.success
+        ) {
+
+            console.log(
+                "❌ QUIZ ENGINE FAILED:",
+                result
+            );
+
+
+            await sendWithTyping(
+                jid,
+                {
+                    text:
+`❌ *QUIZ COULD NOT START*
+
+Subject:
+*${resolvedSubject.name}*
+
+Reason:
+${result?.error || "Unknown quiz engine error"}
+
+Please check the ALOC configuration and try again.`
+                },
+                m
+            );
+
+            return;
+
+        }
+
+
+        // ----------------------------------------------------
+        // SUCCESS
+        // ----------------------------------------------------
+        //
+        // fireQuiz() already sends the first question.
+        // We therefore do NOT send another question here.
+        // ----------------------------------------------------
+
+        console.log(
+            `✅ QUIZ STARTED SUCCESSFULLY: ${result.subject} → ${result.subjectSlug}`
+        );
+
+
+        return;
+
+
+    } catch (err) {
+
+        console.log(
+            "❌ QUIZ COMMAND ERROR:",
+            err.message
+        );
+
+
+        await sock.sendMessage(
+            jid,
+            {
+                text:
+`⚠️ *QUIZ SYSTEM ERROR*
+
+Something went wrong while starting the quiz.
+
+Error:
+${err.message}`
+            },
+            {
+                quoted:
+                    m
+            }
+        );
+
+
+        return;
+
+    }
+
+}
+
+
 // =========================
 // GROUP METADATA / STAFF CHECK (REAL-TIME REFRESH FIX)
 // =========================
