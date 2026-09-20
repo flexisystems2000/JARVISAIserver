@@ -74,7 +74,7 @@ async function askAI(prompt, base64Media = null, isPDF = false) {
         };
 
         const res = await axios.post(
-            `https://flexieduconsult-ai-link.onrender.com/${endpoint}`,
+            `https://flexieduconsult-ai-link-wqnb.onrender.com/${endpoint}`,
             payload
         );
 
@@ -3112,7 +3112,7 @@ if (command === "!image") {
 
     try {
         const res = await axios.get(
-            `https://flexieduconsult-ai-link.onrender.com/image?prompt=${encodeURIComponent(prompt)}`
+            `https://flexieduconsult-ai-link-wqnb.onrender.com/image?prompt=${encodeURIComponent(prompt)}`
         );
 
         if (res.data?.success) {
