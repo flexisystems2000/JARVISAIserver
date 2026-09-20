@@ -1,208 +1,290 @@
-const axios = require('axios');
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
-// =====================================================
-// GLOBAL QUIZ STORAGE
-// =====================================================
+const ALOC_URL = "https://questions.aloc.com.ng/api/v2/q";
+const QUIZ_DURATION_MS = 30 * 60 * 1000;
 
-let activeQuiz = {
-    isActive: false,
-    subject: "",
-    answers: [],
-    questions: [],
-    text: "",
-    startedAt: null
-};
+const SCORE_FILE = path.join(__dirname, "scores.json");
 
-// =====================================================
-// STUDENT SESSIONS
-// sender -> { currentQuestionIndex, score }
-// =====================================================
+// Each group has its own active quiz
+const activeQuizzes = new Map();
 
-const quizSessions = new Map();
+// Load saved scores
+let scores = {};
 
-// =====================================================
-// QUIZ SETTINGS
-// =====================================================
-
-const TARGET_GROUP_JID =
-    "12036342497643845@g.us";
-
-const QUIZ_DURATION_MS =
-    30 * 60 * 1000; // 30 Minutes
-
-// =====================================================
-// AUTO QUIZ CLEANUP TIMER
-// =====================================================
-
-setInterval(() => {
-
-    if (
-        activeQuiz.isActive &&
-        activeQuiz.startedAt &&
-        Date.now() - activeQuiz.startedAt >
-        QUIZ_DURATION_MS
-    ) {
-
-        console.log("🛑 Quiz expired automatically.");
-
-        activeQuiz = {
-            isActive: false,
-            subject: "",
-            answers: [],
-            questions: [],
-            text: "",
-            startedAt: null
-        };
-
-        quizSessions.clear();
+try {
+    if (fs.existsSync(SCORE_FILE)) {
+        const raw = fs.readFileSync(SCORE_FILE, "utf8");
+        scores = raw.trim() ? JSON.parse(raw) : {};
     }
+} catch (err) {
+    console.log("⚠️ Quiz score file error:", err.message);
+    scores = {};
+}
 
-}, 60000);
 
-// =====================================================
-// EXTRACT QUESTIONS FROM QUIZ BLOCK
-// =====================================================
+// ===============================
+// SAVE SCORES
+// ===============================
 
-function extractQuestions(quizText) {
-
+async function saveScores() {
     try {
-
-        const cleaned =
-            quizText
-                .replace(/\r/g, "")
-                .trim();
-
-        const matches =
-            cleaned.match(
-                /\d+\.\s[\s\S]*?(?=(\n\d+\.\s)|$)/g
-            );
-
-        return matches || [];
-
-    } catch {
-
-        return [];
+        await fs.promises.writeFile(
+            SCORE_FILE,
+            JSON.stringify(scores, null, 2),
+            "utf8"
+        );
+    } catch (err) {
+        console.log("❌ Quiz score save error:", err.message);
     }
 }
 
-// =====================================================
-// FIRE QUIZ
-// =====================================================
 
-async function fireQuiz(sock, quizData) {
+// ===============================
+// CLEAN HTML
+// ===============================
+
+function cleanHTML(text) {
+    if (!text) return "";
+
+    return String(text)
+        .replace(/<sup>(.*?)<\/sup>/gi, "^($1)")
+        .replace(/<sub>(.*?)<\/sub>/gi, "_($1)")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/?[^>]+>/g, "")
+        .trim();
+}
+
+
+// ===============================
+// NORMALIZE ANSWER
+// ===============================
+
+function normalizeAnswer(answer) {
+    return String(answer || "")
+        .toUpperCase()
+        .trim();
+}
+
+
+// ===============================
+// USER IDENTIFICATION
+// ===============================
+
+function getUserKey(sender) {
+    if (!sender) return null;
+
+    const value = String(sender);
+
+    const phone = value
+        .split("@")[0]
+        .replace(/[^0-9]/g, "");
+
+    return phone || value;
+}
+
+
+function getUserTag(sender) {
+    return String(sender || "").split("@")[0];
+}
+
+
+// ===============================
+// ALOC TOKEN
+// ===============================
+
+function getAlocToken() {
+    return process.env.ALOC_TOKEN || "";
+}
+
+
+// ===============================
+// FETCH QUESTION FROM ALOC
+// ===============================
+
+async function fetchQuiz(subject) {
+
+    const normalizedSubject = String(subject || "")
+        .toLowerCase()
+        .trim();
+
+    if (!normalizedSubject) {
+        throw new Error("Quiz subject is required.");
+    }
+
+    const token = getAlocToken();
+
+    if (!token) {
+        throw new Error(
+            "ALOC_TOKEN is not configured on the server."
+        );
+    }
+
+    const response = await axios.get(ALOC_URL, {
+        params: {
+            subject: normalizedSubject
+        },
+
+        headers: {
+            AccessToken: token
+        },
+
+        timeout: 10000
+    });
+
+    const question = response.data?.data;
+
+    if (!question?.question) {
+        throw new Error(
+            "ALOC returned an empty question."
+        );
+    }
+
+    return question;
+}
+
+
+// ===============================
+// SEND QUESTION
+// ===============================
+
+async function sendQuestion(
+    sock,
+    groupJid,
+    quiz,
+    prefix = ""
+) {
+
+    const questionText = cleanHTML(
+        quiz.question
+    );
+
+    const text =
+`${prefix}🧠 *${String(quiz.subject).toUpperCase()} QUIZ*
+
+${questionText}
+
+A. ${quiz.option?.a || "N/A"}
+B. ${quiz.option?.b || "N/A"}
+C. ${quiz.option?.c || "N/A"}
+D. ${quiz.option?.d || "N/A"}
+
+👉 *Reply with A, B, C or D*
+
+⏰ *Quiz session:* 30 minutes`;
+
+    await sock.sendMessage(
+        groupJid,
+        {
+            text
+        }
+    );
+}
+
+
+// ===============================
+// START QUIZ
+// ===============================
+
+async function fireQuiz(sock, quizData = {}) {
 
     try {
 
         if (!sock) {
-
             return {
                 success: false,
                 error: "WhatsApp socket inactive"
             };
         }
 
-        // =========================
-        // RESET OLD DATA
-        // =========================
+        const subject = String(
+            quizData.subject || "general"
+        )
+            .toLowerCase()
+            .trim();
 
-        quizSessions.clear();
-
-        // =========================
-        // LOAD NEW QUIZ
-        // =========================
-
-        activeQuiz.isActive = true;
-
-        activeQuiz.subject =
-            quizData.subject || "General Quiz";
-
-        activeQuiz.answers =
-            Array.isArray(quizData.answers)
-                ? quizData.answers
-                : [];
-
-        activeQuiz.text =
-            quizData.quizText || "";
-
-        activeQuiz.questions =
-            extractQuestions(
-                activeQuiz.text
-            );
-
-        activeQuiz.startedAt =
-            Date.now();
-
-        // =========================
-        // SAFETY CHECK
-        // =========================
-
-        if (
-            !activeQuiz.answers.length ||
-            !activeQuiz.questions.length
-        ) {
-
-            console.log(
-                "❌ Invalid quiz payload"
-            );
-
+        if (!subject) {
             return {
                 success: false,
-                error: "Invalid quiz payload"
+                error: "Quiz subject is required"
             };
         }
 
-        // =========================
-        // START MESSAGE
-        // =========================
 
-        const startMessage =
-`📚 *${activeQuiz.subject.toUpperCase()} MOCK TEST* 📚
+        const groupJid =
+            quizData.groupJid ||
+            quizData.targetGroupJid ||
+            "12036342497643845@g.us";
 
-🏁 *THE QUIZ HAS STARTED*
 
-🧠 Total Questions:
-${activeQuiz.answers.length}
+        // Don't start another quiz in same group
+        if (activeQuizzes.has(groupJid)) {
 
-⏰ Duration:
-30 Minutes
+            return {
+                success: false,
+                error: "A quiz is already active in this group."
+            };
+        }
 
-📌 HOW TO ANSWER:
-Simply reply with:
-A
-B
-C
-or
-D
 
-⚠️ JARVIS will mark your answer instantly and move you to the next question automatically.
+        // Get first question
+        const question =
+            await fetchQuiz(subject);
 
-━━━━━━━━━━━━━━━
 
-${activeQuiz.questions[0]}`;
-
-        // =========================
-        // SEND TO GROUP
-        // =========================
-
-        await sock.sendMessage(
-            TARGET_GROUP_JID,
+        activeQuizzes.set(
+            groupJid,
             {
-                text: startMessage
+                subject,
+
+                question:
+                    cleanHTML(
+                        question.question
+                    ),
+
+                option:
+                    question.option || {},
+
+                answer:
+                    normalizeAnswer(
+                        question.answer
+                    ),
+
+                solution:
+                    cleanHTML(
+                        question.solution
+                    ),
+
+                startedAt:
+                    Date.now()
             }
         );
 
-        console.log(
-            `✅ Quiz Broadcasted: ${activeQuiz.subject}`
+
+        await sendQuestion(
+            sock,
+            groupJid,
+            activeQuizzes.get(groupJid),
+            "🏁 *QUIZ STARTED*\n\n"
         );
 
+
+        console.log(
+            `✅ Quiz started: ${subject} → ${groupJid}`
+        );
+
+
         return {
-            success: true
+            success: true,
+            subject,
+            groupJid
         };
 
     } catch (err) {
 
         console.log(
-            "❌ fireQuiz Error:",
+            "❌ Quiz start error:",
             err.message
         );
 
@@ -213,9 +295,10 @@ ${activeQuiz.questions[0]}`;
     }
 }
 
-// =====================================================
-// LIVE MARKING ENGINE
-// =====================================================
+
+// ===============================
+// LIVE ANSWER MARKING
+// ===============================
 
 async function handleLiveMarking(
     sock,
@@ -227,219 +310,212 @@ async function handleLiveMarking(
 
     try {
 
-        // =========================
-        // QUIZ ACTIVE CHECK
-        // =========================
+        const quiz =
+            activeQuizzes.get(jid);
 
-        if (!activeQuiz.isActive) {
+
+        // No quiz in this group
+        if (!quiz) {
             return false;
         }
 
-        // =========================
-        // GROUP CHECK
-        // =========================
 
-        if (jid !== TARGET_GROUP_JID) {
-            return false;
-        }
-
-        // =========================
-        // CLEAN INPUT
-        // =========================
-
-        const cleanInput =
-            incomingText
-                .toUpperCase()
-                .trim();
-
-        // =========================
-        // VALID OPTION CHECK
-        // =========================
-
+        // Check expiration
         if (
-            !["A", "B", "C", "D"]
-                .includes(cleanInput)
+            quiz.startedAt &&
+            Date.now() - quiz.startedAt >
+                QUIZ_DURATION_MS
         ) {
 
-            return false;
-        }
+            activeQuizzes.delete(jid);
 
-        // =========================
-        // CREATE SESSION
-        // =========================
+            await sock.sendMessage(
+                jid,
+                {
+                    text:
+`⏰ *QUIZ SESSION EXPIRED*
 
-        if (!quizSessions.has(sender)) {
-
-            quizSessions.set(sender, {
-
-                currentQuestionIndex: 0,
-
-                score: 0
-            });
-        }
-
-        const session =
-            quizSessions.get(sender);
-
-        const currentIndex =
-            session.currentQuestionIndex;
-
-        // =========================
-        // QUIZ FINISHED
-        // =========================
-
-        if (
-            currentIndex >=
-            activeQuiz.answers.length
-        ) {
+The 30-minute quiz session has ended.`
+                },
+                {
+                    quoted: msgObj
+                }
+            );
 
             return true;
         }
 
-        // =========================
-        // ANSWER CHECK
-        // =========================
+
+        const answer =
+            normalizeAnswer(
+                incomingText
+            );
+
+
+        // Only A-D should be treated as quiz answers
+        if (
+            !["A", "B", "C", "D"]
+                .includes(answer)
+        ) {
+            return false;
+        }
+
+
+        const user =
+            getUserKey(sender);
+
+
+        if (!user) {
+            return false;
+        }
+
 
         const correctAnswer =
-            activeQuiz.answers[currentIndex]
-                ?.toUpperCase()
-                ?.trim();
+            normalizeAnswer(
+                quiz.answer
+            );
 
-        const userTag =
-            sender.split("@")[0];
 
-        let feedback = "";
+        // ===============================
+        // CORRECT
+        // ===============================
 
         if (
-            cleanInput === correctAnswer
+            answer === correctAnswer
         ) {
 
-            session.score++;
+            scores[user] =
+                (scores[user] || 0) + 1;
 
-            feedback =
-`✅ *@${userTag}* CORRECT!
 
-🎯 Your Answer:
-${cleanInput}`;
+            await saveScores();
+
+
+            await sock.sendMessage(
+                jid,
+                {
+                    text:
+`🎉 *@${getUserTag(sender)}* CORRECT!
+
+🏆 +1 Point
+
+📊 Total Score:
+*${scores[user]}*`,
+                    mentions: [sender]
+                },
+                {
+                    quoted: msgObj
+                }
+            );
+
         }
+
+
+        // ===============================
+        // WRONG
+        // ===============================
 
         else {
 
-            feedback =
-`❌ *@${userTag}* INCORRECT
+            await sock.sendMessage(
+                jid,
+                {
+                    text:
+`❌ *@${getUserTag(sender)}* INCORRECT
 
 👉 Your Answer:
-${cleanInput}
+*${answer}*
 
 ✅ Correct Answer:
-${correctAnswer}`;
+*${correctAnswer}*
+
+📖 Solution:
+${quiz.solution || "No solution provided."}`,
+                    mentions: [sender]
+                },
+                {
+                    quoted: msgObj
+                }
+            );
         }
 
-        // =========================
-        // MOVE TO NEXT QUESTION
-        // =========================
 
-        session.currentQuestionIndex++;
+        // ===============================
+        // LOAD NEXT QUESTION
+        // ===============================
 
-        // =========================
-        // MORE QUESTIONS LEFT
-        // =========================
+        const subject =
+            quiz.subject;
 
-        if (
-            session.currentQuestionIndex <
-            activeQuiz.questions.length
-        ) {
 
-            const nextQuestion =
-                activeQuiz.questions[
-                    session.currentQuestionIndex
-                ];
+        try {
 
-            feedback +=
-`\n\n━━━━━━━━━━━━━━━
+            const next =
+                await fetchQuiz(subject);
 
-📌 NEXT QUESTION:
 
-${nextQuestion}`;
+            activeQuizzes.set(
+                jid,
+                {
+                    subject,
 
+                    question:
+                        cleanHTML(
+                            next.question
+                        ),
+
+                    option:
+                        next.option || {},
+
+                    answer:
+                        normalizeAnswer(
+                            next.answer
+                        ),
+
+                    solution:
+                        cleanHTML(
+                            next.solution
+                        ),
+
+                    // Keep original session timer
+                    startedAt:
+                        quiz.startedAt
+                }
+            );
+
+
+            await sendQuestion(
+                sock,
+                jid,
+                activeQuizzes.get(jid),
+                "━━━━━━━━━━━━━━━\n\n📌 *NEXT QUESTION*\n\n"
+            );
+
+
+        } catch (err) {
+
+            activeQuizzes.delete(jid);
+
+            await sock.sendMessage(
+                jid,
+                {
+                    text:
+`⚠️ Your answer was recorded, but I couldn't load the next question.
+
+Please start the quiz again.`
+                },
+                {
+                    quoted: msgObj
+                }
+            );
+
+
+            console.log(
+                "❌ Next quiz question error:",
+                err.message
+            );
         }
 
-        // =========================
-        // QUIZ FINISHED FOR USER
-        // =========================
-
-        else {
-
-            const total =
-                activeQuiz.answers.length;
-
-            const percentage =
-                Math.round(
-                    (session.score / total) * 100
-                );
-
-            let grade = "F";
-
-            if (percentage >= 80) {
-                grade = "A";
-            }
-
-            else if (percentage >= 70) {
-                grade = "B";
-            }
-
-            else if (percentage >= 60) {
-                grade = "C";
-            }
-
-            else if (percentage >= 50) {
-                grade = "D";
-            }
-
-            feedback +=
-`\n\n🏁 *QUIZ COMPLETED*
-
-📚 Subject:
-${activeQuiz.subject}
-
-🏆 Score:
-${session.score}/${total}
-
-📊 Percentage:
-${percentage}%
-
-🎖 Grade:
-${grade}
-
-_Keep practicing with Flexi Digital Academy 🚀_`;
-        }
-
-        // =========================
-        // SAVE SESSION
-        // =========================
-
-        quizSessions.set(
-            sender,
-            session
-        );
-
-        // =========================
-        // SEND FEEDBACK
-        // =========================
-
-        await sock.sendMessage(
-
-            jid,
-
-            {
-                text: feedback,
-                mentions: [sender]
-            },
-
-            {
-                quoted: msgObj
-            }
-        );
 
         return true;
 
@@ -454,36 +530,41 @@ _Keep practicing with Flexi Digital Academy 🚀_`;
     }
 }
 
-// =====================================================
-// FORCE STOP QUIZ
-// =====================================================
 
-function stopQuiz() {
+// ===============================
+// STOP QUIZ
+// ===============================
 
-    activeQuiz = {
+function stopQuiz(groupJid = null) {
 
-        isActive: false,
-        subject: "",
-        answers: [],
-        questions: [],
-        text: "",
-        startedAt: null
-    };
+    if (groupJid) {
 
-    quizSessions.clear();
+        activeQuizzes.delete(
+            groupJid
+        );
 
-    console.log("🛑 Quiz manually stopped.");
+        console.log(
+            `🛑 Quiz stopped: ${groupJid}`
+        );
+
+    } else {
+
+        activeQuizzes.clear();
+
+        console.log(
+            "🛑 All quizzes stopped."
+        );
+    }
 }
 
-// =====================================================
+
+// ===============================
 // EXPORTS
-// =====================================================
+// ===============================
 
 module.exports = {
-
     fireQuiz,
-
     handleLiveMarking,
-
-    stopQuiz
+    stopQuiz,
+    fetchQuiz
 };
