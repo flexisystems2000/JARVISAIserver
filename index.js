@@ -17,6 +17,8 @@ const path = require('path');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
+const naturalLanguageRouter =
+    require('./naturalLanguageRouter');
 const grammarWatchdog = require('./grammarWatchdog');
 const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 
