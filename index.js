@@ -60,6 +60,17 @@ const ConfigSchema = new mongoose.Schema({
 const Warn = mongoose.model('Warn', WarnSchema);
 const Config = mongoose.model('Config', ConfigSchema);
 
+// Persistent, group-specific bans. A member banned in one group is not
+// automatically banned from any other group.
+const BanSchema = new mongoose.Schema({
+    groupJid: { type: String, required: true, index: true },
+    userJid: { type: String, required: true, index: true },
+    bannedBy: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now }
+});
+BanSchema.index({ groupJid: 1, userJid: 1 }, { unique: true });
+const Ban = mongoose.models.Ban || mongoose.model('Ban', BanSchema);
+
 mongoose.connect(MONGO_URI)
     .then(() => console.log("✅ MongoDB Connected"))
     .catch(err => console.log("❌ DB Error:", err.message));
@@ -462,6 +473,44 @@ async function startJARVIS() {
     if (!participantJid) {
         console.log("⚠️ Invalid participant received:", participant);
         continue;
+    }
+
+    // Enforce persistent group bans when a banned member is added/rejoins.
+    // This must happen before the normal welcome message.
+    if (anu.action === 'add') {
+        try {
+            const groupBans = await Ban.find({ groupJid: jid }).lean();
+            // WhatsApp may identify the same account by its phone JID or
+            // linked-device/LID JID, so compare using Baileys' JID matcher.
+            const existingBan = groupBans.find(entry =>
+                areJidsSameUser(entry.userJid, participantJid)
+            );
+
+            if (existingBan) {
+                await sock.sendMessage(jid, {
+                    text: `🚫 @${participantJid.split('@')[0]} is banned from this group and cannot rejoin. An admin must use !unban to lift the ban.`,
+                    mentions: [participantJid]
+                });
+
+                try {
+                    await sock.groupParticipantsUpdate(jid, [participantJid], 'remove');
+                } catch (removeErr) {
+                    console.log('❌ Could not remove banned rejoining member:', removeErr.message);
+                    await sock.sendMessage(jid, {
+                        text: '⚠️ A banned member rejoined, but I could not remove them. Please confirm that JARVIS is a group admin.'
+                    });
+                }
+                continue;
+            }
+        } catch (banCheckErr) {
+            // Fail closed for this join event: do not welcome a participant
+            // when the ban database cannot be checked.
+            console.log('❌ Ban enforcement lookup failed:', banCheckErr.message);
+            await sock.sendMessage(jid, {
+                text: '⚠️ I could not verify this member against the group ban list. Please ask an admin to check the ban system.'
+            }).catch(() => {});
+            continue;
+        }
     }
 
     // Don't greet JARVIS itself
@@ -2078,7 +2127,7 @@ if (jid.endsWith('@g.us')) {
 
         // Always fetch fresh metadata if cache is older than 5 mins, 
         // OR force an immediate re-fetch if someone attempts an administrative action
-        const isTryingAdminAction = ["!kick", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
+        const isTryingAdminAction = ["!kick", "!ban", "!unban", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
 
         if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000 || isTryingAdminAction) {
             metadata = await sock.groupMetadata(jid);
@@ -2308,6 +2357,39 @@ if (!naturalText.startsWith("!")) {
                 /^save my name as .+/i,
                 /^register my name .+/i,
                 /^my full name is .+/i
+            ]
+        },
+
+        // =========================
+        // BAN MEMBER
+        // =========================
+        {
+            name: "ban",
+            patterns: [
+                /^ban .+/i,
+                /^ban (this )?(user|person|member)$/i,
+                /^ban (him|her|them)$/i,
+                /^permanently ban .+/i,
+                /^block .+ from (this )?group$/i,
+                /^prevent .+ from (re)?joining (this )?group$/i,
+                /^do not allow .+ (back )?into (this )?group$/i
+            ]
+        },
+
+        // =========================
+        // UNBAN MEMBER
+        // =========================
+        {
+            name: "unban",
+            patterns: [
+                /^unban .+/i,
+                /^unban (this )?(user|person|member)$/i,
+                /^unban (him|her|them)$/i,
+                /^lift (the )?ban on .+/i,
+                /^remove the ban on .+/i,
+                /^allow .+ to rejoin (this )?group$/i,
+                /^let .+ rejoin (this )?group$/i,
+                /^allow .+ back into (this )?group$/i
             ]
         },
 
@@ -2566,6 +2648,8 @@ if (natural) {
         pay: "!pay",
         name: "!name",
         kick: "!kick",
+        ban: "!ban",
+        unban: "!unban",
         promote: "!promote",
         add: "!add",
         mute: "!mute",
@@ -2681,6 +2765,15 @@ if (natural === "define") {
     }
 
 
+    if (natural === "ban" || natural === "unban") {
+        // If the natural-language request contains a phone number rather
+        // than an @mention or quoted member, pass the number to the handler.
+        const numberMatch = naturalText.match(/\+?\d[\d\s()-]{6,}/);
+        if (numberMatch) {
+            args.splice(0, args.length, numberMatch[0].replace(/\D/g, ""));
+        }
+    }
+
     if (natural === "add") {
 
         const numberMatch =
@@ -2741,6 +2834,8 @@ if (natural === "define") {
 
     if (
         natural === "kick" ||
+        natural === "ban" ||
+        natural === "unban" ||
         natural === "promote" ||
         natural === "reset"
     ) {
@@ -3112,6 +3207,8 @@ if (command === "!menu" || command === "!help") {
 🛡️ *GROUP MODERATION*
 🔸 *!add [number]* - Add new member
 🔸 *!kick @user* - Remove member
+🔸 *!ban @user* - Ban member and block rejoining
+🔸 *!unban @user* - Lift a member's ban
 🔸 *!promote @user* - Make admin
 🔸 *!mute [time] [unit]* - Lock group
 🔸 *!unmute [time] [unit]* - Open group
@@ -3329,6 +3426,123 @@ if (isStaff && command === "!ai") {
     },
     m
   );
+}
+
+// --- BAN / UNBAN MEMBER ---
+if (command === "!ban" || command === "!unban") {
+    if (!jid || !jid.endsWith("@g.us")) {
+        return sock.sendMessage(jid, {
+            text: "❌ !ban and !unban can only be used inside a WhatsApp group."
+        }, { quoted: m });
+    }
+
+    if (!isStaff) {
+        return sock.sendMessage(jid, {
+            text: "❌ This command is restricted to group admins."
+        }, { quoted: m });
+    }
+
+    const contextInfo = m.message?.extendedTextMessage?.contextInfo ||
+        m.message?.imageMessage?.contextInfo ||
+        m.message?.videoMessage?.contextInfo ||
+        m.message?.documentMessage?.contextInfo ||
+        {};
+    let target = contextInfo.mentionedJid?.[0] || contextInfo.participant || null;
+
+    if (!target && args[0]) {
+        const digits = String(args[0]).replace(/[^0-9]/g, '');
+        if (digits.length >= 7) {
+            const normalized = digits.startsWith('0')
+                ? `234${digits.slice(1)}`
+                : digits;
+            target = `${normalized}@s.whatsapp.net`;
+        }
+    }
+
+    if (!target) {
+        const verb = command === "!ban" ? "ban" : "unban";
+        return sock.sendMessage(jid, {
+            text: `❌ Please mention the member, reply to their message, or provide their phone number.\n\nExample: *!${verb} @user*`
+        }, { quoted: m });
+    }
+
+    if (areJidsSameUser(target, sock.user?.id || '') || target.includes(OWNER_NUMBER)) {
+        return sock.sendMessage(jid, {
+            text: "❌ I can't ban or unban the bot or its owner."
+        }, { quoted: m });
+    }
+
+    try {
+        if (command === "!ban") {
+            const existingGroupBans = await Ban.find({ groupJid: jid }).lean();
+            const alreadyBanned = existingGroupBans.find(entry =>
+                areJidsSameUser(entry.userJid, target)
+            );
+
+            if (alreadyBanned) {
+                return sock.sendMessage(jid, {
+                    text: `ℹ️ @${target.split('@')[0]} is already banned from this group.`,
+                    mentions: [target]
+                }, { quoted: m });
+            }
+
+            await Ban.updateOne(
+                { groupJid: jid, userJid: target },
+                { $set: { bannedBy: sender, createdAt: new Date() } },
+                { upsert: true }
+            );
+
+            // Remove them now if they are currently in the group.
+            const targetIsMember = (metadata?.participants || []).some(p =>
+                areJidsSameUser(p.id || p.phoneNumber || '', target)
+            );
+
+            if (targetIsMember) {
+                try {
+                    await sock.groupParticipantsUpdate(jid, [target], "remove");
+                } catch (removeErr) {
+                    // Keep the ban record even if immediate removal fails:
+                    // rejoin enforcement will still apply if the database is available.
+                    console.log("❌ Ban recorded but immediate removal failed:", removeErr.message);
+                    return sock.sendMessage(jid, {
+                        text: `⚠️ The ban for @${target.split('@')[0]} was saved, but I couldn't remove them. Please confirm that JARVIS is a group admin.`,
+                        mentions: [target]
+                    }, { quoted: m });
+                }
+            }
+
+            return sock.sendMessage(jid, {
+                text: `🚫 *MEMBER BANNED*\n\n@${target.split('@')[0]} has been banned from this group. If they rejoin, I will attempt to remove them automatically.\n\nUse *!unban @user* to lift this ban.`,
+                mentions: [target]
+            }, { quoted: m });
+        }
+
+        const existingGroupBans = await Ban.find({ groupJid: jid }).lean();
+        const matchingBan = existingGroupBans.find(entry =>
+            areJidsSameUser(entry.userJid, target)
+        );
+        const result = matchingBan
+            ? await Ban.deleteOne({ _id: matchingBan._id })
+            : { deletedCount: 0 };
+
+        if (!result.deletedCount) {
+            return sock.sendMessage(jid, {
+                text: `ℹ️ @${target.split('@')[0]} does not have an active ban in this group.`,
+                mentions: [target]
+            }, { quoted: m });
+        }
+
+        return sock.sendMessage(jid, {
+            text: `✅ *BAN LIFTED*\n\n@${target.split('@')[0]} is no longer banned from this group. They may rejoin if they have the group link or an admin adds them.`,
+            mentions: [target]
+        }, { quoted: m });
+
+    } catch (err) {
+        console.log("❌ Ban/Unban Error:", err.message);
+        return sock.sendMessage(jid, {
+            text: "❌ The ban operation failed because the database or WhatsApp group action returned an error. Please try again."
+        }, { quoted: m });
+    }
 }
 
 // --- KICK / PROMOTE ---
