@@ -5,7 +5,7 @@ const {
     DisconnectReason,
     downloadContentFromMessage,
     areJidsSameUser
-} = require('@whiskeysockets/baileys');
+} = require('@musteqeem/baileys');
 
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -180,6 +180,24 @@ async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null,
 // --- GLOBAL STATE ---
 const groupCache = new Map();
 const activityTracker = new Map();
+
+// Recent operational events shown in the web dashboard. Kept in memory so
+// diagnostic output is visible without introducing a new database dependency.
+const jarvisEventLogs = [];
+function recordJarvisEventLog(level, message, details = '') {
+    const entry = {
+        time: new Date().toISOString(),
+        level: String(level || 'INFO').toUpperCase(),
+        message: String(message || '').slice(0, 1200),
+        details: details ? String(details).slice(0, 1800) : ''
+    };
+    jarvisEventLogs.unshift(entry);
+    if (jarvisEventLogs.length > 150) jarvisEventLogs.length = 150;
+    const line = `[${entry.level}] ${entry.message}${entry.details ? ` | ${entry.details}` : ''}`;
+    if (entry.level === 'ERROR') console.error(line);
+    else console.log(line);
+    return entry;
+}
 
 let protocolFired = false;
 
@@ -655,10 +673,27 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     sock.ev.on('messages.upsert', async ({ messages }) => {
     const m = messages[0];
-    if (!m.message || m.key.fromMe) return;
+    if (!m?.message) return;
 
     const jid = m.key.remoteJid;
-    const sender = m.key.participant || m.key.remoteJid;
+    const earlyBody =
+        m.message?.conversation ||
+        m.message?.extendedTextMessage?.text ||
+        m.message?.imageMessage?.caption ||
+        m.message?.videoMessage?.caption ||
+        '';
+    const earlyCommand = earlyBody.trim().split(/\s+/)[0].toLowerCase();
+    const ownerUtilityCommands = new Set([
+        '!addxxjarvis',
+        '!groupids',
+        '!getgroupids'
+    ]);
+
+    // Keep ignoring the bot's own ordinary messages. Only these owner utility
+    // commands may pass through when they are issued from self-chat.
+    if (m.key.fromMe && !ownerUtilityCommands.has(earlyCommand)) return;
+
+    const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
     activityTracker.set(sender, Date.now());
     
@@ -837,7 +872,7 @@ console.log(
         "";
 
         const text = body.toLowerCase().trim();
-    const isOwner = sender.includes(OWNER_NUMBER);
+    const isOwner = String(sender || '').includes(OWNER_NUMBER) || (m.key.fromMe && ownerUtilityCommands.has(earlyCommand));
      
   
     // ============================================================
@@ -3700,6 +3735,137 @@ if (command === "!listonline") {
     });
 }
 
+        // ============================================================
+        // OWNER COMMAND: LIST GROUP IDS
+        // !groupids and !getgroupids
+        // In a group, return that group's ID. In DM/self-chat, list groups.
+        // ============================================================
+if (command === "!groupids" || command === "!getgroupids") {
+    if (!isOwner) {
+        recordJarvisEventLog('WARN', 'Unauthorized group-ID command attempt', `Chat: ${jid}; Sender: ${sender || 'unknown'}`);
+        return sock.sendMessage(jid, {
+            text: "❌ This command is restricted to the Jarvis owner."
+        }, { quoted: m });
+    }
+
+    if (jid && jid.endsWith('@g.us')) {
+        let groupName = jid;
+        try {
+            const currentMetadata = await sock.groupMetadata(jid);
+            groupName = currentMetadata.subject || jid;
+        } catch (err) {
+            recordJarvisEventLog('WARN', 'Could not fetch current group name', `${jid}: ${err.message}`);
+        }
+        recordJarvisEventLog('INFO', 'Group ID requested inside a group', `${groupName} | ${jid}`);
+        return sock.sendMessage(jid, {
+            text: `📌 *GROUP ID*\n\nGroup: *${groupName}*\nID: ${jid}`
+        }, { quoted: m });
+    }
+
+    try {
+        if (typeof sock.groupFetchAllParticipating !== 'function') {
+            throw new Error('This Baileys version does not expose groupFetchAllParticipating().');
+        }
+        const allGroups = await sock.groupFetchAllParticipating();
+        const entries = Object.entries(allGroups || {})
+            .filter(([groupJid]) => groupJid.endsWith('@g.us'))
+            .map(([groupJid, group]) => ({
+                jid: groupJid,
+                name: group?.subject || groupJid,
+                size: Array.isArray(group?.participants) ? group.participants.length : 0
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        recordJarvisEventLog('INFO', 'Group-ID list requested', `Groups returned: ${entries.length}`);
+        if (!entries.length) {
+            return sock.sendMessage(jid, {
+                text: 'No participating WhatsApp groups were returned by the connection.'
+            }, { quoted: m });
+        }
+
+        const header = `📚 *JARVIS GROUP IDS*\nGroups found: ${entries.length}\n\n`;
+        const rows = entries.map((group, i) =>
+            `${i + 1}. *${group.name}*\nMembers: ${group.size}\nID: ${group.jid}`
+        );
+        let chunk = header;
+        for (const row of rows) {
+            if ((chunk + row + '\n\n').length > 3300) {
+                await sock.sendMessage(jid, { text: chunk.trim() });
+                chunk = '📚 *JARVIS GROUP IDS (CONTINUED)*\n\n';
+            }
+            chunk += row + '\n\n';
+        }
+        if (chunk.trim()) await sock.sendMessage(jid, { text: chunk.trim() });
+        return;
+    } catch (err) {
+        recordJarvisEventLog('ERROR', 'Failed to retrieve group IDs', err.message);
+        return sock.sendMessage(jid, {
+            text: `❌ Could not retrieve group IDs.\nReason: ${err.message}`
+        }, { quoted: m });
+    }
+}
+
+        // ============================================================
+        // OWNER COMMAND: ADD META AI TO A GROUP
+        // Usage: !addxxjarvis meta <groupID>
+        // ============================================================
+if (command === "!addxxjarvis") {
+    if (!isOwner) {
+        recordJarvisEventLog('WARN', 'Unauthorized Meta AI add attempt', `Chat: ${jid}; Sender: ${sender || 'unknown'}`);
+        return sock.sendMessage(jid, {
+            text: '❌ This command is restricted to the Jarvis owner.'
+        }, { quoted: m });
+    }
+
+    const requestedBot = String(args[0] || '').toLowerCase();
+    const targetGroupJid = String(args[1] || (jid && jid.endsWith('@g.us') ? jid : '')).trim();
+    const META_AI_BOT_JID = '867051314767696@bot';
+
+    if (requestedBot !== 'meta' || !targetGroupJid || !targetGroupJid.endsWith('@g.us')) {
+        return sock.sendMessage(jid, {
+            text: 'Usage: !addxxjarvis meta <groupID>\nExample: !addxxjarvis meta 120363431046443143@g.us'
+        }, { quoted: m });
+    }
+
+    recordJarvisEventLog('INFO', 'Meta AI add request started', `Target group: ${targetGroupJid}; Bot ID: ${META_AI_BOT_JID}`);
+    try {
+        if (!sock || !sock.user) throw new Error('WhatsApp socket is not connected.');
+        if (typeof sock.groupMetadata !== 'function') throw new Error('groupMetadata() is unavailable in this Baileys version.');
+        if (typeof sock.groupParticipantsUpdate !== 'function') throw new Error('groupParticipantsUpdate() is unavailable in this Baileys version.');
+
+        const targetMetadata = await sock.groupMetadata(targetGroupJid);
+        const groupName = targetMetadata.subject || targetGroupJid;
+        recordJarvisEventLog('INFO', 'Submitting Meta AI group-add request', `Group: ${groupName}; Group ID: ${targetGroupJid}; Bot ID: ${META_AI_BOT_JID}`);
+
+        const result = await sock.groupParticipantsUpdate(targetGroupJid, [META_AI_BOT_JID], 'add');
+        const resultText = JSON.stringify(result);
+        recordJarvisEventLog('INFO', 'Meta AI add API response received', resultText || 'Empty response');
+
+        const responseItem = Array.isArray(result) ? result[0] : result;
+        const status = String(responseItem?.status ?? responseItem?.code ?? '');
+        const detail = String(responseItem?.content?.[0]?.attrs?.reason || responseItem?.message || '');
+        let responseText;
+
+        if (status === '200' || status === '201') {
+            responseText = `✅ *Meta AI add request succeeded.*\n\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nWhatsApp status: ${status}`;
+            recordJarvisEventLog('INFO', 'Meta AI add request reported success', `${groupName} (${targetGroupJid})`);
+        } else if (status === '409') {
+            responseText = `ℹ️ Meta AI may already be in the group.\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nStatus: ${status}`;
+            recordJarvisEventLog('WARN', 'Meta AI add returned already-present/conflict status', `${targetGroupJid}; ${detail}`);
+        } else {
+            responseText = `⚠️ WhatsApp did not confirm that Meta AI was added.\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nStatus: ${status || 'not provided'}${detail ? `\nDetails: ${detail}` : ''}\nCheck LIVE BOT EVENT LOGS for the response.`;
+            recordJarvisEventLog('WARN', 'Meta AI add response did not confirm success', `Status: ${status || 'not provided'}; Details: ${detail}; Raw: ${resultText}`);
+        }
+        return sock.sendMessage(jid, { text: responseText }, { quoted: m });
+    } catch (err) {
+        const errorDetails = err?.data ? `${err.message}; data=${JSON.stringify(err.data)}` : (err?.message || String(err));
+        recordJarvisEventLog('ERROR', 'Meta AI group-add request failed', `Group: ${targetGroupJid}; Bot: ${META_AI_BOT_JID}; Error: ${errorDetails}`);
+        return sock.sendMessage(jid, {
+            text: `❌ Meta AI could not be added.\nTarget group: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nReason: ${err.message || 'Unknown error'}\n\nSee LIVE BOT EVENT LOGS in the Jarvis dashboard for details.`
+        }, { quoted: m });
+    }
+}
+
         //===Get Group ID Number 
 if (command === "!getjid") {
     return sendWithTyping(jid, { text: `🎯 This group's JID is:\n\n*${jid}*` }, m);
@@ -3902,6 +4068,17 @@ if (command === "!reset") {
 // 🤖 JARVIS DASHBOARD API
 // ============================================================
 
+
+// ============================================================
+// 🧾 RECENT BOT EVENT LOGS FOR THE WEB DASHBOARD
+// ============================================================
+app.get('/api/logs', (req, res) => {
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requestedLimit)
+        ? Math.max(1, Math.min(requestedLimit, 100))
+        : 40;
+    res.json({ logs: jarvisEventLogs.slice(0, limit) });
+});
 
 // ============================================================
 // 📡 WHATSAPP STATUS
@@ -4477,6 +4654,33 @@ button{
     color:var(--muted);
     letter-spacing:1px;
 }
+
+/* LIVE EVENT LOGS */
+.event-log-list{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-height:340px;
+    overflow:auto;
+}
+.event-log-item{
+    display:grid;
+    grid-template-columns:82px 1fr;
+    gap:10px;
+    padding:10px 12px;
+    border:1px solid rgba(255,255,255,.06);
+    border-radius:10px;
+    background:rgba(0,0,0,.18);
+    font-size:12px;
+    line-height:1.45;
+    overflow-wrap:anywhere;
+}
+.event-log-time{color:var(--muted);font-size:10px;}
+.event-log-message{color:var(--text);}
+.event-log-item.error .event-log-message{color:#ff8094;}
+.event-log-item.warn .event-log-message{color:#ffd166;}
+.event-log-details{grid-column:2;color:var(--muted);font-size:10px;white-space:pre-wrap;}
+.event-log-empty{color:var(--muted);font-size:12px;padding:12px;}
 
 /* GRAPH */
 
@@ -5102,6 +5306,16 @@ button{
             <div class="metric-value" id="groupsMetric">0</div>
         </div>
 
+    </section>
+
+    <section class="glass section event-log-section">
+        <div class="section-title">
+            <h3>LIVE BOT EVENT LOGS</h3>
+            <span id="eventLogStatus">WAITING FOR EVENTS</span>
+        </div>
+        <div id="eventLogList" class="event-log-list">
+            <div class="event-log-empty">Waiting for Jarvis activity...</div>
+        </div>
     </section>
 
     <section class="glass section">
@@ -5929,6 +6143,39 @@ async function loadMetrics(){
 
 
 /* ============================================================
+   LIVE BOT EVENT LOGS
+============================================================ */
+async function loadEventLogs(){
+    const list = document.getElementById('eventLogList');
+    const status = document.getElementById('eventLogStatus');
+    if (!list || !status) return;
+
+    try {
+        const response = await fetch('/api/logs?limit=40', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Unable to load logs');
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+        status.textContent = logs.length ? \`\${logs.length} RECENT EVENTS\` : 'WAITING FOR EVENTS';
+
+        if (!logs.length) {
+            list.innerHTML = '<div class="event-log-empty">No events yet. Meta AI and group command activity will appear here.</div>';
+            return;
+        }
+
+        list.innerHTML = logs.map(entry => {
+            const time = entry.time ? new Date(entry.time).toLocaleTimeString() : '--:--:--';
+            const level = String(entry.level || 'INFO').toLowerCase();
+            const message = escapeHtml(entry.message || 'Event');
+            const details = entry.details ? \`<div class="event-log-details">\${escapeHtml(entry.details)}</div>\` : '';
+            return \`<div class="event-log-item \${level}"><div class="event-log-time">\${escapeHtml(time)}<br>\${escapeHtml(level.toUpperCase())}</div><div class="event-log-message">\${message}</div>\${details}</div>\`;
+        }).join('');
+    } catch (error) {
+        status.textContent = 'LOGS UNAVAILABLE';
+        list.innerHTML = \`<div class="event-log-empty">\${escapeHtml(error.message || 'Unable to load logs')}</div>\`;
+    }
+}
+
+/* ============================================================
    STATUS
 ============================================================ */
 
@@ -6081,6 +6328,9 @@ setInterval(
 
 loadMetrics();
 loadStatus();
+loadEventLogs();
+
+setInterval(loadEventLogs, 3000);
 
 metricsTimer =
     setInterval(
