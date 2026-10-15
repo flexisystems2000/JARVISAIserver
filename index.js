@@ -3810,13 +3810,6 @@ if (command === "!groupids" || command === "!getgroupids") {
         // Usage: !addxxjarvis meta <groupID>
         // ============================================================
 if (command === "!addxxjarvis") {
-    if (!isOwner) {
-        recordJarvisEventLog('WARN', 'Unauthorized Meta AI add attempt', `Chat: ${jid}; Sender: ${sender || 'unknown'}`);
-        return sock.sendMessage(jid, {
-            text: '❌ This command is restricted to the Jarvis owner.'
-        }, { quoted: m });
-    }
-
     const requestedBot = String(args[0] || '').toLowerCase();
     const targetGroupJid = String(args[1] || (jid && jid.endsWith('@g.us') ? jid : '')).trim();
     const META_AI_BOT_JID = '867051314767696@bot';
@@ -3827,7 +3820,7 @@ if (command === "!addxxjarvis") {
         }, { quoted: m });
     }
 
-    recordJarvisEventLog('INFO', 'Meta AI add request started', `Target group: ${targetGroupJid}; Bot ID: ${META_AI_BOT_JID}`);
+    recordJarvisEventLog('INFO', 'Meta AI add request started', `Requester: ${sender || 'unknown'}; Chat: ${jid}; Target group: ${targetGroupJid}; Bot ID: ${META_AI_BOT_JID}`);
     try {
         if (!sock || !sock.user) throw new Error('WhatsApp socket is not connected.');
         if (typeof sock.groupMetadata !== 'function') throw new Error('groupMetadata() is unavailable in this Baileys version.');
@@ -3835,6 +3828,40 @@ if (command === "!addxxjarvis") {
 
         const targetMetadata = await sock.groupMetadata(targetGroupJid);
         const groupName = targetMetadata.subject || targetGroupJid;
+
+        // Allow the Jarvis owner OR a WhatsApp admin of the target group.
+        // This also lets an admin issue the command in a private chat with Jarvis.
+        const normalizeJid = value => String(value || '').trim().toLowerCase().replace(/:\d+(?=@)/, '');
+        const digitsFromJid = value => {
+            const bare = normalizeJid(value).split('@')[0];
+            return bare.replace(/\D/g, '');
+        };
+        const requesterJid = normalizeJid(sender);
+        const requesterDigits = digitsFromJid(sender);
+        const ownerDigits = String(OWNER_NUMBER || '').replace(/\D/g, '');
+        const requesterIsOwner = Boolean(isOwner) || Boolean(ownerDigits && requesterDigits === ownerDigits);
+        const participants = Array.isArray(targetMetadata.participants) ? targetMetadata.participants : [];
+        const requesterParticipant = participants.find(participant => {
+            const participantIds = [participant?.id, participant?.jid, participant?.phoneNumber, participant?.lid]
+                .map(normalizeJid).filter(Boolean);
+            if (requesterJid && participantIds.includes(requesterJid)) return true;
+            // Phone-number comparison supports common @s.whatsapp.net / device-suffix formats.
+            // Do not use digits-only matching for LID identifiers.
+            if (requesterDigits && requesterJid.endsWith('@s.whatsapp.net')) {
+                return participantIds.some(id => id.endsWith('@s.whatsapp.net') && digitsFromJid(id) === requesterDigits);
+            }
+            return false;
+        });
+        const requesterIsGroupAdmin = Boolean(requesterParticipant && (requesterParticipant.admin === 'admin' || requesterParticipant.admin === 'superadmin'));
+
+        if (!requesterIsOwner && !requesterIsGroupAdmin) {
+            recordJarvisEventLog('WARN', 'Unauthorized Meta AI add attempt', `Requester: ${sender || 'unknown'}; Group: ${groupName} (${targetGroupJid}); Owner: ${requesterIsOwner}; Target-group admin: ${requesterIsGroupAdmin}`);
+            return sock.sendMessage(jid, {
+                text: `❌ You are not authorised to add Meta AI to *${groupName}*.\n\nOnly the Jarvis owner or an administrator of the target group can run this command. Send it privately to Jarvis or inside the target group.`
+            }, { quoted: m });
+        }
+
+        recordJarvisEventLog('INFO', 'Meta AI add requester authorised', `Requester: ${sender || 'unknown'}; Method: ${requesterIsOwner ? 'Jarvis owner' : 'target-group admin'}; Group: ${groupName} (${targetGroupJid})`);
         recordJarvisEventLog('INFO', 'Submitting Meta AI group-add request', `Group: ${groupName}; Group ID: ${targetGroupJid}; Bot ID: ${META_AI_BOT_JID}`);
 
         const result = await sock.groupParticipantsUpdate(targetGroupJid, [META_AI_BOT_JID], 'add');
