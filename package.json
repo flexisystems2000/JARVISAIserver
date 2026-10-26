@@ -1,10 +1,11 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "JARVIS AI powered by Flexi edTech Digital Academy",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node --check index.js"
   },
   "keywords": [
     "whatsapp",
@@ -16,7 +17,11 @@
     "education",
     "gemini",
     "render",
-    "mongodb"
+    "mongodb",
+    "tts",
+    "translation",
+    "youtube",
+    "reminders"
   ],
   "author": "Flexi edTech Digital Academy",
   "license": "ISC",
@@ -30,9 +35,10 @@
     "firebase-admin": "^12.0.0",
     "mongoose": "^8.4.1",
     "pino": "^9.1.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "youtubei.js": "^13.0.0"
   },
   "engines": {
-    "node": ">=20.x"
+    "node": ">=20"
   }
 }
