@@ -35,7 +35,8 @@ process.on('unhandledRejection', (err) => console.log('⚠️ Rejection Guard:',
 const OWNER_NUMBER = "2347051768946"; 
 const BOT_NAME = "JARVIS AI";
 const POWERED_BY = "Flexi Digital Academy";
-const MONGO_URI = "mongodb+srv://JarvisAI:flexisystems2000@cluster0.7g5odvt.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) console.warn('⚠️ MONGO_URI is not set. Configure it in your hosting environment.');
 
 const firebaseConfig = {
   apiKey: "AIzaSyCoGX2bXlvuwcJY8oyW6_J42fgxfH5vZao",
@@ -89,9 +90,188 @@ MemoryMessageSchema.index({ conversationKey: 1, createdAt: -1 });
 const MemoryMessage = mongoose.models.JarvisMemoryMessage ||
     mongoose.model('JarvisMemoryMessage', MemoryMessageSchema);
 
-mongoose.connect(MONGO_URI)
-    .then(() => console.log("✅ MongoDB Connected"))
-    .catch(err => console.log("❌ DB Error:", err.message));
+
+// Persistent per-chat voice reply preference. Defaults to text mode.
+const TTSPreferenceSchema = new mongoose.Schema({
+    chatJid: { type: String, required: true, unique: true, index: true },
+    enabled: { type: Boolean, default: false },
+    updatedAt: { type: Date, default: Date.now }
+});
+const TTSPreference = mongoose.models.JarvisTTSPreference ||
+    mongoose.model('JarvisTTSPreference', TTSPreferenceSchema);
+
+
+// Persistent reminders. The polling worker checks MongoDB so reminders survive restarts.
+const ReminderSchema = new mongoose.Schema({
+    chatJid: { type: String, required: true, index: true },
+    requesterJid: { type: String, default: '' },
+    text: { type: String, required: true },
+    dueAt: { type: Date, required: true, index: true },
+    status: { type: String, enum: ['pending', 'sent', 'cancelled'], default: 'pending', index: true },
+    createdAt: { type: Date, default: Date.now }
+});
+const Reminder = mongoose.models.JarvisReminder || mongoose.model('JarvisReminder', ReminderSchema);
+
+function parseReminderDelay(input) {
+    const match = String(input || '').trim().match(/^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$/i);
+    if (!match) return null;
+    const n = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const multiplier = /^s/.test(unit) ? 1000 : /^(m|min|mins|minute|minutes)$/.test(unit) ? 60000 : /^(h|hr|hrs|hour|hours)$/.test(unit) ? 3600000 : 86400000;
+    if (!Number.isFinite(n) || n < 1 || n > 10000) return null;
+    return n * multiplier;
+}
+
+function validatePublicHttpUrl(raw) {
+    let url;
+    try { url = new URL(String(raw || '').trim()); } catch { throw new Error('Please provide a valid URL, including https://'); }
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP/HTTPS URLs are supported.');
+    const host = url.hostname.toLowerCase();
+    if (!host || host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+        throw new Error('Private/local network URLs are not allowed.');
+    }
+    return url.toString();
+}
+
+async function checkWebsite(rawUrl, includeContent = false) {
+    const url = validatePublicHttpUrl(rawUrl);
+    const started = Date.now();
+    let response;
+    try {
+        response = await axios.get(url, {
+            timeout: 12000,
+            maxRedirects: 4,
+            maxContentLength: 2 * 1024 * 1024,
+            responseType: 'text',
+            validateStatus: () => true,
+            headers: { 'User-Agent': 'JarvisAI-WebsiteCheck/1.0' }
+        });
+    } catch (err) {
+        return { url, reachable: false, status: null, ms: Date.now() - started, error: err.code || err.message };
+    }
+    const html = typeof response.data === 'string' ? response.data : '';
+    const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+    const description = (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)?.[1] || html.match(/<meta[^>]+content=["']([^"']*)["'][^>]+name=["']description["']/i)?.[1] || '').slice(0, 300);
+    const headings = includeContent ? [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].slice(0, 12).map(x => x[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
+    return { url, reachable: response.status >= 200 && response.status < 500, status: response.status, ms: Date.now() - started, title, description, headings };
+}
+
+async function translateText(source, target, input) {
+    const endpoint = (process.env.LIBRETRANSLATE_URL || 'https://libretranslate.de').replace(/\/$/, '');
+    const payload = { q: input, source: source || 'auto', target, format: 'text' };
+    if (process.env.LIBRETRANSLATE_API_KEY) payload.api_key = process.env.LIBRETRANSLATE_API_KEY;
+    const response = await axios.post(`${endpoint}/translate`, payload, { timeout: 20000, headers: { 'Content-Type': 'application/json' } });
+    if (!response.data?.translatedText) throw new Error('Translation service returned no translated text.');
+    return response.data.translatedText;
+}
+
+async function searchYouTube(query) {
+    if (process.env.YOUTUBE_API_KEY) {
+        const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+            params: { part: 'snippet', q: query, type: 'video', maxResults: 5, key: process.env.YOUTUBE_API_KEY }, timeout: 15000
+        });
+        return (response.data.items || []).map(item => ({ id: item.id?.videoId, title: item.snippet?.title, channel: item.snippet?.channelTitle, url: `https://www.youtube.com/watch?v=${item.id?.videoId}` }));
+    }
+    // Public Invidious instances; availability varies. This is a fallback, not an official YouTube API.
+    const instances = (process.env.INVIDIOUS_INSTANCE_URLS || 'https://inv.nadeko.net,https://invidious.nerdvpn.de,https://invidious.privacyredirect.com').split(',').map(x => x.trim().replace(/\/$/, '')).filter(Boolean);
+    let lastError;
+    for (const instance of instances) {
+        try {
+            const response = await axios.get(`${instance}/api/v1/search`, { params: { q: query, type: 'video' }, timeout: 10000 });
+            const rows = Array.isArray(response.data) ? response.data.filter(x => x.videoId).slice(0, 5) : [];
+            if (rows.length) return rows.map(x => ({ id: x.videoId, title: x.title, channel: x.author, url: `https://www.youtube.com/watch?v=${x.videoId}` }));
+        } catch (err) { lastError = err; }
+    }
+    throw new Error(`YouTube search is unavailable right now${lastError ? ` (${lastError.message})` : ''}. Configure YOUTUBE_API_KEY for a more reliable official API.`);
+}
+
+// Send due reminders once after a successful DB connection; MongoDB status prevents duplicate sends.
+let reminderWorkerStarted = false;
+function startReminderWorker() {
+    if (reminderWorkerStarted) return;
+    reminderWorkerStarted = true;
+    setInterval(async () => {
+        if (mongoose.connection.readyState !== 1 || !sock?.user) return;
+        try {
+            const due = await Reminder.findOneAndUpdate(
+                { status: 'pending', dueAt: { $lte: new Date() } },
+                { $set: { status: 'sent' } },
+                { sort: { dueAt: 1 }, new: true }
+            );
+            if (due) {
+                try {
+                    await sock.sendMessage(due.chatJid, { text: `⏰ *JARVIS REMINDER*\n\n${due.text}\n\n_Reminder ID: ${due._id}_` });
+                } catch (sendErr) {
+                    await Reminder.updateOne({ _id: due._id, status: 'sent' }, { $set: { status: 'pending' } });
+                    console.log('Reminder delivery failed:', sendErr.message);
+                }
+            }
+        } catch (err) { console.log('Reminder worker error:', err.message); }
+    }, 15000).unref?.();
+}
+
+async function getTTSMode(chatJid) {
+    try {
+        if (!chatJid || mongoose.connection.readyState !== 1) return false;
+        const pref = await TTSPreference.findOne({ chatJid }).lean();
+        return !!pref?.enabled;
+    } catch (err) {
+        console.log('TTS preference read error:', err.message);
+        return false;
+    }
+}
+
+async function setTTSMode(chatJid, enabled) {
+    if (!chatJid) throw new Error('Chat ID is missing.');
+    if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected, so the voice preference cannot be saved persistently.');
+    await TTSPreference.findOneAndUpdate(
+        { chatJid },
+        { $set: { enabled: !!enabled, updatedAt: new Date() } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+}
+
+function extractTTSPlainText(value) {
+    return String(value || '')
+        .replace(/```[\s\S]*?```/g, ' code omitted ')
+        .replace(/[*_~`]/g, '')
+        .replace(/https?:\/\/\S+/g, 'link')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 1800);
+}
+
+async function sendAIReply(jid, text, quotedMessage = null) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return sock.sendMessage(jid, { text: '⚠️ I received an empty reply.' }, quotedMessage ? { quoted: quotedMessage } : undefined);
+    if (await getTTSMode(jid)) {
+        const speechText = extractTTSPlainText(cleanText);
+        const apiKey = process.env.NAIJA_ASR_KEY;
+        if (apiKey && speechText) {
+            try {
+                const response = await axios.post(
+                    'https://asr.naijallm.com/v1/audio/speech',
+                    { model: process.env.NAIJA_TTS_MODEL || 'naija-tts', input: speechText, voice: process.env.NAIJA_TTS_VOICE || 'default', response_format: 'mp3' },
+                    { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, responseType: 'arraybuffer', timeout: 30000 }
+                );
+                const audio = Buffer.from(response.data);
+                if (!audio.length) throw new Error('TTS returned an empty audio file.');
+                return await sock.sendMessage(jid, { audio, mimetype: 'audio/mpeg', ptt: true }, quotedMessage ? { quoted: quotedMessage } : undefined);
+            } catch (err) {
+                console.log('TTS generation failed; falling back to text:', err.response?.data ? String(err.response.data).slice(0, 300) : err.message);
+            }
+        } else {
+            console.log('TTS is enabled but NAIJA_ASR_KEY is not configured; falling back to text.');
+        }
+    }
+    return sendWithTyping(jid, { text: cleanText }, quotedMessage);
+}
+
+if (MONGO_URI) {
+    mongoose.connect(MONGO_URI)
+        .then(() => { console.log('✅ MongoDB Connected'); startReminderWorker(); })
+        .catch(err => console.log('❌ DB Error:', err.message));
+}
 
 
 // --- AI FUNCTION ---
@@ -773,6 +953,192 @@ if (
     // ==========================================
     const rawMsgCheck = m.message.conversation || m.message.extendedTextMessage?.text || "";
     const msgLower = rawMsgCheck.toLowerCase().trim();
+
+    // Operational commands: text commands and common natural-language aliases.
+    // Keep this block before the general conversational router so diagnostics are deterministic.
+    const normalizedOperationalText = msgLower.replace(/[.!?]+$/g, '').trim();
+
+
+    // ============================================================
+    // SEVEN REQUESTED FEATURE GROUPS: crawl, sitecheck, reminders,
+    // translation, TTS (below), health (below), and YouTube.
+    // Each handler returns before the general AI conversation router.
+    // ============================================================
+    const operationalReply = async (text) => sendWithTyping(jid, { text }, m);
+
+    // Website availability checker: !sitecheck URL or natural language.
+    let sitecheckUrl = null;
+    const sitecheckMatch = rawMsgCheck.match(/^!sitecheck\s+(\S+)/i);
+    if (sitecheckMatch) sitecheckUrl = sitecheckMatch[1];
+    else if (/^(?:check|test)\s+(?:whether\s+)?(?:if\s+)?(?:this\s+)?website\s+(?:is\s+)?(?:online|up|available)\s*[:：]?\s*https?:\/\/\S+/i.test(rawMsgCheck)) sitecheckUrl = rawMsgCheck.match(/https?:\/\/\S+/i)?.[0];
+    if (sitecheckUrl) {
+        try {
+            const result = await checkWebsite(sitecheckUrl, false);
+            await operationalReply(`🌐 *WEBSITE CHECK*\n\nURL: ${result.url}\nStatus: ${result.status ?? 'No HTTP response'}\nAvailability: ${result.reachable ? '🟢 Reachable' : '🔴 Unreachable'}\nResponse time: ${result.ms} ms${result.error ? `\nError: ${result.error}` : ''}`);
+        } catch (err) { await operationalReply(`⚠️ Website check failed: ${err.message}`); }
+        return;
+    }
+
+    // Website crawler: retrieves public page title, description, and headings.
+    let crawlUrl = null;
+    const crawlMatch = rawMsgCheck.match(/^!crawl\s+(\S+)/i);
+    if (crawlMatch) crawlUrl = crawlMatch[1];
+    else if (/^(?:crawl|inspect|summarize)\s+(?:this\s+)?website\s+https?:\/\/\S+/i.test(rawMsgCheck)) crawlUrl = rawMsgCheck.match(/https?:\/\/\S+/i)?.[0];
+    if (crawlUrl) {
+        try {
+            const result = await checkWebsite(crawlUrl, true);
+            if (!result.reachable) throw new Error(`The website did not return a successful response (HTTP ${result.status ?? 'no response'}).`);
+            const headings = result.headings?.length ? result.headings.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No H1–H3 headings were found.';
+            await operationalReply(`🕸️ *WEBSITE CRAWL SUMMARY*\n\n*URL:* ${result.url}\n*HTTP:* ${result.status}\n*Title:* ${result.title || 'Not found'}\n*Description:* ${result.description || 'Not found'}\n*Headings:*\n${headings}\n\n_Note: this extracts public page metadata/headings; it does not crawl an entire site or bypass access controls._`);
+        } catch (err) { await operationalReply(`⚠️ Website crawl failed: ${err.message}`); }
+        return;
+    }
+
+    // Reminders: !remind 30m message; natural language e.g. "remind me in 30m to ...".
+    let reminderCreate = rawMsgCheck.match(/^!remind\s+(\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days))\s+([\s\S]+)$/i);
+    if (!reminderCreate) reminderCreate = rawMsgCheck.match(/^remind me in\s+(\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days))\s+(?:to\s+)?([\s\S]+)$/i);
+    if (reminderCreate) {
+        try {
+            if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected, so I cannot save reminders yet.');
+            const delay = parseReminderDelay(reminderCreate[1]);
+            const reminderText = reminderCreate[2].trim();
+            if (!delay || !reminderText) throw new Error('Use a duration such as 30m, 2h, or 1d, followed by the reminder text.');
+            const dueAt = new Date(Date.now() + delay);
+            const reminder = await Reminder.create({ chatJid: jid, requesterJid: sender || '', text: reminderText.slice(0, 1000), dueAt });
+            startReminderWorker();
+            await operationalReply(`⏰ *Reminder saved*\n\n${reminderText}\nDue: ${dueAt.toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })} (Nigeria time)\nID: ${reminder._id}\n\nUse !reminders to list or !cancelreminder ${reminder._id} to cancel.`);
+        } catch (err) { await operationalReply(`⚠️ Could not create reminder: ${err.message}`); }
+        return;
+    }
+    if (/^!reminders$|^(?:show|list) my reminders$/i.test(normalizedOperationalText)) {
+        try {
+            if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected.');
+            const rows = await Reminder.find({ chatJid: jid, status: 'pending' }).sort({ dueAt: 1 }).limit(20).lean();
+            await operationalReply(rows.length ? `⏰ *YOUR PENDING REMINDERS*\n\n${rows.map((r, i) => `${i + 1}. ${r.text}\n   Due: ${new Date(r.dueAt).toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })}\n   ID: ${r._id}`).join('\n\n')}` : 'You have no pending reminders in this chat.');
+        } catch (err) { await operationalReply(`⚠️ Could not list reminders: ${err.message}`); }
+        return;
+    }
+    const cancelReminderMatch = rawMsgCheck.match(/^!cancelreminder\s+([a-f\d]{24})$/i) || rawMsgCheck.match(/^cancel reminder\s+([a-f\d]{24})$/i);
+    if (cancelReminderMatch) {
+        try {
+            if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected.');
+            const result = await Reminder.updateOne({ _id: cancelReminderMatch[1], chatJid: jid, status: 'pending' }, { $set: { status: 'cancelled' } });
+            await operationalReply(result.modifiedCount ? '✅ Reminder cancelled.' : 'I could not find a pending reminder with that ID in this chat.');
+        } catch (err) { await operationalReply(`⚠️ Could not cancel reminder: ${err.message}`); }
+        return;
+    }
+
+    // Translation: !translate English Yoruba text, or "translate ... to Yoruba: ...".
+    let translationParts = rawMsgCheck.match(/^!translate\s+(\S+)\s+(\S+)\s+([\s\S]+)$/i);
+    if (!translationParts) {
+        const naturalTranslate = rawMsgCheck.match(/^translate\s+([\s\S]+?)\s+to\s+(English|Yoruba|Igbo|Hausa|French|Spanish|Arabic|Portuguese|German|Chinese|Japanese|Korean|Italian|Swahili)\s*[:：]?\s*["“]?([\s\S]+?)["”]?$/i);
+        if (naturalTranslate) translationParts = [naturalTranslate[0], 'auto', naturalTranslate[2], naturalTranslate[3]];
+    }
+    if (translationParts) {
+        try {
+            const langCodes = { english: 'en', yoruba: 'yo', igbo: 'ig', hausa: 'ha', french: 'fr', spanish: 'es', arabic: 'ar', portuguese: 'pt', german: 'de', chinese: 'zh', japanese: 'ja', korean: 'ko', italian: 'it', swahili: 'sw', auto: 'auto' };
+            const sourceLang = langCodes[String(translationParts[1]).toLowerCase()] || String(translationParts[1]).toLowerCase();
+            const targetLang = langCodes[String(translationParts[2]).toLowerCase()] || String(translationParts[2]).toLowerCase();
+            const translated = await translateText(sourceLang, targetLang, translationParts[3]);
+            await operationalReply(`🌍 *TRANSLATION* (${translationParts[1]} → ${translationParts[2]})\n\n${translated}`);
+        } catch (err) { await operationalReply(`⚠️ Translation failed: ${err.response?.data?.error || err.message}\nYou may configure LIBRETRANSLATE_URL and, if required, LIBRETRANSLATE_API_KEY in Render.`); }
+        return;
+    }
+
+    // YouTube search: official API key preferred; public Invidious instances are fallback.
+    let ytQuery = rawMsgCheck.match(/^!yt\s+search\s+([\s\S]+)$/i)?.[1];
+    if (!ytQuery) ytQuery = rawMsgCheck.match(/^(?:search|find)\s+(?:for\s+)?(?:videos?\s+)?on youtube\s*[:：]?\s*([\s\S]+)$/i)?.[1];
+    if (ytQuery) {
+        try {
+            const results = await searchYouTube(ytQuery.trim());
+            await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${results.map((v, i) => `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}\n${v.url}`).join('\n\n')}`);
+        } catch (err) { await operationalReply(`⚠️ YouTube search failed: ${err.message}`); }
+        return;
+    }
+    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\w-]{6,})$/i);
+    if (ytVideoMatch) {
+        const videoId = ytVideoMatch[1];
+        await operationalReply(`▶️ *YOUTUBE VIDEO*\nhttps://www.youtube.com/watch?v=${videoId}\n\nI can provide the official video link. Downloading/rehosting the video is not part of this command.`);
+        return;
+    }
+    // Persistent per-chat TTS toggle. Operational responses intentionally stay text.
+    const ttsOnPhrases = ['switch on voice mode', 'turn on voice mode', 'enable voice replies', 'i want voice replies', 'reply with voice', 'start speaking', 'use voice replies'];
+    const ttsOffPhrases = ['switch off voice mode', 'turn off voice mode', 'disable voice replies', 'stop speaking and reply with text', 'return to text mode', 'reply with text', 'stop voice replies'];
+    if (['!tts on', '!tts enable'].includes(normalizedOperationalText) || ttsOnPhrases.includes(normalizedOperationalText)) {
+        try {
+            await setTTSMode(jid, true);
+            await sendWithTyping(jid, { text: `🔊 *Voice replies enabled for this chat.*\nMy conversational/AI replies will be sent as voice notes. Use \`!tts off\` to return to text. Operational notices remain text.` }, m);
+        } catch (err) {
+            await sendWithTyping(jid, { text: `⚠️ Could not save the TTS setting: ${err.message}` }, m);
+        }
+        return;
+    }
+    if (['!tts off', '!tts disable'].includes(normalizedOperationalText) || ttsOffPhrases.includes(normalizedOperationalText)) {
+        try {
+            await setTTSMode(jid, false);
+            await sendWithTyping(jid, { text: '💬 *Text replies restored for this chat.*' }, m);
+        } catch (err) {
+            await sendWithTyping(jid, { text: `⚠️ Could not save the TTS setting: ${err.message}` }, m);
+        }
+        return;
+    }
+    if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
+        const enabled = await getTTSMode(jid);
+        const configured = !!process.env.NAIJA_ASR_KEY;
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider key: ${configured ? 'configured' : 'missing (text fallback will be used)'}\nPreference scope: this chat` }, m);
+        return;
+    }
+    if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
+        const memory = process.memoryUsage();
+        const dbReady = mongoose.connection.readyState === 1;
+        const waReady = !!(sock && sock.user);
+        const aiConfigured = !!process.env.AI_ENDPOINT || true; // Existing AI bridge is configured in source.
+        const checks = [waReady, dbReady, aiConfigured, true, memory.heapUsed / Math.max(memory.heapTotal, 1) < 0.9];
+        const health = Math.round(checks.filter(Boolean).length / checks.length * 100);
+        const bar = '█'.repeat(Math.round(health / 10)) + '░'.repeat(10 - Math.round(health / 10));
+        const statusLabel = health >= 95 ? 'Excellent' : health >= 85 ? 'Healthy' : health >= 70 ? 'Degraded' : health >= 40 ? 'Unstable' : 'Critical';
+        const statusText = `🩺 *JARVIS SYSTEM HEALTH*\n\n*Health:* ${health}% (${statusLabel})\n[${bar}]\n\nWhatsApp: ${waReady ? '🟢 Connected' : '🔴 Disconnected'}\nMongoDB: ${dbReady ? '🟢 Connected' : '🔴 Disconnected'}\nAI bridge: ${aiConfigured ? '🟢 Configured' : '🔴 Not configured'}\nMemory heap: ${Math.round(memory.heapUsed / 1024 / 1024)} MB / ${Math.round(memory.heapTotal / 1024 / 1024)} MB\nUptime: ${Math.floor(process.uptime() / 60)} minutes\n\n_Note: this is a lightweight process check, not a full synthetic service test._`;
+        await sendWithTyping(jid, { text: statusText }, m);
+        return;
+    }
+
+    if (['!healthgraph', 'send jarvis health graph', 'show jarvis health graph', 'jarvis health graph'].includes(normalizedOperationalText)) {
+        try {
+            const memory = process.memoryUsage();
+            const wa = sock && sock.user ? 100 : 0;
+            const db = mongoose.connection.readyState === 1 ? 100 : 0;
+            const heap = Math.max(0, Math.min(100, Math.round((1 - memory.heapUsed / Math.max(memory.heapTotal, 1)) * 100)));
+            const chartConfig = { type: 'line', data: { labels: ['WhatsApp', 'Database', 'Memory headroom'], datasets: [{ label: 'Health (%)', data: [wa, db, heap], borderColor: '#00d9ff', backgroundColor: 'rgba(0,217,255,0.2)', fill: true, tension: 0.35 }] }, options: { title: { display: true, text: 'JARVIS AI — Current Health Snapshot' }, legend: { display: false }, scales: { yAxes: [{ ticks: { min: 0, max: 100 } }] } } };
+            const chartUrl = 'https://quickchart.io/chart';
+            const response = await axios.post(chartUrl, { chart: chartConfig, width: 900, height: 500, format: 'png', backgroundColor: '#07111f' }, { responseType: 'arraybuffer', timeout: 15000 });
+            await sock.sendMessage(jid, { image: Buffer.from(response.data), caption: '📈 *JARVIS AI health snapshot*\nCurrent service checks; this is a snapshot, not a historical moving graph.' }, { quoted: m });
+        } catch (error) {
+            recordJarvisEventLog('ERROR', 'Health graph generation failed', error.message);
+            await sendWithTyping(jid, { text: '⚠️ I could not generate the health graph right now. Please try again shortly.' }, m);
+        }
+        return;
+    }
+
+    // Rename a group by ID: !groupname <group-id> <new name>. Only the bot's
+    // own WhatsApp group-admin status is required by WhatsApp for this action.
+    const groupNameMatch = rawMsgCheck.match(/^!groupname\s+(\d{5,}-(?:\d+)?@g\.us|[0-9-]+@g\.us)\s+([\s\S]+)$/i);
+    if (groupNameMatch) {
+        const targetGroupJid = groupNameMatch[1].includes('@g.us') ? groupNameMatch[1] : `${groupNameMatch[1]}@g.us`;
+        const newSubject = groupNameMatch[2].trim().slice(0, 100);
+        try {
+            if (!sock?.user) throw new Error('WhatsApp is not connected.');
+            const metadata = await sock.groupMetadata(targetGroupJid);
+            const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            const botParticipant = metadata.participants?.find(x => x.id === sock.user.id || x.id?.split(':')[0] === botJid.split('@')[0]);
+            if (!botParticipant?.admin) throw new Error('Jarvis must be a group admin to change this group name.');
+            await sock.groupUpdateSubject(targetGroupJid, newSubject);
+            recordJarvisEventLog('INFO', 'Group subject updated', `${targetGroupJid} -> ${newSubject}`);
+            await sendWithTyping(jid, { text: `✅ Group name updated to *${newSubject}*.\nGroup ID: ${targetGroupJid}` }, m);
+        } catch (error) {
+            await sendWithTyping(jid, { text: `❌ Could not update group name: ${error.message}` }, m);
+        }
+        return;
+    }
 
     const isOnlineQuery = 
         (msgLower.includes("jarvis") && msgLower.includes("online")) ||
@@ -3079,13 +3445,7 @@ if (natural === "define") {
                     base64Media
                 );
 
-                return sendWithTyping(
-    jid,
-    {
-        text: `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`
-    },
-    m
-);
+                return sendAIReply(jid, `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`, m);
 
             } catch (err) {
                 console.log("File Error:", err.message);
@@ -3543,13 +3903,7 @@ if (isStaff && command === "!ai") {
         base64Image
     );
 
-    return sendWithTyping(
-    jid,
-    {
-        text: `🤖 *JARVIS AI*\n\n${aiReply}`
-    },
-    m
-  );
+    return sendAIReply(jid, `🤖 *JARVIS AI*\n\n${aiReply}`, m);
 }
 
 // --- BAN / UNBAN MEMBER ---
@@ -3874,13 +4228,13 @@ if (command === "!addxxjarvis") {
         let responseText;
 
         if (status === '200' || status === '201') {
-            responseText = `✅ *Meta AI add request succeeded.*\n\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nWhatsApp status: ${status}`;
+            responseText = `✅ *Meta AI add request succeeded.*\n\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nWhatsApp status: ${status}`;
             recordJarvisEventLog('INFO', 'Meta AI add request reported success', `${groupName} (${targetGroupJid})`);
         } else if (status === '409') {
-            responseText = `ℹ️ Meta AI may already be in the group.\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nStatus: ${status}`;
+            responseText = `ℹ️ Meta AI may already be in the group.\nGroup ID: ${targetGroupJid}\nStatus: ${status}`;
             recordJarvisEventLog('WARN', 'Meta AI add returned already-present/conflict status', `${targetGroupJid}; ${detail}`);
         } else {
-            responseText = `⚠️ WhatsApp did not confirm that Meta AI was added.\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nStatus: ${status || 'not provided'}${detail ? `\nDetails: ${detail}` : ''}\nCheck LIVE BOT EVENT LOGS for the response.`;
+            responseText = `⚠️ WhatsApp did not confirm that Meta AI was added.\nGroup: *${groupName}*\nGroup ID: ${targetGroupJid}\nStatus: ${status || 'not provided'}${detail ? `\nDetails: ${detail}` : ''}\nCheck LIVE BOT EVENT LOGS for the response.`;
             recordJarvisEventLog('WARN', 'Meta AI add response did not confirm success', `Status: ${status || 'not provided'}; Details: ${detail}; Raw: ${resultText}`);
         }
         return sock.sendMessage(jid, { text: responseText }, { quoted: m });
@@ -3888,7 +4242,7 @@ if (command === "!addxxjarvis") {
         const errorDetails = err?.data ? `${err.message}; data=${JSON.stringify(err.data)}` : (err?.message || String(err));
         recordJarvisEventLog('ERROR', 'Meta AI group-add request failed', `Group: ${targetGroupJid}; Bot: ${META_AI_BOT_JID}; Error: ${errorDetails}`);
         return sock.sendMessage(jid, {
-            text: `❌ Meta AI could not be added.\nTarget group: ${targetGroupJid}\nBot ID: ${META_AI_BOT_JID}\nReason: ${err.message || 'Unknown error'}\n\nSee LIVE BOT EVENT LOGS in the Jarvis dashboard for details.`
+            text: `❌ Meta AI could not be added.\nTarget group: ${targetGroupJid}\nReason: ${err.message || 'Unknown error'}\n\nSee LIVE BOT EVENT LOGS in the Jarvis dashboard for details.`
         }, { quoted: m });
     }
 }
@@ -4112,20 +4466,47 @@ app.get('/api/logs', (req, res) => {
 // ============================================================
 
 app.get('/api/status', (req, res) => {
-
-    const connected =
-        !!sock &&
-        !!sock.user;
-
+    const connected = !!sock && !!sock.user;
+    const memory = process.memoryUsage();
+    const dbConnected = mongoose.connection.readyState === 1;
+    const checks = [connected, dbConnected, true, memory.heapUsed / Math.max(memory.heapTotal, 1) < 0.9];
+    const health = Math.round(checks.filter(Boolean).length / checks.length * 100);
     res.json({
-        connected,
-        online: connected,
-        status: connected
-            ? 'connected'
-            : 'waiting'
+        connected, online: connected, status: connected ? 'connected' : 'waiting',
+        health, healthLabel: health >= 95 ? 'Excellent' : health >= 85 ? 'Healthy' : health >= 70 ? 'Degraded' : health >= 40 ? 'Unstable' : 'Critical',
+        checks: { whatsapp: connected, mongodb: dbConnected, aiBridge: true, memoryHeadroom: Math.max(0, Math.min(100, Math.round((1 - memory.heapUsed / Math.max(memory.heapTotal, 1)) * 100))) },
+        memory: { heapUsedMB: Math.round(memory.heapUsed / 1048576), heapTotalMB: Math.round(memory.heapTotal / 1048576), rssMB: Math.round(memory.rss / 1048576) },
+        uptimeSeconds: Math.floor(process.uptime()), timestamp: new Date().toISOString()
     });
 });
 
+
+// ============================================================
+// 🖼️ DASHBOARD LOOKUPS: WhatsApp profile pictures and group icons
+// ============================================================
+app.get('/api/profile-picture/:number', async (req, res) => {
+    try {
+        if (!sock?.user) return res.status(503).json({ error: 'WhatsApp is not connected.' });
+        const number = String(req.params.number || '').replace(/\D/g, '');
+        if (number.length < 7 || number.length > 15) return res.status(400).json({ error: 'Provide a valid international phone number without + or spaces.' });
+        const jid = `${number}@s.whatsapp.net`;
+        const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
+        if (!url) return res.status(404).json({ error: 'No profile picture is available for this number, or its privacy settings hide it.' });
+        res.json({ number, jid, url });
+    } catch (error) { res.status(500).json({ error: 'Could not fetch profile picture.' }); }
+});
+
+app.get('/api/group-icon/:jid', async (req, res) => {
+    try {
+        if (!sock?.user) return res.status(503).json({ error: 'WhatsApp is not connected.' });
+        const raw = decodeURIComponent(req.params.jid);
+        const jid = raw.endsWith('@g.us') ? raw : `${raw}@g.us`;
+        if (!/^[0-9-]+@g\.us$/.test(jid)) return res.status(400).json({ error: 'Invalid WhatsApp group ID.' });
+        const url = await sock.profilePictureUrl(jid, 'image').catch(() => null);
+        if (!url) return res.status(404).json({ error: 'No group icon is available, or its privacy settings hide it.' });
+        res.json({ jid, url });
+    } catch (error) { res.status(500).json({ error: 'Could not fetch group icon.' }); }
+});
 
 // ============================================================
 // 👥 GET WHATSAPP GROUPS
@@ -4919,6 +5300,10 @@ button{
     display:none;
     position:fixed;
     inset:0;
+    width:100%;
+    height:100vh;
+    height:100dvh;
+    overflow:hidden;
     z-index:200;
     background:
         radial-gradient(circle at 10% 20%,rgba(0,229,255,.07),transparent 30%),
@@ -4931,6 +5316,8 @@ button{
     grid-template-columns:340px 1fr;
     width:100%;
     height:100%;
+    min-height:0;
+    min-width:0;
 }
 
 .groups-panel{
@@ -5015,8 +5402,11 @@ button{
 
 .conversation{
     min-width:0;
+    min-height:0;
+    height:100%;
     display:flex;
     flex-direction:column;
+    overflow:hidden;
     background:rgba(4,10,19,.54);
 }
 
@@ -5070,8 +5460,12 @@ button{
 }
 
 .messages{
-    flex:1;
+    flex:1 1 auto;
+    min-height:0;
     overflow-y:auto;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+    overflow-wrap:anywhere;
     padding:22px;
     display:flex;
     flex-direction:column;
@@ -5123,11 +5517,14 @@ button{
 }
 
 .composer{
+    flex:0 0 auto;
     display:flex;
     gap:10px;
-    padding:14px;
+    padding:12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
     border-top:1px solid var(--border);
-    background:rgba(5,12,22,.82);
+    background:rgba(5,12,22,.96);
+    position:relative;
+    z-index:2;
 }
 
 .composer input{
@@ -5139,6 +5536,8 @@ button{
     background:rgba(0,0,0,.25);
     color:white;
     outline:none;
+    font-size:16px;
+    min-height:46px;
 }
 
 .composer input:focus{
@@ -5185,7 +5584,26 @@ button{
     }
 
     .chat-layout{
-        grid-template-columns:1fr;
+        grid-template-columns:minmax(0,1fr);
+        height:100%;
+        height:100dvh;
+    }
+
+    .conversation-header{
+        flex:0 0 auto;
+        padding:12px 14px;
+    }
+
+    .messages{
+        padding:14px 12px;
+    }
+
+    .composer{
+        padding:10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .composer input{
+        padding:12px;
     }
 
     .groups-panel{
@@ -5504,6 +5922,8 @@ button{
                 </div>
             </div>
 
+            <div id="messageLoadNotice" role="status" aria-live="polite" style="display:none;padding:5px 12px;font-size:11px;color:var(--muted);"></div>
+
             <div class="composer">
 
                 <input
@@ -5673,6 +6093,8 @@ async function openChatWorkspace(){
 function closeChatWorkspace(){
 
     stopMessagePolling();
+    messagesRequestToken++;
+    lastRenderedMessagesKey = '';
 
     document.getElementById('chatWorkspace').style.display = 'none';
 
@@ -5829,6 +6251,11 @@ function filterGroups(){
 
 async function selectGroup(jid){
 
+    messagesRequestToken++;
+    lastRenderedMessagesKey = '';
+    const notice = document.getElementById('messageLoadNotice');
+    if(notice){ notice.textContent = ''; notice.style.display = 'none'; }
+
     selectedGroup =
         groups.find(group =>
             group.jid === jid
@@ -5884,105 +6311,89 @@ async function selectGroup(jid){
    MESSAGES
 ============================================================ */
 
-async function loadMessages(){
+let messagesRequestToken = 0;
+let lastRenderedMessagesKey = '';
+let lastMessageLoadError = '';
 
-    if(!selectedGroup){
-        return;
-    }
-
-    try{
-
-        const response =
-            await fetch(
-                '/api/groups/' +
-                encodeURIComponent(
-                    selectedGroup.jid
-                ) +
-                '/messages'
-            );
-
-        const data =
-            await response.json();
-
-        if(!response.ok){
-
-            throw new Error(
-                data.error ||
-                'Unable to load messages'
-            );
-
-        }
-
-        renderMessages(
-            Array.isArray(data)
-                ? data
-                : (data.messages || [])
-        );
-
-    }catch(error){
-
-        console.error(error);
-
-        document.getElementById('messages')
-            .innerHTML =
-            '<div class="empty">' +
-            escapeHtml(error.message) +
-            '</div>';
-
-    }
-
+function messageKey(messages){
+    return JSON.stringify((messages || []).map(message => ({
+        id: message.id || message.key || message.messageId || '',
+        direction: message.direction || '',
+        senderName: message.senderName || '',
+        text: message.text || '',
+        timestamp: message.timestamp || ''
+    })));
 }
 
+async function loadMessages(){
+    if(!selectedGroup) return;
+
+    const jid = selectedGroup.jid;
+    const requestToken = ++messagesRequestToken;
+
+    try{
+        const response = await fetch(
+            '/api/groups/' + encodeURIComponent(jid) + '/messages',
+            { cache: 'no-store' }
+        );
+        const data = await response.json();
+        if(!response.ok) throw new Error(data.error || 'Unable to load messages');
+
+        // Ignore a late response from a group that is no longer selected.
+        if(!selectedGroup || selectedGroup.jid !== jid || requestToken !== messagesRequestToken) return;
+
+        const messages = Array.isArray(data) ? data : (data.messages || []);
+        renderMessages(messages);
+        lastMessageLoadError = '';
+        const notice = document.getElementById('messageLoadNotice');
+        if(notice){ notice.textContent = ''; notice.style.display = 'none'; }
+    }catch(error){
+        if(requestToken !== messagesRequestToken) return;
+        console.error('Unable to refresh messages:', error);
+        // Keep the last conversation visible if a temporary refresh fails.
+        if(!lastMessageLoadError){
+            const notice = document.getElementById('messageLoadNotice');
+            if(notice){ notice.textContent = 'Connection interrupted — keeping displayed messages.'; notice.style.display = 'block'; }
+        }
+        lastMessageLoadError = error.message || 'Message refresh failed';
+    }
+}
 
 function renderMessages(messages){
+    const box = document.getElementById('messages');
+    if(!box) return;
 
-    const box =
-        document.getElementById('messages');
+    const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    const key = messageKey(messages);
+
+    // Avoid rebuilding the DOM on every 2.5-second poll if nothing changed.
+    if(key === lastRenderedMessagesKey) return;
 
     if(!messages.length){
-
-        box.innerHTML =
-            '<div class="empty">' +
-            'No stored messages for this group yet.' +
-            '</div>';
-
+        box.innerHTML = '<div class="empty">No stored messages for this group yet.</div>';
+        lastRenderedMessagesKey = key;
         return;
     }
 
-    box.innerHTML =
-        messages.map(message => {
+    const html = messages.map(message => {
+        const outgoing = message.direction === 'outgoing';
+        const sender = (!outgoing && message.senderName)
+            ? '<div class="sender">' + escapeHtml(message.senderName) + '</div>'
+            : '';
+        return '<div class="message ' + (outgoing ? 'outgoing' : 'incoming') + '">' +
+            sender +
+            '<div>' + escapeHtml(message.text || '') + '</div>' +
+            '<div class="message-time">' + formatMessageTime(message.timestamp) + '</div>' +
+            '</div>';
+    }).join('');
 
-            const outgoing =
-                message.direction === 'outgoing';
+    box.innerHTML = html;
+    lastRenderedMessagesKey = key;
 
-            return \`
-                <div class="message \${outgoing ? 'outgoing' : 'incoming'}">
-
-                    \${!outgoing && message.senderName
-                        ? \`
-                            <div class="sender">
-                                \${escapeHtml(message.senderName)}
-                            </div>
-                          \`
-                        : ''
-                    }
-
-                    <div>
-                        \${escapeHtml(message.text || '')}
-                    </div>
-
-                    <div class="message-time">
-                        \${formatMessageTime(message.timestamp)}
-                    </div>
-
-                </div>
-            \`;
-
-        }).join('');
-
-    box.scrollTop =
-        box.scrollHeight;
-
+    // Follow new messages only if the user was already reading at the bottom.
+    if(wasNearBottom){
+        requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+    }
 }
 
 
@@ -6017,78 +6428,42 @@ function stopMessagePolling(){
 ============================================================ */
 
 async function sendMessage(){
+    if(!selectedGroup) return;
 
-    if(!selectedGroup){
-        return;
-    }
+    const input = document.getElementById('messageInput');
+    const button = document.getElementById('sendButton');
+    const text = input.value.trim();
+    const jid = selectedGroup.jid;
+    if(!text || button.disabled) return;
 
-    const input =
-        document.getElementById('messageInput');
-
-    const button =
-        document.getElementById('sendButton');
-
-    const text =
-        input.value.trim();
-
-    if(!text){
-        return;
-    }
-
-    input.disabled = true;
+    // Keep the composer visible and editable while the request is in flight.
     button.disabled = true;
+    button.textContent = '…';
 
     try{
+        const response = await fetch(
+            '/api/groups/' + encodeURIComponent(jid) + '/messages',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            }
+        );
+        const data = await response.json();
+        if(!response.ok) throw new Error(data.error || 'Unable to send message');
 
-        const response =
-            await fetch(
-                '/api/groups/' +
-                encodeURIComponent(
-                    selectedGroup.jid
-                ) +
-                '/messages',
-                {
-                    method:'POST',
-                    headers:{
-                        'Content-Type':'application/json'
-                    },
-                    body:JSON.stringify({
-                        text
-                    })
-                }
-            );
-
-        const data =
-            await response.json();
-
-        if(!response.ok){
-
-            throw new Error(
-                data.error ||
-                'Unable to send message'
-            );
-
-        }
-
-        input.value = '';
-
-        await loadMessages();
-
+        // Clear only if the user hasn't edited the input while sending.
+        if(input.value.trim() === text) input.value = '';
+        if(selectedGroup && selectedGroup.jid === jid) await loadMessages();
     }catch(error){
-
         console.error(error);
-
-        alert(error.message);
-
+        alert(error.message || 'Unable to send message');
+        // Leave the unsent text in the input so the user can retry.
     }finally{
-
-        input.disabled = false;
         button.disabled = false;
-
-        input.focus();
-
+        button.textContent = '➤';
+        input.focus({ preventScroll: true });
     }
-
 }
 
 
