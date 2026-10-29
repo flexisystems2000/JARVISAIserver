@@ -310,6 +310,137 @@ function extractTTSPlainText(value) {
         .slice(0, 1800);
 }
 
+function splitTTSChunks(value, maxChars = 500) {
+    const text = String(value || '').trim();
+    const chunks = [];
+    let remaining = text;
+    while (remaining.length > maxChars) {
+        let cut = remaining.lastIndexOf(' ', maxChars);
+        if (cut < Math.floor(maxChars * 0.6)) {
+            const sentenceCut = Math.max(
+                remaining.lastIndexOf('. ', maxChars),
+                remaining.lastIndexOf('! ', maxChars),
+                remaining.lastIndexOf('? ', maxChars)
+            );
+            cut = sentenceCut > 0 ? sentenceCut + 1 : maxChars;
+        }
+        chunks.push(remaining.slice(0, cut).trim());
+        remaining = remaining.slice(cut).trim();
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks;
+}
+
+function validateTTSAudio(buffer, contentType = '') {
+    if (!Buffer.isBuffer(buffer) || buffer.length < 8) {
+        throw new Error('TTS returned an empty or incomplete audio file.');
+    }
+
+    const type = String(contentType || '').toLowerCase();
+    const ascii = buffer.subarray(0, 4).toString('ascii');
+    const isWav = ascii === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WAVE';
+    const isOgg = ascii === 'OggS';
+    const isWebM = buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+    const isMp3Id3 = buffer.subarray(0, 3).toString('ascii') === 'ID3';
+    const isMp3Frame = buffer.length >= 2 &&
+        buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0;
+    const isKnownAudio = isWav || isOgg || isWebM || isMp3Id3 || isMp3Frame;
+
+    if (/application\/json|text\/html|text\/plain/.test(type) || !isKnownAudio) {
+        const preview = buffer.subarray(0, 180).toString('utf8').replace(/\s+/g, ' ').trim();
+        throw new Error(`TTS did not return a recognized audio stream${preview ? ` (response: ${preview})` : ''}.`);
+    }
+
+    if (isWav) return 'audio/wav';
+    if (isOgg) return /opus/i.test(type) ? 'audio/ogg; codecs=opus' : 'audio/ogg';
+    if (isWebM) return 'audio/webm';
+    if (isMp3Id3 || isMp3Frame) return 'audio/mpeg';
+    return type || 'application/octet-stream';
+}
+
+async function generateTTSAudio(speechText) {
+    const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
+    const endpoint = String(
+        process.env.TTS_API_URL ||
+        (provider === 'kiprio' ? 'https://kiprio.com/v1/tts/demo' : '')
+    ).trim();
+
+    if (!endpoint) {
+        throw new Error('TTS_API_URL is missing for the selected TTS_PROVIDER.');
+    }
+
+    const timeoutMs = Math.max(5000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 45000, 90000));
+    const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
+    if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
+
+    let payload;
+    if (provider === 'kiprio') {
+        // Kiprio's demo endpoint accepts plain text, language and a slow-speech flag.
+        // Its public demo is limited to 500 characters per request.
+        payload = {
+            text: String(speechText || '').trim(),
+            lang: String(process.env.TTS_LANGUAGE || 'en').trim(),
+            slow: String(process.env.TTS_SLOW || 'false').toLowerCase() === 'true'
+        };
+    } else if (provider === 'openai-compatible') {
+        payload = {
+            model: process.env.TTS_API_MODEL || 'kokoro',
+            input: speechText,
+            voice: process.env.TTS_API_VOICE || 'af_heart',
+            response_format: process.env.TTS_API_FORMAT || 'mp3'
+        };
+    } else {
+        throw new Error(`Unsupported TTS_PROVIDER "${provider}". Use "kiprio" or "openai-compatible".`);
+    }
+
+    let response;
+    try {
+        response = await axios.post(endpoint, payload, {
+            headers,
+            responseType: 'arraybuffer',
+            timeout: timeoutMs,
+            maxContentLength: 20 * 1024 * 1024,
+            maxBodyLength: 1024 * 1024,
+            validateStatus: () => true
+        });
+    } catch (err) {
+        throw new Error(`TTS request failed: ${err.code || err.message || 'network error'}`);
+    }
+
+    let audio = Buffer.from(response.data || []);
+    let contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+
+    if (response.status < 200 || response.status >= 300) {
+        let detail = '';
+        try {
+            const body = JSON.parse(audio.toString('utf8'));
+            detail = body.error?.message || body.error || body.message || '';
+        } catch {
+            detail = audio.toString('utf8').slice(0, 180).replace(/\s+/g, ' ').trim();
+        }
+        throw new Error(`TTS provider returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
+    }
+
+    // Some OpenAI-compatible servers return base64 audio in JSON instead of a stream.
+    if (provider === 'openai-compatible' && contentType.includes('application/json')) {
+        let data;
+        try { data = JSON.parse(audio.toString('utf8')); } catch { data = null; }
+        const encoded = data?.audio || data?.audio_base64 || data?.data;
+        if (typeof encoded !== 'string' || !encoded.trim()) {
+            throw new Error('TTS JSON response did not contain a base64 audio field.');
+        }
+        audio = Buffer.from(encoded.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64');
+        contentType = String(data?.mimeType || data?.mime_type || 'audio/mpeg').split(';')[0].trim().toLowerCase();
+    }
+
+    const mimeType = validateTTSAudio(audio, contentType);
+    return {
+        buffer: audio,
+        mimeType,
+        isOggOpus: /ogg/i.test(mimeType) && (/opus/i.test(mimeType) || String(process.env.TTS_API_FORMAT || '').toLowerCase() === 'opus')
+    };
+}
+
 async function sendAIReply(jid, text, quotedMessage = null) {
     const cleanText = String(text || '').trim();
     const sendOptions = quotedMessage ? { quoted: quotedMessage } : undefined;
@@ -317,54 +448,30 @@ async function sendAIReply(jid, text, quotedMessage = null) {
 
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
-        const endpoint = String(process.env.TTS_API_URL || '').trim();
-        if (endpoint && speechText) {
+        if (speechText) {
             try {
-                const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
-                if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
-                const response = await axios.post(endpoint, {
-                    model: process.env.TTS_API_MODEL || 'kokoro',
-                    input: speechText,
-                    voice: process.env.TTS_API_VOICE || 'af_heart',
-                    response_format: process.env.TTS_API_FORMAT || 'mp3'
-                }, {
-                    headers,
-                    responseType: 'arraybuffer',
-                    timeout: Number(process.env.TTS_API_TIMEOUT_MS) || 45000,
-                    maxContentLength: 20 * 1024 * 1024
-                });
-
-                let audio = Buffer.from(response.data || []);
-                let mimeType = String(response.headers?.['content-type'] || '').split(';')[0].trim();
-                if (mimeType.includes('application/json')) {
-                    let payload;
-                    try { payload = JSON.parse(audio.toString('utf8')); } catch { payload = null; }
-                    const encoded = payload?.audio || payload?.audio_base64 || payload?.data;
-                    if (typeof encoded !== 'string' || !encoded.trim()) {
-                        throw new Error('TTS JSON response did not contain a base64 audio field.');
-                    }
-                    audio = Buffer.from(encoded.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64');
-                    mimeType = payload?.mimeType || payload?.mime_type || 'audio/mpeg';
+                const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
+                // Kiprio's demo endpoint accepts up to 500 characters per request.
+                // Send longer replies as ordered audio parts instead of silently truncating them.
+                const chunks = provider === 'kiprio' ? splitTTSChunks(speechText, 500) : [speechText];
+                const audioParts = [];
+                for (const chunk of chunks) {
+                    audioParts.push(await generateTTSAudio(chunk));
                 }
-                if (!audio.length) throw new Error('TTS returned an empty audio file.');
-
-                const isOpusOgg = /audio\/ogg/i.test(mimeType) &&
-                    (/opus/i.test(mimeType) || String(process.env.TTS_API_FORMAT || '').toLowerCase() === 'opus');
-                await sock.sendMessage(jid, {
-                    audio,
-                    mimetype: mimeType || ((process.env.TTS_API_FORMAT || 'mp3').toLowerCase() === 'wav' ? 'audio/wav' : 'audio/mpeg'),
-                    // WhatsApp voice-note mode requires compatible OGG/Opus audio.
-                    ptt: process.env.TTS_API_PTT === 'true' && isOpusOgg
-                }, sendOptions);
+                for (const audioResult of audioParts) {
+                    await sock.sendMessage(jid, {
+                        audio: audioResult.buffer,
+                        mimetype: audioResult.mimeType,
+                        // WhatsApp voice-note mode requires compatible OGG/Opus audio.
+                        ptt: process.env.TTS_API_PTT === 'true' && audioResult.isOggOpus
+                    }, sendOptions);
+                }
                 return;
             } catch (err) {
-                const detail = err.response?.data
-                    ? Buffer.from(err.response.data).toString('utf8').slice(0, 300)
-                    : err.message;
-                console.log('Self-hosted TTS failed; falling back to text:', detail);
+                console.log(`[TTS] Audio generation failed; falling back to text: ${err.message}`);
             }
         } else {
-            console.log('Voice replies are enabled but TTS_API_URL is missing or there is no speakable text.');
+            console.log('[TTS] Voice replies are enabled but there is no speakable text.');
         }
     }
     return sendWithTyping(jid, { text: cleanText }, quotedMessage);
@@ -1204,8 +1311,9 @@ if (
     }
     if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
         const enabled = await getTTSMode(jid);
-        const configured = !!process.env.TTS_API_URL;
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nSelf-hosted TTS endpoint: ${configured ? 'configured' : 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (optional)' : 'not required/configured'}\nPreference scope: this chat` }, m);
+        const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
+        const endpoint = String(process.env.TTS_API_URL || (provider === 'kiprio' ? 'https://kiprio.com/v1/tts/demo' : '')).trim();
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nEndpoint: ${endpoint || 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured' : (provider === 'kiprio' ? 'not required for demo endpoint' : 'not configured')}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
