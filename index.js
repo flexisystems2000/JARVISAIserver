@@ -156,6 +156,52 @@ async function checkWebsite(rawUrl, includeContent = false) {
     return { url, reachable: response.status >= 200 && response.status < 500, status: response.status, ms: Date.now() - started, title, description, headings };
 }
 
+async function captureWebsiteScreenshot(rawUrl) {
+    const url = validatePublicHttpUrl(rawUrl);
+    let chromium;
+    try {
+        ({ chromium } = require('playwright'));
+    } catch {
+        throw new Error('Playwright is not installed. Install dependencies and Chromium to enable website screenshots.');
+    }
+
+    const browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    try {
+        const page = await browser.newPage({
+            viewport: { width: 1365, height: 900 },
+            deviceScaleFactor: 1
+        });
+        page.setDefaultNavigationTimeout(25000);
+        await page.route('**/*', async route => {
+            try {
+                const requestUrl = route.request().url();
+                if (/^(data|blob):/i.test(requestUrl)) return route.continue();
+                validatePublicHttpUrl(requestUrl);
+                return route.continue();
+            } catch {
+                return route.abort();
+            }
+        });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+        const finalUrl = validatePublicHttpUrl(page.url());
+        const dimensions = await page.evaluate(() => ({
+            width: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0),
+            height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
+        }));
+        // Keep very long pages to a viewport screenshot to avoid huge WhatsApp uploads.
+        const fullPage = dimensions.height <= 12000;
+        const buffer = await page.screenshot({ type: 'jpeg', quality: 78, fullPage });
+        if (!buffer?.length) throw new Error('Browser returned an empty screenshot.');
+        return { buffer, url: finalUrl, fullPage };
+    } finally {
+        await browser.close().catch(() => {});
+    }
+}
+
 async function translateText(source, target, input) {
     const endpoint = (process.env.LIBRETRANSLATE_URL || 'https://libretranslate.de').replace(/\/$/, '');
     const payload = { q: input, source: source || 'auto', target, format: 'text' };
@@ -243,25 +289,59 @@ function extractTTSPlainText(value) {
 
 async function sendAIReply(jid, text, quotedMessage = null) {
     const cleanText = String(text || '').trim();
-    if (!cleanText) return sock.sendMessage(jid, { text: '⚠️ I received an empty reply.' }, quotedMessage ? { quoted: quotedMessage } : undefined);
+    const sendOptions = quotedMessage ? { quoted: quotedMessage } : undefined;
+    if (!cleanText) return sock.sendMessage(jid, { text: '⚠️ I received an empty reply.' }, sendOptions);
+
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
-        const apiKey = process.env.NAIJA_ASR_KEY;
-        if (apiKey && speechText) {
+        const endpoint = String(process.env.TTS_API_URL || '').trim();
+        if (endpoint && speechText) {
             try {
-                const response = await axios.post(
-                    'https://asr.naijallm.com/v1/audio/speech',
-                    { model: process.env.NAIJA_TTS_MODEL || 'naija-tts', input: speechText, voice: process.env.NAIJA_TTS_VOICE || 'default', response_format: 'mp3' },
-                    { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, responseType: 'arraybuffer', timeout: 30000 }
-                );
-                const audio = Buffer.from(response.data);
+                const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
+                if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
+                const response = await axios.post(endpoint, {
+                    model: process.env.TTS_API_MODEL || 'kokoro',
+                    input: speechText,
+                    voice: process.env.TTS_API_VOICE || 'af_heart',
+                    response_format: process.env.TTS_API_FORMAT || 'mp3'
+                }, {
+                    headers,
+                    responseType: 'arraybuffer',
+                    timeout: Number(process.env.TTS_API_TIMEOUT_MS) || 45000,
+                    maxContentLength: 20 * 1024 * 1024
+                });
+
+                let audio = Buffer.from(response.data || []);
+                let mimeType = String(response.headers?.['content-type'] || '').split(';')[0].trim();
+                if (mimeType.includes('application/json')) {
+                    let payload;
+                    try { payload = JSON.parse(audio.toString('utf8')); } catch { payload = null; }
+                    const encoded = payload?.audio || payload?.audio_base64 || payload?.data;
+                    if (typeof encoded !== 'string' || !encoded.trim()) {
+                        throw new Error('TTS JSON response did not contain a base64 audio field.');
+                    }
+                    audio = Buffer.from(encoded.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64');
+                    mimeType = payload?.mimeType || payload?.mime_type || 'audio/mpeg';
+                }
                 if (!audio.length) throw new Error('TTS returned an empty audio file.');
-                return await sock.sendMessage(jid, { audio, mimetype: 'audio/mpeg', ptt: true }, quotedMessage ? { quoted: quotedMessage } : undefined);
+
+                const isOpusOgg = /audio\/ogg/i.test(mimeType) &&
+                    (/opus/i.test(mimeType) || String(process.env.TTS_API_FORMAT || '').toLowerCase() === 'opus');
+                await sock.sendMessage(jid, {
+                    audio,
+                    mimetype: mimeType || ((process.env.TTS_API_FORMAT || 'mp3').toLowerCase() === 'wav' ? 'audio/wav' : 'audio/mpeg'),
+                    // WhatsApp voice-note mode requires compatible OGG/Opus audio.
+                    ptt: process.env.TTS_API_PTT === 'true' && isOpusOgg
+                }, sendOptions);
+                return;
             } catch (err) {
-                console.log('TTS generation failed; falling back to text:', err.response?.data ? String(err.response.data).slice(0, 300) : err.message);
+                const detail = err.response?.data
+                    ? Buffer.from(err.response.data).toString('utf8').slice(0, 300)
+                    : err.message;
+                console.log('Self-hosted TTS failed; falling back to text:', detail);
             }
         } else {
-            console.log('TTS is enabled but NAIJA_ASR_KEY is not configured; falling back to text.');
+            console.log('Voice replies are enabled but TTS_API_URL is missing or there is no speakable text.');
         }
     }
     return sendWithTyping(jid, { text: cleanText }, quotedMessage);
@@ -979,7 +1059,7 @@ if (
         return;
     }
 
-    // Website crawler: retrieves public page title, description, and headings.
+    // Website crawler: inspect metadata and capture a screenshot of the rendered page.
     let crawlUrl = null;
     const crawlMatch = rawMsgCheck.match(/^!crawl\s+(\S+)/i);
     if (crawlMatch) crawlUrl = crawlMatch[1];
@@ -989,8 +1069,25 @@ if (
             const result = await checkWebsite(crawlUrl, true);
             if (!result.reachable) throw new Error(`The website did not return a successful response (HTTP ${result.status ?? 'no response'}).`);
             const headings = result.headings?.length ? result.headings.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'No H1–H3 headings were found.';
-            await operationalReply(`🕸️ *WEBSITE CRAWL SUMMARY*\n\n*URL:* ${result.url}\n*HTTP:* ${result.status}\n*Title:* ${result.title || 'Not found'}\n*Description:* ${result.description || 'Not found'}\n*Headings:*\n${headings}\n\n_Note: this extracts public page metadata/headings; it does not crawl an entire site or bypass access controls._`);
-        } catch (err) { await operationalReply(`⚠️ Website crawl failed: ${err.message}`); }
+            let screenshot = null;
+            let screenshotError = '';
+            try {
+                screenshot = await captureWebsiteScreenshot(result.url);
+            } catch (shotErr) {
+                screenshotError = shotErr.message || 'Screenshot capture failed.';
+                recordJarvisEventLog('WARN', 'Website screenshot capture failed', `${result.url}: ${screenshotError}`);
+            }
+            const summary = `🕸️ *WEBSITE CRAWL SUMMARY*\n\n*URL:* ${result.url}\n*HTTP:* ${result.status}\n*Title:* ${result.title || 'Not found'}\n*Description:* ${result.description || 'Not found'}\n*Headings:*\n${headings}\n\n${screenshot ? '📸 A screenshot of the rendered page is attached.' : `⚠️ Screenshot unavailable: ${screenshotError}`}\n\n_Note: this inspects the supplied public page; it does not crawl an entire site or bypass access controls._`;
+            await operationalReply(summary);
+            if (screenshot?.buffer?.length) {
+                await sock.sendMessage(jid, {
+                    image: screenshot.buffer,
+                    caption: `📸 Website screenshot\n${screenshot.url}`
+                }, { quoted: m });
+            }
+        } catch (err) {
+            await operationalReply(`⚠️ Website crawl failed: ${err.message}`);
+        }
         return;
     }
 
@@ -1084,8 +1181,8 @@ if (
     }
     if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
         const enabled = await getTTSMode(jid);
-        const configured = !!process.env.NAIJA_ASR_KEY;
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider key: ${configured ? 'configured' : 'missing (text fallback will be used)'}\nPreference scope: this chat` }, m);
+        const configured = !!process.env.TTS_API_URL;
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nSelf-hosted TTS endpoint: ${configured ? 'configured' : 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (optional)' : 'not required/configured'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
