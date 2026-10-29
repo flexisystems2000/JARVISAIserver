@@ -429,29 +429,62 @@ async function sendAIReply(jid, text, quotedMessage = null) {
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
         if (speechText) {
+            let deliveredFiles = 0;
             try {
                 const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
-                // Piper service validates each request at 500 characters.
-                // Send longer replies as ordered audio parts instead of truncating them.
+                // Piper accepts up to 500 characters per request. Each WAV is sent
+                // as a downloadable audio file (document), NOT as a WhatsApp voice note.
                 const chunks = splitTTSChunks(speechText, 500);
-                const audioParts = [];
-                for (const chunk of chunks) {
-                    audioParts.push(await generateTTSAudio(chunk));
+                console.log(`[TTS] Starting ${provider} audio reply for ${jid}; ${chunks.length} file(s) planned.`);
+
+                for (let i = 0; i < chunks.length; i++) {
+                    console.log(`[TTS] Generating audio file ${i + 1}/${chunks.length} (${chunks[i].length} characters).`);
+                    const audioResult = await generateTTSAudio(chunks[i]);
+
+                    if (!Buffer.isBuffer(audioResult?.buffer) || audioResult.buffer.length < 12) {
+                        throw new Error(`Audio part ${i + 1} is empty or invalid.`);
+                    }
+                    if (audioResult.mimeType !== 'audio/wav') {
+                        throw new Error(`Audio part ${i + 1} has unexpected MIME type: ${audioResult.mimeType || 'unknown'}.`);
+                    }
+
+                    const fileName = `Jarvis-Audio-${String(i + 1).padStart(2, '0')}.wav`;
+                    console.log(`[TTS] Piper returned ${audioResult.buffer.length} bytes for ${fileName}; sending to WhatsApp as an audio file.`);
+
+                    const sent = await sock.sendMessage(jid, {
+                        document: audioResult.buffer,
+                        mimetype: 'audio/wav',
+                        fileName,
+                        caption: chunks.length > 1 ? `🔊 Jarvis audio response (${i + 1}/${chunks.length})` : '🔊 Jarvis audio response'
+                    }, i === 0 ? sendOptions : undefined);
+
+                    if (!sent?.key?.id) {
+                        throw new Error(`WhatsApp did not return a message ID for ${fileName}.`);
+                    }
+                    deliveredFiles++;
+                    console.log(`[TTS] WhatsApp accepted ${fileName}; message ID: ${sent.key.id}.`);
                 }
-                for (const audioResult of audioParts) {
-                    await sock.sendMessage(jid, {
-                        audio: audioResult.buffer,
-                        mimetype: audioResult.mimeType,
-                        // WhatsApp voice-note mode requires compatible OGG/Opus audio.
-                        ptt: process.env.TTS_API_PTT === 'true' && audioResult.isOggOpus
-                    }, sendOptions);
-                }
+
+                console.log(`[TTS] Audio reply completed successfully: ${deliveredFiles}/${chunks.length} file(s) delivered to ${jid}.`);
                 return;
             } catch (err) {
-                console.log(`[TTS] Audio generation failed; falling back to text: ${err.message}`);
+                console.error(`[TTS] Audio delivery failed for ${jid} after ${deliveredFiles} file(s):`, err?.stack || err?.message || err);
+                // Keep the existing reliable text fallback so a TTS problem never
+                // prevents Jarvis from answering the user.
+                try {
+                    await sock.sendMessage(jid, {
+                        text: deliveredFiles
+                            ? `⚠️ I sent ${deliveredFiles} audio file(s), but the remaining audio could not be delivered. Here is the complete reply in text:\n\n${cleanText}`
+                            : `⚠️ I couldn't deliver the audio file. Here is my reply in text instead:\n\n${cleanText}`
+                    }, sendOptions);
+                    return;
+                } catch (fallbackErr) {
+                    console.error(`[TTS] Text fallback also failed for ${jid}:`, fallbackErr?.stack || fallbackErr?.message || fallbackErr);
+                    throw fallbackErr;
+                }
             }
         } else {
-            console.log('[TTS] Voice replies are enabled but there is no speakable text.');
+            console.log('[TTS] Audio replies are enabled but there is no speakable text.');
         }
     }
     return sendWithTyping(jid, { text: cleanText }, quotedMessage);
@@ -1293,7 +1326,7 @@ if (
         const enabled = await getTTSMode(jid);
         const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
         const endpoint = String(process.env.PIPER_TTS_URL || process.env.TTS_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com/tts').trim();
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
+        await sendWithTyping(jid, { text: `🎙️ *Audio reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nDelivery format: downloadable WAV audio file (not voice note)\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
