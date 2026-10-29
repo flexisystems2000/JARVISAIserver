@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "check": "node --check index.js",
-    "postinstall": "playwright install chromium"
+    "postinstall": "playwright install chromium",
+    "build": "playwright install chromium"
   },
   "keywords": [
     "whatsapp",
