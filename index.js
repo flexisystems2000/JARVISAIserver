@@ -284,7 +284,7 @@ function extractTTSPlainText(value) {
         .replace(/https?:\/\/\S+/g, 'link')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 1800);
+        .slice(0, 500);
 }
 
 async function sendAIReply(jid, text, quotedMessage = null) {
@@ -294,16 +294,18 @@ async function sendAIReply(jid, text, quotedMessage = null) {
 
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
-        const endpoint = String(process.env.TTS_API_URL || '').trim();
+        // Kiprio's no-key demo endpoint is the default; TTS_API_URL can override it.
+        const endpoint = String(process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo').trim();
         if (endpoint && speechText) {
             try {
-                const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
-                if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
+                const headers = { 'Content-Type': 'application/json', Accept: 'audio/mpeg, audio/*, application/json' };
+                // Kiprio's demo endpoint requires no key. If using its authenticated endpoint,
+                // pass the key in X-API-Key as required by Kiprio's API documentation.
+                if (process.env.TTS_API_KEY) headers['X-API-Key'] = process.env.TTS_API_KEY;
                 const response = await axios.post(endpoint, {
-                    model: process.env.TTS_API_MODEL || 'kokoro',
-                    input: speechText,
-                    voice: process.env.TTS_API_VOICE || 'af_heart',
-                    response_format: process.env.TTS_API_FORMAT || 'mp3'
+                    text: speechText,
+                    lang: process.env.TTS_API_LANG || 'en',
+                    slow: String(process.env.TTS_API_SLOW || 'false').toLowerCase() === 'true'
                 }, {
                     headers,
                     responseType: 'arraybuffer',
@@ -1181,8 +1183,8 @@ if (
     }
     if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
         const enabled = await getTTSMode(jid);
-        const configured = !!process.env.TTS_API_URL;
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nSelf-hosted TTS endpoint: ${configured ? 'configured' : 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (optional)' : 'not required/configured'}\nPreference scope: this chat` }, m);
+        const configured = !!(process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo');
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: Kiprio (${configured ? 'endpoint configured' : 'not configured'})\nEndpoint: ${process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (X-API-Key)' : 'not required for demo endpoint'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
