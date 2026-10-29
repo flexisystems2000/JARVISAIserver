@@ -359,38 +359,30 @@ function validateTTSAudio(buffer, contentType = '') {
 }
 
 async function generateTTSAudio(speechText) {
-    const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
+    const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
     const endpoint = String(
+        process.env.PIPER_TTS_URL ||
         process.env.TTS_API_URL ||
-        (provider === 'kiprio' ? 'https://kiprio.com/v1/tts/demo' : '')
+        'https://flexi-jarvis-piper-tts.onrender.com/tts'
     ).trim();
 
-    if (!endpoint) {
-        throw new Error('TTS_API_URL is missing for the selected TTS_PROVIDER.');
-    }
+    if (!endpoint) throw new Error('PIPER_TTS_URL is missing.');
 
-    const timeoutMs = Math.max(5000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 45000, 90000));
-    const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
-    if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
+    const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+    if (!apiKey) throw new Error('PIPER_API_KEY is missing in the Jarvis Render environment.');
+
+    const timeoutMs = Math.max(15000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 120000, 180000));
+    const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'audio/wav, application/json',
+        'X-API-Key': apiKey
+    };
 
     let payload;
-    if (provider === 'kiprio') {
-        // Kiprio's demo endpoint accepts plain text, language and a slow-speech flag.
-        // Its public demo is limited to 500 characters per request.
-        payload = {
-            text: String(speechText || '').trim(),
-            lang: String(process.env.TTS_LANGUAGE || 'en').trim(),
-            slow: String(process.env.TTS_SLOW || 'false').toLowerCase() === 'true'
-        };
-    } else if (provider === 'openai-compatible') {
-        payload = {
-            model: process.env.TTS_API_MODEL || 'kokoro',
-            input: speechText,
-            voice: process.env.TTS_API_VOICE || 'af_heart',
-            response_format: process.env.TTS_API_FORMAT || 'mp3'
-        };
+    if (provider === 'piper') {
+        payload = { text: String(speechText || '').trim() };
     } else {
-        throw new Error(`Unsupported TTS_PROVIDER "${provider}". Use "kiprio" or "openai-compatible".`);
+        throw new Error(`Unsupported TTS_PROVIDER "${provider}". This deployment is configured for Piper.`);
     }
 
     let response;
@@ -404,41 +396,29 @@ async function generateTTSAudio(speechText) {
             validateStatus: () => true
         });
     } catch (err) {
-        throw new Error(`TTS request failed: ${err.code || err.message || 'network error'}`);
+        throw new Error(`Piper request failed: ${err.code || err.message || 'network error'}`);
     }
 
-    let audio = Buffer.from(response.data || []);
-    let contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const audio = Buffer.from(response.data || []);
+    const contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
 
     if (response.status < 200 || response.status >= 300) {
         let detail = '';
         try {
             const body = JSON.parse(audio.toString('utf8'));
-            detail = body.error?.message || body.error || body.message || '';
+            detail = body.detail || body.error?.message || body.error || body.message || '';
         } catch {
             detail = audio.toString('utf8').slice(0, 180).replace(/\s+/g, ' ').trim();
         }
-        throw new Error(`TTS provider returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
-    }
-
-    // Some OpenAI-compatible servers return base64 audio in JSON instead of a stream.
-    if (provider === 'openai-compatible' && contentType.includes('application/json')) {
-        let data;
-        try { data = JSON.parse(audio.toString('utf8')); } catch { data = null; }
-        const encoded = data?.audio || data?.audio_base64 || data?.data;
-        if (typeof encoded !== 'string' || !encoded.trim()) {
-            throw new Error('TTS JSON response did not contain a base64 audio field.');
-        }
-        audio = Buffer.from(encoded.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64');
-        contentType = String(data?.mimeType || data?.mime_type || 'audio/mpeg').split(';')[0].trim().toLowerCase();
+        throw new Error(`Piper returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
     }
 
     const mimeType = validateTTSAudio(audio, contentType);
-    return {
-        buffer: audio,
-        mimeType,
-        isOggOpus: /ogg/i.test(mimeType) && (/opus/i.test(mimeType) || String(process.env.TTS_API_FORMAT || '').toLowerCase() === 'opus')
-    };
+    if (mimeType !== 'audio/wav') {
+        throw new Error(`Piper should return WAV audio, but returned ${mimeType}.`);
+    }
+
+    return { buffer: audio, mimeType: 'audio/wav', isOggOpus: false };
 }
 
 async function sendAIReply(jid, text, quotedMessage = null) {
@@ -450,10 +430,10 @@ async function sendAIReply(jid, text, quotedMessage = null) {
         const speechText = extractTTSPlainText(cleanText);
         if (speechText) {
             try {
-                const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
-                // Kiprio's demo endpoint accepts up to 500 characters per request.
-                // Send longer replies as ordered audio parts instead of silently truncating them.
-                const chunks = provider === 'kiprio' ? splitTTSChunks(speechText, 500) : [speechText];
+                const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
+                // Piper service validates each request at 500 characters.
+                // Send longer replies as ordered audio parts instead of truncating them.
+                const chunks = splitTTSChunks(speechText, 500);
                 const audioParts = [];
                 for (const chunk of chunks) {
                     audioParts.push(await generateTTSAudio(chunk));
@@ -1311,9 +1291,9 @@ if (
     }
     if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
         const enabled = await getTTSMode(jid);
-        const provider = String(process.env.TTS_PROVIDER || 'kiprio').trim().toLowerCase();
-        const endpoint = String(process.env.TTS_API_URL || (provider === 'kiprio' ? 'https://kiprio.com/v1/tts/demo' : '')).trim();
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nEndpoint: ${endpoint || 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured' : (provider === 'kiprio' ? 'not required for demo endpoint' : 'not configured')}\nPreference scope: this chat` }, m);
+        const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
+        const endpoint = String(process.env.PIPER_TTS_URL || process.env.TTS_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com/tts').trim();
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
