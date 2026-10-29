@@ -1,13 +1,11 @@
 {
   "name": "jarvis-ai-bot",
   "version": "2.5.0",
-  "description": "JARVIS AI powered by Flexi edTech Digital Academy",
+  "description": "JARVIS AI powered by Flexi edTech Digital Academy (Webshot API screenshots; no local Chromium required)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js",
-    "postinstall": "playwright install chromium",
-    "build": "playwright install chromium"
+    "check": "node --check index.js"
   },
   "keywords": [
     "whatsapp",
@@ -38,8 +36,7 @@
     "mongoose": "^8.4.1",
     "pino": "^9.1.0",
     "qrcode-terminal": "^0.12.0",
-    "youtubei.js": "^13.0.0",
-    "playwright": "^1.56.1"
+    "youtubei.js": "^13.0.0"
   },
   "engines": {
     "node": ">=20"

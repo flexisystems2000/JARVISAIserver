@@ -158,48 +158,71 @@ async function checkWebsite(rawUrl, includeContent = false) {
 
 async function captureWebsiteScreenshot(rawUrl) {
     const url = validatePublicHttpUrl(rawUrl);
-    let chromium;
-    try {
-        ({ chromium } = require('playwright'));
-    } catch {
-        throw new Error('Playwright is not installed. Install dependencies and Chromium to enable website screenshots.');
+    const endpoint = 'https://webshot.site/api/capture';
+    // Viewport mode costs one anonymous credit; set WEBSHOT_MODE=desktop_full
+    // in Render environment variables if full-page screenshots are preferred.
+    const mode = (process.env.WEBSHOT_MODE || 'desktop_viewport').trim();
+    const allowedModes = new Set([
+        'desktop_full', 'desktop_viewport',
+        'tablet_full', 'tablet_viewport',
+        'mobile_full', 'mobile_viewport'
+    ]);
+    if (!allowedModes.has(mode)) {
+        throw new Error(`Invalid WEBSHOT_MODE "${mode}". Use desktop_viewport, desktop_full, tablet_viewport, tablet_full, mobile_viewport, or mobile_full.`);
     }
 
-    const browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    let response;
     try {
-        const page = await browser.newPage({
-            viewport: { width: 1365, height: 900 },
-            deviceScaleFactor: 1
+        response = await axios.post(endpoint, {
+            url,
+            format: 'jpg',
+            mode
+        }, {
+            timeout: 90000,
+            responseType: 'arraybuffer',
+            maxContentLength: 12 * 1024 * 1024,
+            maxBodyLength: 1024 * 1024,
+            validateStatus: () => true,
+            headers: { 'Content-Type': 'application/json', 'Accept': 'image/jpeg, application/json' }
         });
-        page.setDefaultNavigationTimeout(25000);
-        await page.route('**/*', async route => {
-            try {
-                const requestUrl = route.request().url();
-                if (/^(data|blob):/i.test(requestUrl)) return route.continue();
-                validatePublicHttpUrl(requestUrl);
-                return route.continue();
-            } catch {
-                return route.abort();
-            }
-        });
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 25000 });
-        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-        const finalUrl = validatePublicHttpUrl(page.url());
-        const dimensions = await page.evaluate(() => ({
-            width: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0),
-            height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
-        }));
-        // Keep very long pages to a viewport screenshot to avoid huge WhatsApp uploads.
-        const fullPage = dimensions.height <= 12000;
-        const buffer = await page.screenshot({ type: 'jpeg', quality: 78, fullPage });
-        if (!buffer?.length) throw new Error('Browser returned an empty screenshot.');
-        return { buffer, url: finalUrl, fullPage };
-    } finally {
-        await browser.close().catch(() => {});
+    } catch (err) {
+        if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '')) {
+            throw new Error('Webshot timed out after 90 seconds. Try the crawl again later.');
+        }
+        throw new Error(`Webshot request failed: ${err.message || 'network error'}`);
     }
+
+    if (response.status !== 200) {
+        let details = '';
+        try {
+            const raw = Buffer.from(response.data || []).toString('utf8');
+            const parsed = JSON.parse(raw);
+            details = parsed.error || parsed.message || raw;
+        } catch {
+            details = Buffer.from(response.data || []).toString('utf8').slice(0, 400);
+        }
+        if (response.status === 429) {
+            const retryAfter = response.headers?.['retry-after'];
+            throw new Error(`Webshot rate limit reached${retryAfter ? `. Retry after ${retryAfter} seconds` : ''}. ${details}`.trim());
+        }
+        if (response.status === 503) {
+            throw new Error(`Webshot is temporarily busy. Try again shortly. ${details}`.trim());
+        }
+        throw new Error(`Webshot returned HTTP ${response.status}${details ? `: ${details}` : ''}`);
+    }
+
+    const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
+    const buffer = Buffer.from(response.data || []);
+    if (!buffer.length) throw new Error('Webshot returned an empty screenshot.');
+    if (contentType.includes('application/json') || contentType.includes('text/html')) {
+        const body = buffer.toString('utf8').slice(0, 400);
+        throw new Error(`Webshot returned an unexpected response instead of an image: ${body}`);
+    }
+    // JPEG magic bytes: FF D8 FF. Avoid forwarding API error bodies as images.
+    if (buffer.length < 3 || buffer[0] !== 0xff || buffer[1] !== 0xd8 || buffer[2] !== 0xff) {
+        throw new Error('Webshot response was not a valid JPEG image.');
+    }
+    return { buffer, url, fullPage: mode.endsWith('_full'), mode };
 }
 
 async function translateText(source, target, input) {
@@ -284,7 +307,7 @@ function extractTTSPlainText(value) {
         .replace(/https?:\/\/\S+/g, 'link')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 500);
+        .slice(0, 1800);
 }
 
 async function sendAIReply(jid, text, quotedMessage = null) {
@@ -294,18 +317,16 @@ async function sendAIReply(jid, text, quotedMessage = null) {
 
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
-        // Kiprio's no-key demo endpoint is the default; TTS_API_URL can override it.
-        const endpoint = String(process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo').trim();
+        const endpoint = String(process.env.TTS_API_URL || '').trim();
         if (endpoint && speechText) {
             try {
-                const headers = { 'Content-Type': 'application/json', Accept: 'audio/mpeg, audio/*, application/json' };
-                // Kiprio's demo endpoint requires no key. If using its authenticated endpoint,
-                // pass the key in X-API-Key as required by Kiprio's API documentation.
-                if (process.env.TTS_API_KEY) headers['X-API-Key'] = process.env.TTS_API_KEY;
+                const headers = { 'Content-Type': 'application/json', Accept: 'audio/*, application/json' };
+                if (process.env.TTS_API_KEY) headers.Authorization = `Bearer ${process.env.TTS_API_KEY}`;
                 const response = await axios.post(endpoint, {
-                    text: speechText,
-                    lang: process.env.TTS_API_LANG || 'en',
-                    slow: String(process.env.TTS_API_SLOW || 'false').toLowerCase() === 'true'
+                    model: process.env.TTS_API_MODEL || 'kokoro',
+                    input: speechText,
+                    voice: process.env.TTS_API_VOICE || 'af_heart',
+                    response_format: process.env.TTS_API_FORMAT || 'mp3'
                 }, {
                     headers,
                     responseType: 'arraybuffer',
@@ -1183,8 +1204,8 @@ if (
     }
     if (['!tts', '!tts status', 'voice mode status', 'is voice mode on'].includes(normalizedOperationalText)) {
         const enabled = await getTTSMode(jid);
-        const configured = !!(process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo');
-        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: Kiprio (${configured ? 'endpoint configured' : 'not configured'})\nEndpoint: ${process.env.TTS_API_URL || 'https://kiprio.com/v1/tts/demo'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (X-API-Key)' : 'not required for demo endpoint'}\nPreference scope: this chat` }, m);
+        const configured = !!process.env.TTS_API_URL;
+        await sendWithTyping(jid, { text: `🎙️ *Voice reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nSelf-hosted TTS endpoint: ${configured ? 'configured' : 'missing (set TTS_API_URL)'}\nAPI key: ${process.env.TTS_API_KEY ? 'configured (optional)' : 'not required/configured'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
