@@ -374,7 +374,7 @@ async function generateTTSAudio(speechText) {
     const timeoutMs = Math.max(15000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 120000, 180000));
     const headers = {
         'Content-Type': 'application/json',
-        Accept: 'audio/wav, application/json',
+        Accept: 'audio/ogg, application/json',
         'X-API-Key': apiKey
     };
 
@@ -413,12 +413,23 @@ async function generateTTSAudio(speechText) {
         throw new Error(`Piper returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
     }
 
-    const mimeType = validateTTSAudio(audio, contentType);
-    if (mimeType !== 'audio/wav') {
-        throw new Error(`Piper should return WAV audio, but returned ${mimeType}.`);
+    const detectedMimeType = validateTTSAudio(audio, contentType);
+    const audioFormat = String(response.headers?.['x-audio-format'] || '').trim().toLowerCase();
+
+    // Piper now returns an OGG container encoded with Opus.
+    // Check both the container signature and the service's format marker.
+    if (detectedMimeType !== 'audio/ogg' || audio.subarray(0, 4).toString('ascii') !== 'OggS') {
+        throw new Error(`Piper should return OGG/Opus audio, but returned ${detectedMimeType}.`);
+    }
+    if (audioFormat && audioFormat !== 'ogg-opus') {
+        throw new Error(`Piper returned an unsupported OGG format: ${audioFormat}.`);
     }
 
-    return { buffer: audio, mimeType: 'audio/wav', isOggOpus: false };
+    return {
+        buffer: audio,
+        mimeType: 'audio/ogg; codecs=opus',
+        isOggOpus: true
+    };
 }
 
 async function sendAIReply(jid, text, quotedMessage = null) {
@@ -432,8 +443,8 @@ async function sendAIReply(jid, text, quotedMessage = null) {
             let deliveredFiles = 0;
             try {
                 const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
-                // Piper accepts up to 500 characters per request. Each WAV is sent
-                // as a downloadable audio file (document), NOT as a WhatsApp voice note.
+                // Piper accepts up to 500 characters per request.
+                // Each OGG/Opus response is sent as a WhatsApp PTT voice note.
                 const chunks = splitTTSChunks(speechText, 500);
                 console.log(`[TTS] Starting ${provider} audio reply for ${jid}; ${chunks.length} file(s) planned.`);
 
@@ -444,25 +455,23 @@ async function sendAIReply(jid, text, quotedMessage = null) {
                     if (!Buffer.isBuffer(audioResult?.buffer) || audioResult.buffer.length < 12) {
                         throw new Error(`Audio part ${i + 1} is empty or invalid.`);
                     }
-                    if (audioResult.mimeType !== 'audio/wav') {
-                        throw new Error(`Audio part ${i + 1} has unexpected MIME type: ${audioResult.mimeType || 'unknown'}.`);
+                    if (audioResult.mimeType !== 'audio/ogg; codecs=opus' || !audioResult.isOggOpus) {
+                        throw new Error(`Audio part ${i + 1} is not verified OGG/Opus audio.`);
                     }
 
-                    const fileName = `Jarvis-Audio-${String(i + 1).padStart(2, '0')}.wav`;
-                    console.log(`[TTS] Piper returned ${audioResult.buffer.length} bytes for ${fileName}; sending to WhatsApp as an audio file.`);
+                    console.log(`[TTS] Piper returned ${audioResult.buffer.length} bytes for voice note ${i + 1}; sending as WhatsApp PTT audio.`);
 
                     const sent = await sock.sendMessage(jid, {
-                        document: audioResult.buffer,
-                        mimetype: 'audio/wav',
-                        fileName,
-                        caption: chunks.length > 1 ? `🔊 Jarvis audio response (${i + 1}/${chunks.length})` : '🔊 Jarvis audio response'
+                        audio: audioResult.buffer,
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
                     }, i === 0 ? sendOptions : undefined);
 
                     if (!sent?.key?.id) {
-                        throw new Error(`WhatsApp did not return a message ID for ${fileName}.`);
+                        throw new Error(`WhatsApp did not return a message ID for voice note ${i + 1}.`);
                     }
                     deliveredFiles++;
-                    console.log(`[TTS] WhatsApp accepted ${fileName}; message ID: ${sent.key.id}.`);
+                    console.log(`[TTS] WhatsApp accepted voice note ${i + 1}; message ID: ${sent.key.id}.`);
                 }
 
                 console.log(`[TTS] Audio reply completed successfully: ${deliveredFiles}/${chunks.length} file(s) delivered to ${jid}.`);
