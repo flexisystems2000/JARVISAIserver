@@ -235,9 +235,8 @@ async function translateText(source, target, input) {
 }
 
 // ============================================================
-// YOUTUBE — use the existing Piper service's yt-dlp endpoints.
-// No YouTube Data API key or public Invidious instance is needed.
-// The existing PIPER_API_KEY authenticates these requests.
+// YOUTUBE — use the NovaStack-backed YouTube routes exposed by the Piper service.
+// The existing PIPER_API_KEY authenticates Jarvis to the Python service.
 // ============================================================
 function getYouTubeServiceConfig() {
     const baseUrl = String(
@@ -276,9 +275,28 @@ async function searchYouTube(query, limit = 5) {
     return response.data.results;
 }
 
+function getYouTubeWatchUrl(videoId) {
+    const value = String(videoId || '').trim();
+    if (/^[\w-]{11}$/.test(value)) {
+        return `https://www.youtube.com/watch?v=${value}`;
+    }
+    let parsed;
+    try { parsed = new URL(value); } catch { throw new Error('Provide a valid 11-character YouTube video ID or YouTube URL.'); }
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    let id = '';
+    if (host === 'youtu.be') id = parsed.pathname.split('/').filter(Boolean)[0] || '';
+    else if (['youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
+        id = parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] || '';
+    }
+    if (!/^[\w-]{11}$/.test(id)) throw new Error('That does not look like a valid YouTube video URL.');
+    return `https://www.youtube.com/watch?v=${id}`;
+}
+
 async function getYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const response = await axios.get(`${baseUrl}/youtube/video/${encodeURIComponent(videoId)}`, {
+    const url = getYouTubeWatchUrl(videoId);
+    const response = await axios.get(`${baseUrl}/youtube/video`, {
+        params: { url },
         headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
         timeout: 120000,
         maxContentLength: 2 * 1024 * 1024
@@ -291,7 +309,9 @@ async function getYouTubeVideo(videoId) {
 
 async function downloadYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const response = await axios.get(`${baseUrl}/youtube/download/${encodeURIComponent(videoId)}`, {
+    const url = getYouTubeWatchUrl(videoId);
+    const response = await axios.get(`${baseUrl}/youtube/download`, {
+        params: { url },
         headers: { 'X-API-Key': apiKey, Accept: 'video/mp4, application/octet-stream, application/json' },
         responseType: 'arraybuffer',
         timeout: 180000,
@@ -426,120 +446,78 @@ function validateTTSAudio(buffer, contentType = '') {
     return type || 'application/octet-stream';
 }
 
-async function generateNovaStackTTSAudio(speechText) {
-    const baseUrl = String(process.env.NOVASTACK_BASE_URL || 'https://api-novastack.vercel.app').trim().replace(/\/$/, '');
-    const model = String(process.env.NOVASTACK_VOICE_MODEL || 'novastack-voice-1.0').trim();
-    const voice = String(process.env.NOVASTACK_VOICE || 'ezinne').trim();
-    const timeoutMs = Math.max(15000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 120000, 180000));
-    const endpoint = `${baseUrl}/v1/voice/${encodeURIComponent(model)}?voice=${encodeURIComponent(voice)}&format=mp3`;
-    let response;
-    try {
-        response = await axios.post(endpoint, { input: String(speechText || '').trim() }, {
-            headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg, application/json' },
-            responseType: 'arraybuffer', timeout: timeoutMs,
-            maxContentLength: 20 * 1024 * 1024, maxBodyLength: 1024 * 1024,
-            validateStatus: () => true
-        });
-    } catch (err) {
-        throw new Error(`NovaStack request failed: ${err.code || err.message || 'network error'}`);
-    }
+async function generateTTSAudio(speechText) {
+    const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
+    const endpoint = String(
+        process.env.PIPER_TTS_URL ||
+        process.env.TTS_API_URL ||
+        'https://flexi-jarvis-piper-tts.onrender.com/tts'
+    ).trim();
 
-    let audio = Buffer.from(response.data || []);
-    let contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
-    if (response.status < 200 || response.status >= 300) {
-        let detail = audio.toString('utf8').slice(0, 240).replace(/\s+/g, ' ').trim();
-        try {
-            const body = JSON.parse(audio.toString('utf8'));
-            detail = body.error?.message || body.error || body.message || body.detail || detail;
-        } catch (_) {}
-        throw new Error(`NovaStack returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
-    }
-
-    // The supplied docs show a generic JSON envelope but do not define its fields.
-    // Support common audio/base64/URL fields while validating the actual MP3 bytes.
-    if (/application\/json|text\/plain/.test(contentType) || !audio.length) {
-        let body;
-        try { body = JSON.parse(audio.toString('utf8')); }
-        catch (_) { throw new Error('NovaStack returned text/JSON instead of an MP3 audio stream.'); }
-        if (body.success === false) throw new Error(body.error?.message || body.error || body.message || 'NovaStack reported TTS failure.');
-        const data = body.data ?? body;
-        const encoded = data.audio_base64 || data.audioBase64 || data.base64 || data.audio;
-        const audioUrl = data.audio_url || data.audioUrl || data.url;
-        if (typeof encoded === 'string' && encoded) {
-            audio = Buffer.from(encoded.replace(/^data:audio\/[^;]+;base64,/i, ''), 'base64');
-            contentType = 'audio/mpeg';
-        } else if (typeof audioUrl === 'string' && /^https:\/\//i.test(audioUrl)) {
-            const fileResponse = await axios.get(audioUrl, {
-                responseType: 'arraybuffer', timeout: timeoutMs,
-                maxContentLength: 20 * 1024 * 1024,
-                headers: { Accept: 'audio/mpeg, application/octet-stream' }
-            });
-            audio = Buffer.from(fileResponse.data || []);
-            contentType = String(fileResponse.headers?.['content-type'] || 'audio/mpeg').split(';')[0].toLowerCase();
-        } else {
-            throw new Error('NovaStack JSON response has no recognized audio/base64/URL field; its live response schema needs confirmation.');
-        }
-    }
-    const detectedMimeType = validateTTSAudio(audio, contentType);
-    if (detectedMimeType !== 'audio/mpeg') throw new Error(`NovaStack was configured for MP3 but returned ${detectedMimeType}.`);
-    return { buffer: audio, mimeType: 'audio/mpeg', isOggOpus: false };
-}
-
-async function generatePiperTTSAudio(speechText) {
-    const endpoint = String(process.env.PIPER_TTS_URL || process.env.TTS_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com/tts').trim();
     if (!endpoint) throw new Error('PIPER_TTS_URL is missing.');
+
     const apiKey = String(process.env.PIPER_API_KEY || '').trim();
     if (!apiKey) throw new Error('PIPER_API_KEY is missing in the Jarvis Render environment.');
+
     const timeoutMs = Math.max(15000, Math.min(Number(process.env.TTS_API_TIMEOUT_MS) || 120000, 180000));
+    const headers = {
+        'Content-Type': 'application/json',
+        Accept: 'audio/ogg, application/json',
+        'X-API-Key': apiKey
+    };
+
+    let payload;
+    if (provider === 'piper') {
+        payload = { text: String(speechText || '').trim() };
+    } else {
+        throw new Error(`Unsupported TTS_PROVIDER "${provider}". This deployment is configured for Piper.`);
+    }
+
     let response;
     try {
-        response = await axios.post(endpoint, { text: String(speechText || '').trim() }, {
-            headers: { 'Content-Type': 'application/json', Accept: 'audio/ogg, application/json', 'X-API-Key': apiKey },
-            responseType: 'arraybuffer', timeout: timeoutMs,
-            maxContentLength: 20 * 1024 * 1024, maxBodyLength: 1024 * 1024,
+        response = await axios.post(endpoint, payload, {
+            headers,
+            responseType: 'arraybuffer',
+            timeout: timeoutMs,
+            maxContentLength: 20 * 1024 * 1024,
+            maxBodyLength: 1024 * 1024,
             validateStatus: () => true
         });
     } catch (err) {
         throw new Error(`Piper request failed: ${err.code || err.message || 'network error'}`);
     }
+
     const audio = Buffer.from(response.data || []);
     const contentType = String(response.headers?.['content-type'] || '').split(';')[0].trim().toLowerCase();
+
     if (response.status < 200 || response.status >= 300) {
         let detail = '';
         try {
             const body = JSON.parse(audio.toString('utf8'));
             detail = body.detail || body.error?.message || body.error || body.message || '';
-        } catch (_) {
+        } catch {
             detail = audio.toString('utf8').slice(0, 180).replace(/\s+/g, ' ').trim();
         }
         throw new Error(`Piper returned HTTP ${response.status}${detail ? `: ${String(detail).slice(0, 220)}` : ''}.`);
     }
+
     const detectedMimeType = validateTTSAudio(audio, contentType);
     const audioFormat = String(response.headers?.['x-audio-format'] || '').trim().toLowerCase();
+
+    // Piper now returns an OGG container encoded with Opus.
+    // Check both the container signature and the service's format marker.
     if (detectedMimeType !== 'audio/ogg' || audio.subarray(0, 4).toString('ascii') !== 'OggS') {
         throw new Error(`Piper should return OGG/Opus audio, but returned ${detectedMimeType}.`);
     }
-    if (audioFormat && audioFormat !== 'ogg-opus') throw new Error(`Piper returned an unsupported OGG format: ${audioFormat}.`);
-    return { buffer: audio, mimeType: 'audio/ogg; codecs=opus', isOggOpus: true };
-}
-
-async function generateTTSAudio(speechText) {
-    const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
-    if (provider === 'piper') return generatePiperTTSAudio(speechText);
-    if (['novastack', 'nova', 'novastack-voice'].includes(provider)) {
-        try {
-            return await generateNovaStackTTSAudio(speechText);
-        } catch (novaError) {
-            if (String(process.env.TTS_FALLBACK_PROVIDER || 'piper').trim().toLowerCase() !== 'piper') throw novaError;
-            console.warn(`[TTS] NovaStack failed; trying Piper fallback: ${novaError.message}`);
-            try {
-                return await generatePiperTTSAudio(speechText);
-            } catch (piperError) {
-                throw new Error(`NovaStack failed (${novaError.message}); Piper fallback also failed (${piperError.message}).`);
-            }
-        }
+    if (audioFormat && audioFormat !== 'ogg-opus') {
+        throw new Error(`Piper returned an unsupported OGG format: ${audioFormat}.`);
     }
-    throw new Error(`Unsupported TTS_PROVIDER "${provider}". Use "piper" or "novastack".`);
+
+    return {
+        buffer: audio,
+        mimeType: 'audio/ogg; codecs=opus',
+        isOggOpus: true
+    };
 }
 
 async function sendAIReply(jid, text, quotedMessage = null) {
@@ -565,17 +543,16 @@ async function sendAIReply(jid, text, quotedMessage = null) {
                     if (!Buffer.isBuffer(audioResult?.buffer) || audioResult.buffer.length < 12) {
                         throw new Error(`Audio part ${i + 1} is empty or invalid.`);
                     }
-                    const isVoiceNote = audioResult.isOggOpus === true &&
-                        audioResult.mimeType === 'audio/ogg; codecs=opus';
-                    const mimeType = isVoiceNote ? 'audio/ogg; codecs=opus' : audioResult.mimeType;
-                    if (!mimeType) throw new Error(`Audio part ${i + 1} has no verified MIME type.`);
+                    if (audioResult.mimeType !== 'audio/ogg; codecs=opus' || !audioResult.isOggOpus) {
+                        throw new Error(`Audio part ${i + 1} is not verified OGG/Opus audio.`);
+                    }
 
-                    console.log(`[TTS] ${provider} returned ${audioResult.buffer.length} bytes (${mimeType}); sending ${isVoiceNote ? 'as a WhatsApp voice note' : 'as a WhatsApp audio file'}.`);
+                    console.log(`[TTS] Piper returned ${audioResult.buffer.length} bytes for voice note ${i + 1}; sending as WhatsApp PTT audio.`);
 
                     const sent = await sock.sendMessage(jid, {
                         audio: audioResult.buffer,
-                        mimetype: mimeType,
-                        ptt: isVoiceNote
+                        mimetype: 'audio/ogg; codecs=opus',
+                        ptt: true
                     }, i === 0 ? sendOptions : undefined);
 
                     if (!sent?.key?.id) {
@@ -1405,7 +1382,7 @@ if (
         return;
     }
 
-    // YouTube search, metadata and video download via the Piper/yt-dlp service.
+    // YouTube search, metadata and video download via the NovaStack-backed Piper service.
     let ytQuery = rawMsgCheck.match(/^!yt\s+search\s+([\s\S]+)$/i)?.[1];
     if (!ytQuery) ytQuery = rawMsgCheck.match(/^(?:search|find)\s+(?:for\s+)?(?:videos?\s+)?on youtube\s*[:：]?\s*([\s\S]+)$/i)?.[1];
     if (ytQuery) {
@@ -1488,7 +1465,7 @@ if (
         const enabled = await getTTSMode(jid);
         const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
         const endpoint = String(process.env.PIPER_TTS_URL || process.env.TTS_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com/tts').trim();
-        await sendWithTyping(jid, { text: `🎙️ *Audio reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nDelivery format: NovaStack MP3 = audio file; Piper OGG/Opus = voice note\nEndpoint: ${provider.startsWith('nova') ? (process.env.NOVASTACK_BASE_URL || 'https://api-novastack.vercel.app') : endpoint}\nNovaStack API key (YouTube only): ${process.env.NOVASTACK_API_KEY ? 'configured' : 'not configured'}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
+        await sendWithTyping(jid, { text: `🎙️ *Audio reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nDelivery format: downloadable WAV audio file (not voice note)\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
@@ -1522,27 +1499,21 @@ if (
         return;
     }
 
-    // Rename the current group without requiring users to copy a group JID:
-    // !groupname New Group Name. In a DM, an explicit group JID is accepted.
-    const groupNameMatch = rawMsgCheck.match(/^!groupname\s+(?:([0-9-]+@g\.us)\s+)?([\s\S]+)$/i);
+    // Rename a group by ID: !groupname <group-id> <new name>. Only the bot's
+    // own WhatsApp group-admin status is required by WhatsApp for this action.
+    const groupNameMatch = rawMsgCheck.match(/^!groupname\s+(\d{5,}-(?:\d+)?@g\.us|[0-9-]+@g\.us)\s+([\s\S]+)$/i);
     if (groupNameMatch) {
-        const explicitGroupJid = groupNameMatch[1] || '';
-        const targetGroupJid = explicitGroupJid || (jid?.endsWith('@g.us') ? jid : '');
-        const newSubject = String(groupNameMatch[2] || '').trim().slice(0, 100);
+        const targetGroupJid = groupNameMatch[1].includes('@g.us') ? groupNameMatch[1] : `${groupNameMatch[1]}@g.us`;
+        const newSubject = groupNameMatch[2].trim().slice(0, 100);
         try {
             if (!sock?.user) throw new Error('WhatsApp is not connected.');
-            if (!targetGroupJid) throw new Error('Use !groupname New Group Name inside the group you want to rename. A group ID is only needed when issuing the command from a private chat.');
-            if (!newSubject) throw new Error('Please provide the new group name.');
             const metadata = await sock.groupMetadata(targetGroupJid);
-            const botId = sock.user.id;
-            const botParticipant = metadata.participants?.find(x =>
-                x.id === botId || (x.id && areJidsSameUser(x.id, botId))
-            );
+            const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+            const botParticipant = metadata.participants?.find(x => x.id === sock.user.id || x.id?.split(':')[0] === botJid.split('@')[0]);
             if (!botParticipant?.admin) throw new Error('Jarvis must be a group admin to change this group name.');
             await sock.groupUpdateSubject(targetGroupJid, newSubject);
-            groupCache.set(targetGroupJid, metadata);
             recordJarvisEventLog('INFO', 'Group subject updated', `${targetGroupJid} -> ${newSubject}`);
-            await sendWithTyping(jid, { text: `✅ Group name updated to *${newSubject}*.` }, m);
+            await sendWithTyping(jid, { text: `✅ Group name updated to *${newSubject}*.\nGroup ID: ${targetGroupJid}` }, m);
         } catch (error) {
             await sendWithTyping(jid, { text: `❌ Could not update group name: ${error.message}` }, m);
         }
