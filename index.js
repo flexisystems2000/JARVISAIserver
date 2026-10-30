@@ -234,25 +234,93 @@ async function translateText(source, target, input) {
     return response.data.translatedText;
 }
 
-async function searchYouTube(query) {
-    if (process.env.YOUTUBE_API_KEY) {
-        const response = await axios.get('https://www.googleapis.com/youtube/v3/search', {
-            params: { part: 'snippet', q: query, type: 'video', maxResults: 5, key: process.env.YOUTUBE_API_KEY }, timeout: 15000
-        });
-        return (response.data.items || []).map(item => ({ id: item.id?.videoId, title: item.snippet?.title, channel: item.snippet?.channelTitle, url: `https://www.youtube.com/watch?v=${item.id?.videoId}` }));
-    }
-    // Public Invidious instances; availability varies. This is a fallback, not an official YouTube API.
-    const instances = (process.env.INVIDIOUS_INSTANCE_URLS || 'https://inv.nadeko.net,https://invidious.nerdvpn.de,https://invidious.privacyredirect.com').split(',').map(x => x.trim().replace(/\/$/, '')).filter(Boolean);
-    let lastError;
-    for (const instance of instances) {
-        try {
-            const response = await axios.get(`${instance}/api/v1/search`, { params: { q: query, type: 'video' }, timeout: 10000 });
-            const rows = Array.isArray(response.data) ? response.data.filter(x => x.videoId).slice(0, 5) : [];
-            if (rows.length) return rows.map(x => ({ id: x.videoId, title: x.title, channel: x.author, url: `https://www.youtube.com/watch?v=${x.videoId}` }));
-        } catch (err) { lastError = err; }
-    }
-    throw new Error(`YouTube search is unavailable right now${lastError ? ` (${lastError.message})` : ''}. Configure YOUTUBE_API_KEY for a more reliable official API.`);
+// ============================================================
+// YOUTUBE — use the existing Piper service's yt-dlp endpoints.
+// No YouTube Data API key or public Invidious instance is needed.
+// The existing PIPER_API_KEY authenticates these requests.
+// ============================================================
+function getYouTubeServiceConfig() {
+    const baseUrl = String(
+        process.env.YOUTUBE_SERVICE_URL ||
+        'https://flexi-jarvis-piper-tts.onrender.com'
+    ).trim().replace(/\/$/, '');
+    const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+
+    if (!baseUrl) throw new Error('YOUTUBE_SERVICE_URL is not configured.');
+    if (!apiKey) throw new Error('PIPER_API_KEY is missing in the Jarvis hosting environment.');
+
+    return { baseUrl, apiKey };
 }
+
+function getYouTubeApiError(err, fallback) {
+    const detail = err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.response?.data?.message;
+    if (detail) return String(detail).slice(0, 350);
+    if (err.response?.status) return `${fallback} (HTTP ${err.response.status}).`;
+    return `${fallback}: ${err.code || err.message || 'network error'}`;
+}
+
+async function searchYouTube(query, limit = 5) {
+    const { baseUrl, apiKey } = getYouTubeServiceConfig();
+    const response = await axios.get(`${baseUrl}/youtube/search`, {
+        params: { q: String(query || '').trim(), limit },
+        headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
+        timeout: 120000,
+        maxContentLength: 2 * 1024 * 1024
+    });
+
+    if (response.data?.success !== true || !Array.isArray(response.data?.results)) {
+        throw new Error('YouTube service returned an unexpected search response.');
+    }
+    return response.data.results;
+}
+
+async function getYouTubeVideo(videoId) {
+    const { baseUrl, apiKey } = getYouTubeServiceConfig();
+    const response = await axios.get(`${baseUrl}/youtube/video/${encodeURIComponent(videoId)}`, {
+        headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
+        timeout: 120000,
+        maxContentLength: 2 * 1024 * 1024
+    });
+    if (response.data?.success !== true || !response.data?.video) {
+        throw new Error('YouTube service returned an unexpected video response.');
+    }
+    return response.data.video;
+}
+
+async function downloadYouTubeVideo(videoId) {
+    const { baseUrl, apiKey } = getYouTubeServiceConfig();
+    const response = await axios.get(`${baseUrl}/youtube/download/${encodeURIComponent(videoId)}`, {
+        headers: { 'X-API-Key': apiKey, Accept: 'video/mp4, application/octet-stream, application/json' },
+        responseType: 'arraybuffer',
+        timeout: 180000,
+        maxContentLength: 55 * 1024 * 1024,
+        maxBodyLength: 55 * 1024 * 1024,
+        validateStatus: () => true
+    });
+
+    const buffer = Buffer.from(response.data || []);
+    const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
+    if (response.status < 200 || response.status >= 300) {
+        let detail = '';
+        try {
+            const body = JSON.parse(buffer.toString('utf8'));
+            detail = body.detail || body.error || body.message || '';
+        } catch (_) {
+            detail = buffer.toString('utf8').slice(0, 250);
+        }
+        throw new Error(`YouTube download failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
+    }
+    if (!buffer.length || /application\/json|text\/html/.test(contentType)) {
+        throw new Error('YouTube service did not return a video file.');
+    }
+    if (buffer.length > 50 * 1024 * 1024) {
+        throw new Error('The video is larger than Jarvis\' 50 MB transfer limit.');
+    }
+    return { buffer, contentType: contentType || 'video/mp4' };
+}
+
 
 // Send due reminders once after a successful DB connection; MongoDB status prevents duplicate sends.
 let reminderWorkerStarted = false;
@@ -1294,20 +1362,62 @@ if (
         return;
     }
 
-    // YouTube search: official API key preferred; public Invidious instances are fallback.
+    // YouTube search, metadata and video download via the Piper/yt-dlp service.
     let ytQuery = rawMsgCheck.match(/^!yt\s+search\s+([\s\S]+)$/i)?.[1];
     if (!ytQuery) ytQuery = rawMsgCheck.match(/^(?:search|find)\s+(?:for\s+)?(?:videos?\s+)?on youtube\s*[:：]?\s*([\s\S]+)$/i)?.[1];
     if (ytQuery) {
         try {
-            const results = await searchYouTube(ytQuery.trim());
-            await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${results.map((v, i) => `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}\n${v.url}`).join('\n\n')}`);
-        } catch (err) { await operationalReply(`⚠️ YouTube search failed: ${err.message}`); }
+            const results = await searchYouTube(ytQuery.trim(), 5);
+            if (!results.length) {
+                await operationalReply(`🔎 No YouTube results were found for: ${ytQuery.trim()}`);
+            } else {
+                const listing = results.map((v, i) => {
+                    const duration = Number.isFinite(Number(v.duration)) && v.duration !== null
+                        ? `\nDuration: ${Math.floor(Number(v.duration) / 60)}:${String(Math.floor(Number(v.duration) % 60)).padStart(2, '0')}`
+                        : '';
+                    return `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}${duration}\n${v.url || `https://www.youtube.com/watch?v=${v.id}`}`;
+                }).join('\n\n');
+                await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${listing}\n\nUse *!yt video VIDEO_ID* for details or *!yt download VIDEO_ID* to send a supported video here.`);
+            }
+        } catch (err) {
+            await operationalReply(`⚠️ YouTube search failed: ${getYouTubeApiError(err, 'Search request failed')}\n\nCheck that the Piper service is deployed and Jarvis has the correct PIPER_API_KEY.`);
+        }
         return;
     }
-    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\w-]{6,})$/i);
+
+    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\w-]{11})$/i);
     if (ytVideoMatch) {
-        const videoId = ytVideoMatch[1];
-        await operationalReply(`▶️ *YOUTUBE VIDEO*\nhttps://www.youtube.com/watch?v=${videoId}\n\nI can provide the official video link. Downloading/rehosting the video is not part of this command.`);
+        try {
+            const videoId = ytVideoMatch[1];
+            const video = await getYouTubeVideo(videoId);
+            const duration = video.duration || (Number.isFinite(Number(video.duration_seconds))
+                ? `${Math.floor(Number(video.duration_seconds) / 60)}:${String(Math.floor(Number(video.duration_seconds) % 60)).padStart(2, '0')}`
+                : 'Unknown');
+            const views = Number.isFinite(Number(video.view_count))
+                ? Number(video.view_count).toLocaleString('en-US')
+                : 'Unknown';
+            await operationalReply(`🎬 *YOUTUBE VIDEO DETAILS*\n\n*${video.title || 'Untitled video'}*\nChannel: ${video.channel || 'Unknown'}\nDuration: ${duration}\nViews: ${views}\n${video.upload_date ? `Upload date: ${video.upload_date}\n` : ''}\n${video.url || `https://www.youtube.com/watch?v=${videoId}`}\n\nUse *!yt download ${videoId}* to request the video file (50 MB / 15-minute service limits apply).`);
+        } catch (err) {
+            await operationalReply(`⚠️ Could not retrieve YouTube video details: ${getYouTubeApiError(err, 'Video lookup failed')}`);
+        }
+        return;
+    }
+
+    const ytDownloadMatch = rawMsgCheck.match(/^!yt\s+download\s+([\w-]{11})$/i);
+    if (ytDownloadMatch) {
+        const videoId = ytDownloadMatch[1];
+        try {
+            await operationalReply('⏳ Jarvis is requesting the video. This may take a little while...');
+            const video = await getYouTubeVideo(videoId).catch(() => ({ title: 'YouTube video' }));
+            const downloaded = await downloadYouTubeVideo(videoId);
+            await sock.sendMessage(jid, {
+                video: downloaded.buffer,
+                mimetype: downloaded.contentType.includes('mp4') ? 'video/mp4' : downloaded.contentType,
+                caption: `▶️ *${video.title || 'YouTube video'}*\nhttps://www.youtube.com/watch?v=${videoId}`
+            }, { quoted: m });
+        } catch (err) {
+            await operationalReply(`⚠️ Could not download/send this video: ${getYouTubeApiError(err, 'Download failed')}\n\nSome videos may be unavailable, restricted, too long or larger than 50 MB.`);
+        }
         return;
     }
     // Persistent per-chat TTS toggle. Operational responses intentionally stay text.
