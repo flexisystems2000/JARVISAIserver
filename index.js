@@ -235,8 +235,9 @@ async function translateText(source, target, input) {
 }
 
 // ============================================================
-// YOUTUBE — use the NovaStack-backed YouTube routes exposed by the Piper service.
-// The existing PIPER_API_KEY authenticates Jarvis to the Python service.
+// YOUTUBE — use the existing Piper service's yt-dlp endpoints.
+// No YouTube Data API key or public Invidious instance is needed.
+// The existing PIPER_API_KEY authenticates these requests.
 // ============================================================
 function getYouTubeServiceConfig() {
     const baseUrl = String(
@@ -275,28 +276,9 @@ async function searchYouTube(query, limit = 5) {
     return response.data.results;
 }
 
-function getYouTubeWatchUrl(videoId) {
-    const value = String(videoId || '').trim();
-    if (/^[\w-]{11}$/.test(value)) {
-        return `https://www.youtube.com/watch?v=${value}`;
-    }
-    let parsed;
-    try { parsed = new URL(value); } catch { throw new Error('Provide a valid 11-character YouTube video ID or YouTube URL.'); }
-    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
-    let id = '';
-    if (host === 'youtu.be') id = parsed.pathname.split('/').filter(Boolean)[0] || '';
-    else if (['youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
-        id = parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] || '';
-    }
-    if (!/^[\w-]{11}$/.test(id)) throw new Error('That does not look like a valid YouTube video URL.');
-    return `https://www.youtube.com/watch?v=${id}`;
-}
-
 async function getYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const url = getYouTubeWatchUrl(videoId);
-    const response = await axios.get(`${baseUrl}/youtube/video`, {
-        params: { url },
+    const response = await axios.get(`${baseUrl}/youtube/video/${encodeURIComponent(videoId)}`, {
         headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
         timeout: 120000,
         maxContentLength: 2 * 1024 * 1024
@@ -309,9 +291,7 @@ async function getYouTubeVideo(videoId) {
 
 async function downloadYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const url = getYouTubeWatchUrl(videoId);
-    const response = await axios.get(`${baseUrl}/youtube/download`, {
-        params: { url },
+    const response = await axios.get(`${baseUrl}/youtube/download/${encodeURIComponent(videoId)}`, {
         headers: { 'X-API-Key': apiKey, Accept: 'video/mp4, application/octet-stream, application/json' },
         responseType: 'arraybuffer',
         timeout: 180000,
@@ -339,36 +319,6 @@ async function downloadYouTubeVideo(videoId) {
         throw new Error('The video is larger than Jarvis\' 50 MB transfer limit.');
     }
     return { buffer, contentType: contentType || 'video/mp4' };
-}
-
-async function downloadYouTubeAudio(videoId) {
-    const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const url = getYouTubeWatchUrl(videoId);
-    const response = await axios.get(`${baseUrl}/youtube/audio`, {
-        params: { url },
-        headers: { 'X-API-Key': apiKey, Accept: 'audio/mpeg, application/octet-stream, application/json' },
-        responseType: 'arraybuffer',
-        timeout: 240000,
-        maxContentLength: 55 * 1024 * 1024,
-        maxBodyLength: 55 * 1024 * 1024,
-        validateStatus: () => true
-    });
-
-    const buffer = Buffer.from(response.data || []);
-    const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
-    if (response.status < 200 || response.status >= 300) {
-        let detail = '';
-        try {
-            const body = JSON.parse(buffer.toString('utf8'));
-            detail = body.detail || body.error || body.message || '';
-        } catch (_) { detail = buffer.toString('utf8').slice(0, 250); }
-        throw new Error(`YouTube audio download failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
-    }
-    if (!buffer.length || !(/audio\/(mpeg|mp3)/.test(contentType) || buffer.subarray(0, 3).toString() === 'ID3')) {
-        throw new Error('YouTube service did not return a valid MP3 file.');
-    }
-    if (buffer.length > 50 * 1024 * 1024) throw new Error("The MP3 is larger than Jarvis' 50 MB transfer limit.");
-    return buffer;
 }
 
 
@@ -1038,6 +988,114 @@ async function sendWithTyping(
 }
 
 
+
+// ============================================================
+// GLOBAL WHATSAPP TEXT RENDERER + CHANNEL FOOTER
+// Handles Markdown tables, lists and fenced code in every outgoing
+// text message. Baileys' installed fork does not expose a verified
+// native table/code-block API, so tables are rendered as readable
+// WhatsApp text rather than sending an unverified protobuf payload.
+// ============================================================
+const JARVIS_CHANNEL_URL = 'https://whatsapp.com/channel/0029Vb6Lhoc3rZZW8SRooE3u';
+const JARVIS_CHANNEL_FOOTER = `\n\n━━━━━━━━━━━━━━━━━━\n📢 *Follow JARVIS AI updates*\n${JARVIS_CHANNEL_URL}`;
+
+function splitMarkdownTableRow(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+}
+
+function renderMarkdownTable(lines) {
+    const rows = lines.map(splitMarkdownTableRow);
+    const isSeparator = row => row.length > 0 && row.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s/g, '')));
+    const dataRows = rows.filter(row => !isSeparator(row));
+    if (!dataRows.length) return lines.join('\n');
+    const headers = dataRows[0];
+    const body = dataRows.slice(1);
+    return [
+        '📊 *TABLE*',
+        ...body.map((row, index) => {
+            const fields = headers.map((header, col) => `${header || `Column ${col + 1}`}: ${row[col] || '—'}`);
+            return `${index + 1}. ${fields.join('  |  ')}`;
+        })
+    ].join('\n');
+}
+
+function renderWhatsAppMarkdown(input) {
+    const source = String(input || '').replace(/\r\n/g, '\n');
+    const lines = source.split('\n');
+    const output = [];
+    let inCode = false;
+    let codeBuffer = [];
+    let tableBuffer = [];
+
+    const flushTable = () => {
+        if (tableBuffer.length) {
+            output.push(renderMarkdownTable(tableBuffer));
+            tableBuffer = [];
+        }
+    };
+
+    for (const line of lines) {
+        if (/^\s*```/.test(line)) {
+            flushTable();
+            if (!inCode) {
+                inCode = true;
+                codeBuffer = [];
+            } else {
+                output.push('```' + codeBuffer.join('\n') + '```');
+                codeBuffer = [];
+                inCode = false;
+            }
+            continue;
+        }
+        if (inCode) {
+            codeBuffer.push(line);
+            continue;
+        }
+        if (/^\s*\|.*\|\s*$/.test(line)) {
+            tableBuffer.push(line);
+            continue;
+        }
+        flushTable();
+        // Normalize common Markdown bullets to WhatsApp-friendly bullets.
+        const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
+        if (bullet) {
+            output.push(`${bullet[1]}• ${bullet[2]}`);
+            continue;
+        }
+        // Numbered lists are retained; only normalize spacing.
+        const numbered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
+        if (numbered) {
+            output.push(`${numbered[1]}${numbered[2]}. ${numbered[3]}`);
+            continue;
+        }
+        output.push(line);
+    }
+    flushTable();
+    if (inCode) output.push('```' + codeBuffer.join('\n') + '```');
+    return output.join('\n').trim();
+}
+
+function addJarvisChannelFooter(content) {
+    if (!content || typeof content.text !== 'string' || !content.text.trim()) return content;
+    const text = content.text;
+    if (text.includes(JARVIS_CHANNEL_URL)) return { ...content, text };
+    return { ...content, text: `${text}${JARVIS_CHANNEL_FOOTER}` };
+}
+
+function installGlobalOutgoingRenderer(socket) {
+    if (!socket || socket.__jarvisOutgoingRendererInstalled) return;
+    const originalSendMessage = socket.sendMessage.bind(socket);
+    socket.sendMessage = (jid, content, options) => {
+        if (content && typeof content === 'object' && typeof content.text === 'string') {
+            const rendered = renderWhatsAppMarkdown(content.text);
+            const withFooter = addJarvisChannelFooter({ ...content, text: rendered });
+            return originalSendMessage(jid, withFooter, options);
+        }
+        return originalSendMessage(jid, content, options);
+    };
+    socket.__jarvisOutgoingRendererInstalled = true;
+}
+
 // --- BOT START ---
 async function startJARVIS() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -1053,6 +1111,8 @@ async function startJARVIS() {
         connectTimeoutMs: 60000,
         syncFullHistory: false
     });
+
+    installGlobalOutgoingRenderer(sock);
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -1412,7 +1472,7 @@ if (
         return;
     }
 
-    // YouTube search and media delivery via the NovaStack-backed Piper service.
+    // YouTube search, metadata and video download via the Piper/yt-dlp service.
     let ytQuery = rawMsgCheck.match(/^!yt\s+search\s+([\s\S]+)$/i)?.[1];
     if (!ytQuery) ytQuery = rawMsgCheck.match(/^(?:search|find)\s+(?:for\s+)?(?:videos?\s+)?on youtube\s*[:：]?\s*([\s\S]+)$/i)?.[1];
     if (ytQuery) {
@@ -1425,9 +1485,9 @@ if (
                     const duration = Number.isFinite(Number(v.duration)) && v.duration !== null
                         ? `\nDuration: ${Math.floor(Number(v.duration) / 60)}:${String(Math.floor(Number(v.duration) % 60)).padStart(2, '0')}`
                         : '';
-                    return `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}${duration}\nID: ${v.id || 'Unavailable'}\n${v.url || (v.id ? `https://www.youtube.com/watch?v=${v.id}` : '')}`;
+                    return `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}${duration}\n${v.url || `https://www.youtube.com/watch?v=${v.id}`}`;
                 }).join('\n\n');
-                await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${listing}\n\nSend *!yt video SEARCH QUERY* for the video or *!yt audio SEARCH QUERY* for MP3.`);
+                await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${listing}\n\nUse *!yt video VIDEO_ID* for details or *!yt download VIDEO_ID* to send a supported video here.`);
             }
         } catch (err) {
             await operationalReply(`⚠️ YouTube search failed: ${getYouTubeApiError(err, 'Search request failed')}\n\nCheck that the Piper service is deployed and Jarvis has the correct PIPER_API_KEY.`);
@@ -1435,59 +1495,24 @@ if (
         return;
     }
 
-    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\s\S]+)$/i);
+    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\w-]{11})$/i);
     if (ytVideoMatch) {
         try {
-            const requested = ytVideoMatch[1].trim();
-            const results = /^[\w-]{11}$/.test(requested)
-                ? [{ id: requested, title: 'YouTube video' }]
-                : await searchYouTube(requested, 1);
-            const selected = results[0];
-            if (!selected?.id || !/^[\w-]{11}$/.test(selected.id)) {
-                await operationalReply(`🔎 No downloadable YouTube result found for: ${requested}`);
-                return;
-            }
-            await operationalReply(`⏳ Finding and sending: *${selected.title || requested}*\nPlease wait...`);
-            const video = await getYouTubeVideo(selected.id).catch(() => ({ title: selected.title || 'YouTube video' }));
-            const downloaded = await downloadYouTubeVideo(selected.id);
-            await sock.sendMessage(jid, {
-                video: downloaded.buffer,
-                mimetype: downloaded.contentType.includes('mp4') ? 'video/mp4' : downloaded.contentType,
-                caption: `▶️ *${video.title || selected.title || 'YouTube video'}*`
-            }, { quoted: m });
+            const videoId = ytVideoMatch[1];
+            const video = await getYouTubeVideo(videoId);
+            const duration = video.duration || (Number.isFinite(Number(video.duration_seconds))
+                ? `${Math.floor(Number(video.duration_seconds) / 60)}:${String(Math.floor(Number(video.duration_seconds) % 60)).padStart(2, '0')}`
+                : 'Unknown');
+            const views = Number.isFinite(Number(video.view_count))
+                ? Number(video.view_count).toLocaleString('en-US')
+                : 'Unknown';
+            await operationalReply(`🎬 *YOUTUBE VIDEO DETAILS*\n\n*${video.title || 'Untitled video'}*\nChannel: ${video.channel || 'Unknown'}\nDuration: ${duration}\nViews: ${views}\n${video.upload_date ? `Upload date: ${video.upload_date}\n` : ''}\n${video.url || `https://www.youtube.com/watch?v=${videoId}`}\n\nUse *!yt download ${videoId}* to request the video file (50 MB / 15-minute service limits apply).`);
         } catch (err) {
-            await operationalReply(`⚠️ Could not find/send the YouTube video: ${getYouTubeApiError(err, 'Video request failed')}\n\nThe video must be available and within the 50 MB / 15-minute limits.`);
+            await operationalReply(`⚠️ Could not retrieve YouTube video details: ${getYouTubeApiError(err, 'Video lookup failed')}`);
         }
         return;
     }
 
-    const ytAudioMatch = rawMsgCheck.match(/^!yt\s+audio\s+([\s\S]+)$/i);
-    if (ytAudioMatch) {
-        try {
-            const requested = ytAudioMatch[1].trim();
-            const results = /^[\w-]{11}$/.test(requested)
-                ? [{ id: requested, title: 'YouTube audio' }]
-                : await searchYouTube(requested, 1);
-            const selected = results[0];
-            if (!selected?.id || !/^[\w-]{11}$/.test(selected.id)) {
-                await operationalReply(`🔎 No audio result found for: ${requested}`);
-                return;
-            }
-            await operationalReply(`🎵 Preparing MP3: *${selected.title || requested}*\nPlease wait...`);
-            const audio = await downloadYouTubeAudio(selected.id);
-            await sock.sendMessage(jid, {
-                audio,
-                mimetype: 'audio/mpeg',
-                fileName: `${String(selected.title || 'YouTube audio').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 80)}.mp3`,
-                ptt: false
-            }, { quoted: m });
-        } catch (err) {
-            await operationalReply(`⚠️ Could not find/send the MP3: ${getYouTubeApiError(err, 'Audio request failed')}\n\nThe source must be available and within the 50 MB / 15-minute service limits.`);
-        }
-        return;
-    }
-
-    // Backward-compatible ID-based download command.
     const ytDownloadMatch = rawMsgCheck.match(/^!yt\s+download\s+([\w-]{11})$/i);
     if (ytDownloadMatch) {
         const videoId = ytDownloadMatch[1];
@@ -1498,7 +1523,7 @@ if (
             await sock.sendMessage(jid, {
                 video: downloaded.buffer,
                 mimetype: downloaded.contentType.includes('mp4') ? 'video/mp4' : downloaded.contentType,
-                caption: `▶️ *${video.title || 'YouTube video'}*`
+                caption: `▶️ *${video.title || 'YouTube video'}*\nhttps://www.youtube.com/watch?v=${videoId}`
             }, { quoted: m });
         } catch (err) {
             await operationalReply(`⚠️ Could not download/send this video: ${getYouTubeApiError(err, 'Download failed')}\n\nSome videos may be unavailable, restricted, too long or larger than 50 MB.`);
@@ -2736,6 +2761,43 @@ if (hasReaction) {
     let command = text.split(/ +/)[0];
 const args = body.trim().split(/ +/).slice(1);
 
+// ============================================================
+// 🤖 JARVIS TAG-TO-ENGAGE
+// Anyone can tag the bot with @Jarvis instead of typing !ai.
+// Also recognizes WhatsApp's actual mentionedJid metadata.
+// ============================================================
+const aiContextInfo =
+    m.message?.extendedTextMessage?.contextInfo ||
+    m.message?.imageMessage?.contextInfo ||
+    m.message?.videoMessage?.contextInfo ||
+    m.message?.documentMessage?.contextInfo ||
+    m.message?.audioMessage?.contextInfo ||
+    {};
+
+const botJid = sock.user?.id || '';
+const botNumber = botJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+const mentionedJids = aiContextInfo.mentionedJid || [];
+const hasBotJidMention = mentionedJids.some(mentioned => {
+    try {
+        return areJidsSameUser(mentioned, botJid) ||
+            String(mentioned).split('@')[0].split(':')[0].replace(/\D/g, '') === botNumber;
+    } catch (_) {
+        return false;
+    }
+});
+
+const hasJarvisAlias = /@jarvis\b/i.test(body || '');
+const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
+const isAiCommand = command === '!ai' || isJarvisTagged;
+
+// Remove the trigger and mention text before sending the actual question to AI.
+const aiPromptText = (body || '')
+    .replace(/^\s*!ai\b\s*/i, '')
+    .replace(/@jarvis\b/gi, '')
+    .replace(new RegExp(`@?${botNumber}\\b`, 'g'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 
 // ============================================================
 // 🧠 JARVIS LIVE QUIZ COMMAND SYSTEM
@@ -3533,6 +3595,30 @@ if (!naturalText.startsWith("!")) {
             ]
         },
         // =========================
+        // LIVE QUIZ
+        // =========================
+        {
+            name: "quiz",
+            patterns: [
+                /^(?:start|run|give me) (?:a )?(?:live )?quiz(?: on| about) .+/i,
+                /^quiz me on .+/i,
+                /^test me on .+/i,
+                /^start .+ quiz$/i
+            ]
+        },
+
+        // =========================
+        // GROUP IDS
+        // =========================
+        {
+            name: "groupids",
+            patterns: [
+                /^(?:show|list|get) (?:all )?(?:my )?group ids\??$/i,
+                /^list the groups jarvis is in\??$/i
+            ]
+        },
+
+        // =========================
         // CREATE FILE / NOTE / PDF
         // =========================
         {
@@ -3574,6 +3660,8 @@ if (natural) {
         listonline: "!listonline",
         ginfo: "!ginfo",
         getjid: "!getjid",
+        groupids: "!groupids",
+        quiz: "!quiz",
         image: "!image",
         pay: "!pay",
         name: "!name",
@@ -3585,8 +3673,8 @@ if (natural) {
         mute: "!mute",
         unmute: "!unmute",
         reset: "!reset",
-        createfile: "__createfile__", // 👈 Added missing comma here
-        define: "!define",              // 👈 Properly mapped dictionary command
+        createfile: "__createfile__",
+        define: "!define",
         vv: "!vv"
     };
 
@@ -3601,6 +3689,17 @@ if (natural) {
     // =========================
     // NATURAL ARGUMENT EXTRACTION
     // =========================
+
+    if (natural === "quiz") {
+        const subject = naturalText
+            .replace(/^(?:start|run|give me) (?:a )?(?:live )?quiz(?: on| about) /i, "")
+            .replace(/^quiz me on /i, "")
+            .replace(/^test me on /i, "")
+            .replace(/^start /i, "")
+            .replace(/ quiz$/i, "")
+            .trim();
+        args.splice(0, args.length, ...subject.split(/\s+/));
+    }
 
     if (natural === "ai") {
 
@@ -4118,35 +4217,60 @@ if (command === "!listadmins") {
 // --- MENU / HELP COMMAND ---
 if (command === "!menu" || command === "!help") {
     const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
-    
+
 *Powered by ${POWERED_BY}*
 
 ━━━━━━━━━━━━━━━━━━━━
-✨ *AI & UTILITY*
-🔹 *!ai [query]* - Ask anything
-🔹 *!ginfo* - Group status report
-🔹 *!listonline* - Activity tracker
-🔹 *!timetable* - Get latest tutorial schedule
+✨ *AI, LEARNING & CONTENT*
+🔹 *@Jarvis [question]* - Ask AI by tagging Jarvis (number mention also works)
+🔹 *!ai [query]* - Ask anything (legacy command)
+🔹 *!quiz [subject]* - Start a live group quiz
+🔹 *!image [prompt]* - Generate an image
+🔹 *!define [word]* / *!dictionary [word]* - Dictionary lookup
+🔹 *!timetable* - Get tutorial schedule
+🔹 *!pay* - Open tutorial payment flow
+🔹 *!name [full name]* - Register/update your name
+🔹 *!translate [from] [to] [text]* - Translate text
+
+🌐 *WEB & MEDIA TOOLS*
+🔹 *!sitecheck [URL]* - Check website availability
+🔹 *!crawl [URL]* - Inspect a website and request a screenshot
+🔹 *!yt search [query]* - Search YouTube
+🔹 *!yt video [video ID]* - Get video details
+🔹 *!yt download [video ID]* - Download/send supported video
+
+🔊 *VOICE & REMINDERS*
+🔹 *!tts on / !tts off / !tts status* - Voice reply settings
+🔹 *!remind 30m [task]* - Set a reminder
+🔹 *!reminders* - List pending reminders
+🔹 *!cancelreminder [ID]* - Cancel a reminder
+
+👥 *GROUP INFORMATION*
+🔹 *!ginfo* - Group information
 🔹 *!listadmins* - View group admins
-🔹 *!image* - To generate images
+🔹 *!listonline* - View online members
+🔹 *!getjid* - Show current group JID
+🔹 *!groupids* / *!getgroupids* - List groups Jarvis is in
+🔹 *!status* - Jarvis system health
+🔹 *!healthgraph* - Health snapshot graph
 
 🛡️ *GROUP MODERATION*
-🔸 *!add [number]* - Add new member
-🔸 *!kick @user* - Remove member
-🔸 *!ban @user* - Ban member and block rejoining
-🔸 *!unban @user* - Lift a member's ban
-🔸 *!promote @user* - Make admin
-🔸 *!mute [time] [unit]* - Lock group
-🔸 *!unmute [time] [unit]* - Open group
+🔸 *!add [number]* - Add a member
+🔸 *!kick @user* - Remove a member
+🔸 *!ban @user* - Ban a member
+🔸 *!unban @user* - Lift a ban
+🔸 *!promote @user* - Promote to admin
+🔸 *!mute [duration]* - Lock group
+🔸 *!unmute* - Reopen group
 🔸 *!reset @user* - Clear warnings
+🔸 *!vv* - Save view-once media
 
-🚫 *SYSTEM PROTECTIONS*
-✅ *Watchdog:* Anti-Link & Anti-Badword
-✅ *Anti-Status:* Deletes status tags
-✅ *Auto-Greet:* Welcome/Goodbye
+⚙️ *SYSTEM / OWNER TOOLS*
+🔹 *!addxxjarvis meta [group JID]* - Add Meta AI to a group (owner/admin access as configured)
+🔹 *!groupname [group JID] [new name]* - Rename a group (where supported)
+
 ━━━━━━━━━━━━━━━━━━━━
-
-_Type !mute 30 min to test the timer!_`;
+_Natural-language requests are supported for many tools. Example: "Jarvis, remind me in 30m to study" or "Jarvis, search YouTube for chemistry tutorials."_`;
 
     return sock.sendMessage(jid, {
         text: menuText,
@@ -4311,9 +4435,10 @@ Please try again later.`
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
 // =======================
-if (isStaff && command === "!ai") {
-    const prompt = args.join(" ");
-    const quoted = m.message.extendedTextMessage?.contextInfo?.quotedMessage;
+if (isAiCommand) {
+    // AI engagement is intentionally available to every group member.
+    const prompt = aiPromptText;
+    const quoted = aiContextInfo.quotedMessage;
     const isQuotedImage = quoted?.imageMessage;
     const isDirectImage = m.message.imageMessage;
 
