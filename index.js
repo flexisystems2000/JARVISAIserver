@@ -990,179 +990,85 @@ async function sendWithTyping(
 
 
 // ============================================================
-// GLOBAL WHATSAPP TEXT RENDERER + NEWSLETTER / VIEW CHANNEL
-// Handles Markdown tables, lists and fenced code in every outgoing
-// text message. Tables are rendered as readable WhatsApp text.
-// View-channel CTA uses YOUR newsletter JID (not a wrong channel URL).
+// FLEXI EDUCATIONAL CONSULT GLOBAL OUTGOING RENDERER
+// All normal outgoing messages pass through this wrapper and receive
+// Flexi newsletter attribution. Reactions and message-control payloads
+// are left untouched.
 // ============================================================
-const JARVIS_NEWSLETTER_JID =
-    (process.env.JARVIS_NEWSLETTER_JID || '120363421353629040@newsletter').trim();
-const JARVIS_NEWSLETTER_NAME =
-    (process.env.JARVIS_NEWSLETTER_NAME || 'JARVIS AI Channel').trim();
-// Optional public invite URL (https://whatsapp.com/channel/XXXX). Leave empty to
-// rely on native newsletterFollowerInvite only.
-const JARVIS_CHANNEL_URL = (process.env.JARVIS_CHANNEL_URL || '').trim(); // set real https://whatsapp.com/channel/XXXX in env
+const FLEXI_NEWSLETTER_JID = '120363421353629040@newsletter';
+const FLEXI_NEWSLETTER_NAME = 'FLEXI EDUCATIONAL CONSULT';
 
-const JARVIS_CHANNEL_FOOTER =
-    `\n\n━━━━━━━━━━━━━━━━━━\n🤖 *JARVIS updates*\nFollow our official channel for announcements and AI discussions.`;
-
-function splitMarkdownTableRow(line) {
-    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
-}
-
-function isMarkdownSeparatorRow(row) {
-    return row.length > 0 && row.every(cell => /^:?-{3,}:?$/.test(String(cell).replace(/\s/g, '')));
-}
-
-function renderMarkdownTable(lines) {
-    const rows = lines.map(splitMarkdownTableRow).filter(r => r.length);
-    if (!rows.length) return lines.join('\n');
-
-    const dataRows = rows.filter(row => !isMarkdownSeparatorRow(row));
-    if (!dataRows.length) return lines.join('\n');
-
-    const headers = dataRows[0];
-    const body = dataRows.slice(1);
-    const colCount = Math.max(headers.length, ...body.map(r => r.length), 1);
-    const widths = Array.from({ length: colCount }, (_, c) => {
-        const headerW = String(headers[c] || '').length;
-        const bodyW = body.reduce((max, row) => Math.max(max, String(row[c] || '').length), 0);
-        return Math.min(28, Math.max(headerW, bodyW, 3));
-    });
-
-    const pad = (value, width) => {
-        const s = String(value ?? '').slice(0, width);
-        return s + ' '.repeat(Math.max(0, width - s.length));
-    };
-    const formatRow = cells => cells.map((cell, i) => pad(cell, widths[i] || 3)).join(' │ ');
-
-    const headerLine = formatRow(Array.from({ length: colCount }, (_, i) => headers[i] || `Col ${i + 1}`));
-    const divider = widths.map(w => '─'.repeat(w)).join('─┼─');
-    const bodyLines = body.map(row =>
-        formatRow(Array.from({ length: colCount }, (_, i) => row[i] || '—'))
-    );
-
-    // Code fence helps WhatsApp clients preserve column alignment.
-    return ['📊 *TABLE*', '```', headerLine, divider, ...bodyLines, '```'].join('\n');
-}
-
-function renderWhatsAppMarkdown(input) {
-    const source = String(input || '').replace(/\r\n/g, '\n');
-    const lines = source.split('\n');
-    const output = [];
-    let inCode = false;
-    let codeBuffer = [];
-    let tableBuffer = [];
-
-    const flushTable = () => {
-        if (tableBuffer.length) {
-            output.push(renderMarkdownTable(tableBuffer));
-            tableBuffer = [];
+function buildFlexiNewsletterContext(content = {}) {
+    return {
+        ...(content.contextInfo || {}),
+        forwardingScore: 999,
+        isForwarded: true,
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net',
+        quotedMessage: {
+            conversation: 'FLEXI EDUCATIONAL CONSULT'
+        },
+        forwardedNewsletterMessageInfo: {
+            newsletterJid: FLEXI_NEWSLETTER_JID,
+            newsletterName: FLEXI_NEWSLETTER_NAME,
+            serverMessageId: 1
         }
     };
-
-    for (const line of lines) {
-        if (/^\s*```/.test(line)) {
-            flushTable();
-            if (!inCode) {
-                inCode = true;
-                codeBuffer = [];
-            } else {
-                output.push('```' + codeBuffer.join('\n') + '```');
-                codeBuffer = [];
-                inCode = false;
-            }
-            continue;
-        }
-        if (inCode) {
-            codeBuffer.push(line);
-            continue;
-        }
-        if (/^\s*\|.*\|\s*$/.test(line) || (/^\s*\|/.test(line) && line.includes('|'))) {
-            tableBuffer.push(line);
-            continue;
-        }
-        flushTable();
-
-        const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
-        if (bullet) {
-            output.push(`${bullet[1]}• ${bullet[2]}`);
-            continue;
-        }
-        const numbered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
-        if (numbered) {
-            output.push(`${numbered[1]}${numbered[2]}. ${numbered[3]}`);
-            continue;
-        }
-        output.push(line);
-    }
-    flushTable();
-    if (inCode) output.push('```' + codeBuffer.join('\n') + '```');
-    return output.join('\n').trim();
-}
-
-function addJarvisChannelFooter(content) {
-    if (!content || typeof content.text !== 'string' || !content.text.trim()) return content;
-    const text = content.text;
-    if (
-        text.includes(JARVIS_NEWSLETTER_JID) ||
-        (JARVIS_CHANNEL_URL && text.includes(JARVIS_CHANNEL_URL)) ||
-        text.includes('Follow our official channel')
-    ) {
-        return { ...content, text };
-    }
-    return { ...content, text: `${text}${JARVIS_CHANNEL_FOOTER}` };
 }
 
 function installGlobalOutgoingRenderer(socket) {
-    if (!socket || socket.__jarvisOutgoingRendererInstalled) return;
+    if (!socket || typeof socket.sendMessage !== 'function') {
+        throw new Error('WhatsApp socket is not available for the global renderer.');
+    }
+    if (socket.__flexiOutgoingRendererInstalled) return;
+
     const originalSendMessage = socket.sendMessage.bind(socket);
 
-    socket.sendMessage = (jid, content, options) => {
-        if (content && typeof content === 'object' && typeof content.text === 'string') {
-            const rendered = renderWhatsAppMarkdown(content.text);
-            const withFooter = addJarvisChannelFooter({ ...content, text: rendered });
-
-            const isNewsletterTarget = typeof jid === 'string' && jid.endsWith('@newsletter');
-            const alreadyHasChannelCta =
-                withFooter.newsletterFollowerInvite ||
-                (Array.isArray(withFooter.templateButtons) &&
-                    withFooter.templateButtons.some(
-                        b =>
-                            b?.urlButton?.displayText === 'View channel' ||
-                            (JARVIS_CHANNEL_URL && b?.urlButton?.url === JARVIS_CHANNEL_URL)
-                    ));
-
-            if (!isNewsletterTarget && !alreadyHasChannelCta) {
-                // Native newsletter invite for YOUR channel (120363421353629040@newsletter)
-                withFooter.newsletterFollowerInvite = {
-                    newsletterJid: JARVIS_NEWSLETTER_JID,
-                    newsletterName: JARVIS_NEWSLETTER_NAME,
-                    caption: 'View channel'
-                };
-
-                if (JARVIS_CHANNEL_URL) {
-                    const existingButtons = Array.isArray(withFooter.templateButtons)
-                        ? withFooter.templateButtons
-                        : [];
-                    withFooter.templateButtons = [
-                        ...existingButtons,
-                        {
-                            index: existingButtons.length + 1,
-                            urlButton: { displayText: 'View channel', url: JARVIS_CHANNEL_URL }
-                        }
-                    ];
-                }
-            }
-
-            return originalSendMessage(jid, withFooter, options);
+    socket.sendMessage = async (jid, content, options = {}) => {
+        if (!content || typeof content !== 'object' || Array.isArray(content)) {
+            return originalSendMessage(jid, content, options);
         }
-        return originalSendMessage(jid, content, options);
+
+        // Keep non-message control operations unchanged.
+        const isControlPayload = Boolean(
+            content.react || content.delete || content.protocolMessage || content.pin
+        );
+        if (isControlPayload) return originalSendMessage(jid, content, options);
+
+        const brandedContent = {
+            ...content,
+            contextInfo: buildFlexiNewsletterContext(content)
+        };
+        return originalSendMessage(jid, brandedContent, options);
     };
 
-    socket.__jarvisOutgoingRendererInstalled = true;
+    Object.defineProperty(socket, '__flexiOutgoingRendererInstalled', {
+        value: true, configurable: false, enumerable: false, writable: false
+    });
+    console.log('✅ Flexi global outgoing renderer installed.');
 }
 
+async function sendFlexiBrandedMedia(socket, jid, content, options = {}) {
+    if (!socket || typeof socket.sendMessage !== 'function') {
+        throw new Error('WhatsApp socket is not available.');
+    }
+    if (!content || typeof content !== 'object') {
+        throw new Error('A media message payload is required.');
+    }
+
+    const isMediaMessage = Boolean(
+        content.image || content.video || content.document || content.audio
+    );
+    if (!isMediaMessage) {
+        throw new Error('A supported media message payload is required for this helper.');
+    }
+
+    const brandedContent = {
+        ...content,
+        contextInfo: buildFlexiNewsletterContext(content)
+    };
+    return socket.sendMessage(jid, brandedContent, options);
+}
 
 // --- BOT START ---
 async function startJARVIS() {
@@ -1180,7 +1086,12 @@ async function startJARVIS() {
         syncFullHistory: false
     });
 
+
+    // Apply Flexi newsletter attribution globally to normal outgoing messages.
     installGlobalOutgoingRenderer(sock);
+
+    sock.sendFlexiBrandedMedia = (jid, content, options = {}) =>
+        sendFlexiBrandedMedia(sock, jid, content, options);
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -2831,8 +2742,8 @@ const args = body.trim().split(/ +/).slice(1);
 
 // ============================================================
 // 🤖 JARVIS TAG-TO-ENGAGE
-// Anyone can tag the bot with @Jarvis or @{bot WhatsApp number}
-// instead of typing !ai. Also recognizes WhatsApp mentionedJid metadata.
+// Anyone can tag the bot with @Jarvis instead of typing !ai.
+// Also recognizes WhatsApp's actual mentionedJid metadata.
 // ============================================================
 const aiContextInfo =
     m.message?.extendedTextMessage?.contextInfo ||
@@ -2854,25 +2765,17 @@ const hasBotJidMention = mentionedJids.some(mentioned => {
     }
 });
 
-const bodyLowerForTag = String(body || '').toLowerCase();
-const hasPhoneNumberTag = Boolean(botNumber) &&
-    (bodyLowerForTag.includes(`@${botNumber}`) ||
-     bodyLowerForTag.includes(`@${botNumber.slice(-10)}`) ||
-     bodyLowerForTag.includes(`@${botNumber.slice(-8)}`));
 const hasJarvisAlias = /@jarvis\b/i.test(body || '');
-const isJarvisTagged = hasBotJidMention || hasPhoneNumberTag || hasJarvisAlias;
+const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
 const isAiCommand = command === '!ai' || isJarvisTagged;
 
 // Remove the trigger and mention text before sending the actual question to AI.
 const aiPromptText = (body || '')
     .replace(/^\s*!ai\b\s*/i, '')
     .replace(/@jarvis\b/gi, '')
-    .replace(botNumber ? new RegExp(`@?${botNumber.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g') : /$^/g, '')
-    .replace(botNumber ? new RegExp(`@?${botNumber.slice(-10)}\\b`, 'g') : /$^/g, '')
-    .replace(botNumber ? new RegExp(`@?${botNumber.slice(-8)}\\b`, 'g') : /$^/g, '')
+    .replace(new RegExp(`@?${botNumber}\\b`, 'g'), '')
     .replace(/\s+/g, ' ')
     .trim();
-
 
 
 // ============================================================
