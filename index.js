@@ -235,9 +235,8 @@ async function translateText(source, target, input) {
 }
 
 // ============================================================
-// YOUTUBE — use the existing Piper service's yt-dlp endpoints.
-// No YouTube Data API key or public Invidious instance is needed.
-// The existing PIPER_API_KEY authenticates these requests.
+// YOUTUBE — use the NovaStack-backed YouTube routes exposed by the Piper service.
+// The existing PIPER_API_KEY authenticates Jarvis to the Python service.
 // ============================================================
 function getYouTubeServiceConfig() {
     const baseUrl = String(
@@ -276,9 +275,28 @@ async function searchYouTube(query, limit = 5) {
     return response.data.results;
 }
 
+function getYouTubeWatchUrl(videoId) {
+    const value = String(videoId || '').trim();
+    if (/^[\w-]{11}$/.test(value)) {
+        return `https://www.youtube.com/watch?v=${value}`;
+    }
+    let parsed;
+    try { parsed = new URL(value); } catch { throw new Error('Provide a valid 11-character YouTube video ID or YouTube URL.'); }
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    let id = '';
+    if (host === 'youtu.be') id = parsed.pathname.split('/').filter(Boolean)[0] || '';
+    else if (['youtube.com', 'm.youtube.com', 'music.youtube.com'].includes(host)) {
+        id = parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] || '';
+    }
+    if (!/^[\w-]{11}$/.test(id)) throw new Error('That does not look like a valid YouTube video URL.');
+    return `https://www.youtube.com/watch?v=${id}`;
+}
+
 async function getYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const response = await axios.get(`${baseUrl}/youtube/video/${encodeURIComponent(videoId)}`, {
+    const url = getYouTubeWatchUrl(videoId);
+    const response = await axios.get(`${baseUrl}/youtube/video`, {
+        params: { url },
         headers: { 'X-API-Key': apiKey, Accept: 'application/json' },
         timeout: 120000,
         maxContentLength: 2 * 1024 * 1024
@@ -291,7 +309,9 @@ async function getYouTubeVideo(videoId) {
 
 async function downloadYouTubeVideo(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const response = await axios.get(`${baseUrl}/youtube/download/${encodeURIComponent(videoId)}`, {
+    const url = getYouTubeWatchUrl(videoId);
+    const response = await axios.get(`${baseUrl}/youtube/download`, {
+        params: { url },
         headers: { 'X-API-Key': apiKey, Accept: 'video/mp4, application/octet-stream, application/json' },
         responseType: 'arraybuffer',
         timeout: 180000,
@@ -323,7 +343,9 @@ async function downloadYouTubeVideo(videoId) {
 
 async function downloadYouTubeAudio(videoId) {
     const { baseUrl, apiKey } = getYouTubeServiceConfig();
-    const response = await axios.get(`${baseUrl}/youtube/audio/${encodeURIComponent(videoId)}`, {
+    const url = getYouTubeWatchUrl(videoId);
+    const response = await axios.get(`${baseUrl}/youtube/audio`, {
+        params: { url },
         headers: { 'X-API-Key': apiKey, Accept: 'audio/mpeg, application/octet-stream, application/json' },
         responseType: 'arraybuffer',
         timeout: 240000,
@@ -339,24 +361,13 @@ async function downloadYouTubeAudio(videoId) {
         try {
             const body = JSON.parse(buffer.toString('utf8'));
             detail = body.detail || body.error || body.message || '';
-        } catch (_) {
-            detail = buffer.toString('utf8').slice(0, 250);
-        }
+        } catch (_) { detail = buffer.toString('utf8').slice(0, 250); }
         throw new Error(`YouTube audio download failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
     }
-    if (!buffer.length || /application\/json|text\/html/.test(contentType)) {
-        throw new Error('YouTube service did not return a valid audio file.');
-    }
-    // Accept common MP3 signatures (ID3 tag or MPEG frame sync).
-    const isMp3 = /audio\/(mpeg|mp3)/.test(contentType) ||
-        buffer.subarray(0, 3).toString('ascii') === 'ID3' ||
-        (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0);
-    if (!isMp3) {
+    if (!buffer.length || !(/audio\/(mpeg|mp3)/.test(contentType) || buffer.subarray(0, 3).toString() === 'ID3')) {
         throw new Error('YouTube service did not return a valid MP3 file.');
     }
-    if (buffer.length > 50 * 1024 * 1024) {
-        throw new Error("The MP3 is larger than Jarvis' 50 MB send limit.");
-    }
+    if (buffer.length > 50 * 1024 * 1024) throw new Error("The MP3 is larger than Jarvis' 50 MB transfer limit.");
     return buffer;
 }
 
