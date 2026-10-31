@@ -997,7 +997,7 @@ async function sendWithTyping(
 // WhatsApp text rather than sending an unverified protobuf payload.
 // ============================================================
 const JARVIS_CHANNEL_URL = 'https://whatsapp.com/channel/0029Vb6Lhoc3rZZW8SRooE3u';
-const JARVIS_CHANNEL_FOOTER = `\n\n━━━━━━━━━━━━━━━━━━\n📢 *Follow JARVIS AI updates*\n${JARVIS_CHANNEL_URL}`;
+const JARVIS_CHANNEL_FOOTER = `\n\n━━━━━━━━━━━━━━━━━━\n🤖 *Meta AI discussion & JARVIS updates*\nFollow the channel for updates and conversations about Meta AI, alongside JARVIS announcements.`;
 
 function splitMarkdownTableRow(line) {
     return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
@@ -1089,6 +1089,18 @@ function installGlobalOutgoingRenderer(socket) {
         if (content && typeof content === 'object' && typeof content.text === 'string') {
             const rendered = renderWhatsAppMarkdown(content.text);
             const withFooter = addJarvisChannelFooter({ ...content, text: rendered });
+            // Native WhatsApp URL CTA. Preserve any buttons already supplied by a caller.
+            const existingButtons = Array.isArray(withFooter.templateButtons) ? withFooter.templateButtons : [];
+            const hasViewChannelButton = existingButtons.some(button =>
+                button?.urlButton?.url === JARVIS_CHANNEL_URL ||
+                button?.urlButton?.displayText === 'View channel'
+            );
+            if (!hasViewChannelButton) {
+                withFooter.templateButtons = [
+                    ...existingButtons,
+                    { index: existingButtons.length + 1, urlButton: { displayText: 'View channel', url: JARVIS_CHANNEL_URL } }
+                ];
+            }
             return originalSendMessage(jid, withFooter, options);
         }
         return originalSendMessage(jid, content, options);
@@ -2786,15 +2798,20 @@ const hasBotJidMention = mentionedJids.some(mentioned => {
     }
 });
 
+const bodyLowerForTag = String(body || '').toLowerCase();
+const hasPhoneNumberTag = Boolean(botNumber) &&
+    (bodyLowerForTag.includes(`@${botNumber}`) ||
+     bodyLowerForTag.includes(`@${botNumber.slice(-8)}`));
 const hasJarvisAlias = /@jarvis\b/i.test(body || '');
-const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
+const isJarvisTagged = hasBotJidMention || hasPhoneNumberTag || hasJarvisAlias;
 const isAiCommand = command === '!ai' || isJarvisTagged;
 
 // Remove the trigger and mention text before sending the actual question to AI.
 const aiPromptText = (body || '')
     .replace(/^\s*!ai\b\s*/i, '')
     .replace(/@jarvis\b/gi, '')
-    .replace(new RegExp(`@?${botNumber}\\b`, 'g'), '')
+    .replace(botNumber ? new RegExp(`@?${botNumber.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g') : /$^/g, '')
+    .replace(botNumber ? new RegExp(`@?${botNumber.slice(-8)}\\b`, 'g') : /$^/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -3595,30 +3612,6 @@ if (!naturalText.startsWith("!")) {
             ]
         },
         // =========================
-        // LIVE QUIZ
-        // =========================
-        {
-            name: "quiz",
-            patterns: [
-                /^(?:start|run|give me) (?:a )?(?:live )?quiz(?: on| about) .+/i,
-                /^quiz me on .+/i,
-                /^test me on .+/i,
-                /^start .+ quiz$/i
-            ]
-        },
-
-        // =========================
-        // GROUP IDS
-        // =========================
-        {
-            name: "groupids",
-            patterns: [
-                /^(?:show|list|get) (?:all )?(?:my )?group ids\??$/i,
-                /^list the groups jarvis is in\??$/i
-            ]
-        },
-
-        // =========================
         // CREATE FILE / NOTE / PDF
         // =========================
         {
@@ -3660,8 +3653,6 @@ if (natural) {
         listonline: "!listonline",
         ginfo: "!ginfo",
         getjid: "!getjid",
-        groupids: "!groupids",
-        quiz: "!quiz",
         image: "!image",
         pay: "!pay",
         name: "!name",
@@ -3673,8 +3664,8 @@ if (natural) {
         mute: "!mute",
         unmute: "!unmute",
         reset: "!reset",
-        createfile: "__createfile__",
-        define: "!define",
+        createfile: "__createfile__", // 👈 Added missing comma here
+        define: "!define",              // 👈 Properly mapped dictionary command
         vv: "!vv"
     };
 
@@ -3689,17 +3680,6 @@ if (natural) {
     // =========================
     // NATURAL ARGUMENT EXTRACTION
     // =========================
-
-    if (natural === "quiz") {
-        const subject = naturalText
-            .replace(/^(?:start|run|give me) (?:a )?(?:live )?quiz(?: on| about) /i, "")
-            .replace(/^quiz me on /i, "")
-            .replace(/^test me on /i, "")
-            .replace(/^start /i, "")
-            .replace(/ quiz$/i, "")
-            .trim();
-        args.splice(0, args.length, ...subject.split(/\s+/));
-    }
 
     if (natural === "ai") {
 
@@ -4217,60 +4197,35 @@ if (command === "!listadmins") {
 // --- MENU / HELP COMMAND ---
 if (command === "!menu" || command === "!help") {
     const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
-
+    
 *Powered by ${POWERED_BY}*
 
 ━━━━━━━━━━━━━━━━━━━━
-✨ *AI, LEARNING & CONTENT*
-🔹 *@Jarvis [question]* - Ask AI by tagging Jarvis (number mention also works)
-🔹 *!ai [query]* - Ask anything (legacy command)
-🔹 *!quiz [subject]* - Start a live group quiz
-🔹 *!image [prompt]* - Generate an image
-🔹 *!define [word]* / *!dictionary [word]* - Dictionary lookup
-🔹 *!timetable* - Get tutorial schedule
-🔹 *!pay* - Open tutorial payment flow
-🔹 *!name [full name]* - Register/update your name
-🔹 *!translate [from] [to] [text]* - Translate text
-
-🌐 *WEB & MEDIA TOOLS*
-🔹 *!sitecheck [URL]* - Check website availability
-🔹 *!crawl [URL]* - Inspect a website and request a screenshot
-🔹 *!yt search [query]* - Search YouTube
-🔹 *!yt video [video ID]* - Get video details
-🔹 *!yt download [video ID]* - Download/send supported video
-
-🔊 *VOICE & REMINDERS*
-🔹 *!tts on / !tts off / !tts status* - Voice reply settings
-🔹 *!remind 30m [task]* - Set a reminder
-🔹 *!reminders* - List pending reminders
-🔹 *!cancelreminder [ID]* - Cancel a reminder
-
-👥 *GROUP INFORMATION*
-🔹 *!ginfo* - Group information
+✨ *AI & UTILITY*
+🔹 *!ai [query]* - Ask anything
+🔹 *!ginfo* - Group status report
+🔹 *!listonline* - Activity tracker
+🔹 *!timetable* - Get latest tutorial schedule
 🔹 *!listadmins* - View group admins
-🔹 *!listonline* - View online members
-🔹 *!getjid* - Show current group JID
-🔹 *!groupids* / *!getgroupids* - List groups Jarvis is in
-🔹 *!status* - Jarvis system health
-🔹 *!healthgraph* - Health snapshot graph
+🔹 *!image* - To generate images
 
 🛡️ *GROUP MODERATION*
-🔸 *!add [number]* - Add a member
-🔸 *!kick @user* - Remove a member
-🔸 *!ban @user* - Ban a member
-🔸 *!unban @user* - Lift a ban
-🔸 *!promote @user* - Promote to admin
-🔸 *!mute [duration]* - Lock group
-🔸 *!unmute* - Reopen group
+🔸 *!add [number]* - Add new member
+🔸 *!kick @user* - Remove member
+🔸 *!ban @user* - Ban member and block rejoining
+🔸 *!unban @user* - Lift a member's ban
+🔸 *!promote @user* - Make admin
+🔸 *!mute [time] [unit]* - Lock group
+🔸 *!unmute [time] [unit]* - Open group
 🔸 *!reset @user* - Clear warnings
-🔸 *!vv* - Save view-once media
 
-⚙️ *SYSTEM / OWNER TOOLS*
-🔹 *!addxxjarvis meta [group JID]* - Add Meta AI to a group (owner/admin access as configured)
-🔹 *!groupname [group JID] [new name]* - Rename a group (where supported)
-
+🚫 *SYSTEM PROTECTIONS*
+✅ *Watchdog:* Anti-Link & Anti-Badword
+✅ *Anti-Status:* Deletes status tags
+✅ *Auto-Greet:* Welcome/Goodbye
 ━━━━━━━━━━━━━━━━━━━━
-_Natural-language requests are supported for many tools. Example: "Jarvis, remind me in 30m to study" or "Jarvis, search YouTube for chemistry tutorials."_`;
+
+_Type !mute 30 min to test the timer!_`;
 
     return sock.sendMessage(jid, {
         text: menuText,
