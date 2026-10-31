@@ -990,122 +990,52 @@ async function sendWithTyping(
 
 
 // ============================================================
-// GLOBAL WHATSAPP TEXT RENDERER + CHANNEL FOOTER
-// Handles Markdown tables, lists and fenced code in every outgoing
-// text message. Baileys' installed fork does not expose a verified
-// native table/code-block API, so tables are rendered as readable
-// WhatsApp text rather than sending an unverified protobuf payload.
+// FLEXI EDUCATIONAL CONSULT NEWSLETTER BRAND CARD
+// Use this dedicated helper only for media messages that should carry
+// the Flexi newsletter-style attribution. Ordinary replies/commands are
+// sent through the untouched sock.sendMessage() method.
 // ============================================================
-const JARVIS_CHANNEL_URL = 'https://whatsapp.com/channel/0029Vb6Lhoc3rZZW8SRooE3u';
-const JARVIS_CHANNEL_FOOTER = `\n\n━━━━━━━━━━━━━━━━━━\n🤖 *Meta AI discussion & JARVIS updates*\nFollow the channel for updates and conversations about Meta AI, alongside JARVIS announcements.`;
+const FLEXI_NEWSLETTER_JID = '120363421353629040@newsletter';
+const FLEXI_NEWSLETTER_NAME = 'FLEXI EDUCATIONAL CONSULT';
 
-function splitMarkdownTableRow(line) {
-    return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
-}
-
-function renderMarkdownTable(lines) {
-    const rows = lines.map(splitMarkdownTableRow);
-    const isSeparator = row => row.length > 0 && row.every(cell => /^:?-{3,}:?$/.test(cell.replace(/\s/g, '')));
-    const dataRows = rows.filter(row => !isSeparator(row));
-    if (!dataRows.length) return lines.join('\n');
-    const headers = dataRows[0];
-    const body = dataRows.slice(1);
-    return [
-        '📊 *TABLE*',
-        ...body.map((row, index) => {
-            const fields = headers.map((header, col) => `${header || `Column ${col + 1}`}: ${row[col] || '—'}`);
-            return `${index + 1}. ${fields.join('  |  ')}`;
-        })
-    ].join('\n');
-}
-
-function renderWhatsAppMarkdown(input) {
-    const source = String(input || '').replace(/\r\n/g, '\n');
-    const lines = source.split('\n');
-    const output = [];
-    let inCode = false;
-    let codeBuffer = [];
-    let tableBuffer = [];
-
-    const flushTable = () => {
-        if (tableBuffer.length) {
-            output.push(renderMarkdownTable(tableBuffer));
-            tableBuffer = [];
+function buildFlexiNewsletterContext(content = {}) {
+    return {
+        ...(content.contextInfo || {}),
+        forwardingScore: 999,
+        isForwarded: true,
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net',
+        quotedMessage: {
+            conversation: 'FLEXI EDUCATIONAL CONSULT'
+        },
+        forwardedNewsletterMessageInfo: {
+            newsletterJid: FLEXI_NEWSLETTER_JID,
+            newsletterName: FLEXI_NEWSLETTER_NAME,
+            serverMessageId: 1
         }
     };
+}
 
-    for (const line of lines) {
-        if (/^\s*```/.test(line)) {
-            flushTable();
-            if (!inCode) {
-                inCode = true;
-                codeBuffer = [];
-            } else {
-                output.push('```' + codeBuffer.join('\n') + '```');
-                codeBuffer = [];
-                inCode = false;
-            }
-            continue;
-        }
-        if (inCode) {
-            codeBuffer.push(line);
-            continue;
-        }
-        if (/^\s*\|.*\|\s*$/.test(line)) {
-            tableBuffer.push(line);
-            continue;
-        }
-        flushTable();
-        // Normalize common Markdown bullets to WhatsApp-friendly bullets.
-        const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
-        if (bullet) {
-            output.push(`${bullet[1]}• ${bullet[2]}`);
-            continue;
-        }
-        // Numbered lists are retained; only normalize spacing.
-        const numbered = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/);
-        if (numbered) {
-            output.push(`${numbered[1]}${numbered[2]}. ${numbered[3]}`);
-            continue;
-        }
-        output.push(line);
+async function sendFlexiBrandedMedia(socket, jid, content, options = {}) {
+    if (!socket || typeof socket.sendMessage !== 'function') {
+        throw new Error('WhatsApp socket is not available.');
     }
-    flushTable();
-    if (inCode) output.push('```' + codeBuffer.join('\n') + '```');
-    return output.join('\n').trim();
-}
+    if (!content || typeof content !== 'object') {
+        throw new Error('A media message payload is required.');
+    }
 
-function addJarvisChannelFooter(content) {
-    if (!content || typeof content.text !== 'string' || !content.text.trim()) return content;
-    const text = content.text;
-    if (text.includes(JARVIS_CHANNEL_URL)) return { ...content, text };
-    return { ...content, text: `${text}${JARVIS_CHANNEL_FOOTER}` };
-}
+    const isMediaMessage = Boolean(
+        content.image || content.video || content.document || content.audio
+    );
+    if (!isMediaMessage) {
+        throw new Error('Flexi newsletter branding is only supported for media messages.');
+    }
 
-function installGlobalOutgoingRenderer(socket) {
-    if (!socket || socket.__jarvisOutgoingRendererInstalled) return;
-    const originalSendMessage = socket.sendMessage.bind(socket);
-    socket.sendMessage = (jid, content, options) => {
-        if (content && typeof content === 'object' && typeof content.text === 'string') {
-            const rendered = renderWhatsAppMarkdown(content.text);
-            const withFooter = addJarvisChannelFooter({ ...content, text: rendered });
-            // Native WhatsApp URL CTA. Preserve any buttons already supplied by a caller.
-            const existingButtons = Array.isArray(withFooter.templateButtons) ? withFooter.templateButtons : [];
-            const hasViewChannelButton = existingButtons.some(button =>
-                button?.urlButton?.url === JARVIS_CHANNEL_URL ||
-                button?.urlButton?.displayText === 'View channel'
-            );
-            if (!hasViewChannelButton) {
-                withFooter.templateButtons = [
-                    ...existingButtons,
-                    { index: existingButtons.length + 1, urlButton: { displayText: 'View channel', url: JARVIS_CHANNEL_URL } }
-                ];
-            }
-            return originalSendMessage(jid, withFooter, options);
-        }
-        return originalSendMessage(jid, content, options);
+    const brandedContent = {
+        ...content,
+        contextInfo: buildFlexiNewsletterContext(content)
     };
-    socket.__jarvisOutgoingRendererInstalled = true;
+    return socket.sendMessage(jid, brandedContent, options);
 }
 
 // --- BOT START ---
@@ -1124,7 +1054,9 @@ async function startJARVIS() {
         syncFullHistory: false
     });
 
-    installGlobalOutgoingRenderer(sock);
+
+    sock.sendFlexiBrandedMedia = (jid, content, options = {}) =>
+        sendFlexiBrandedMedia(sock, jid, content, options);
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -2798,20 +2730,15 @@ const hasBotJidMention = mentionedJids.some(mentioned => {
     }
 });
 
-const bodyLowerForTag = String(body || '').toLowerCase();
-const hasPhoneNumberTag = Boolean(botNumber) &&
-    (bodyLowerForTag.includes(`@${botNumber}`) ||
-     bodyLowerForTag.includes(`@${botNumber.slice(-8)}`));
 const hasJarvisAlias = /@jarvis\b/i.test(body || '');
-const isJarvisTagged = hasBotJidMention || hasPhoneNumberTag || hasJarvisAlias;
+const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
 const isAiCommand = command === '!ai' || isJarvisTagged;
 
 // Remove the trigger and mention text before sending the actual question to AI.
 const aiPromptText = (body || '')
     .replace(/^\s*!ai\b\s*/i, '')
     .replace(/@jarvis\b/gi, '')
-    .replace(botNumber ? new RegExp(`@?${botNumber.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g') : /$^/g, '')
-    .replace(botNumber ? new RegExp(`@?${botNumber.slice(-8)}\\b`, 'g') : /$^/g, '')
+    .replace(new RegExp(`@?${botNumber}\\b`, 'g'), '')
     .replace(/\s+/g, ' ')
     .trim();
 
