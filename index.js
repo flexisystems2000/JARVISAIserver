@@ -991,9 +991,8 @@ async function sendWithTyping(
 
 // ============================================================
 // FLEXI EDUCATIONAL CONSULT GLOBAL OUTGOING RENDERER
-// All normal outgoing messages pass through this wrapper and receive
-// Flexi newsletter attribution. Reactions and message-control payloads
-// are left untouched.
+// Normal outgoing messages carry Flexi newsletter attribution.
+// Control payloads (reactions, deletes, protocol operations) pass through.
 // ============================================================
 const FLEXI_NEWSLETTER_JID = '120363421353629040@newsletter';
 const FLEXI_NEWSLETTER_NAME = 'FLEXI EDUCATIONAL CONSULT';
@@ -1005,9 +1004,7 @@ function buildFlexiNewsletterContext(content = {}) {
         isForwarded: true,
         participant: '0@s.whatsapp.net',
         remoteJid: '0@s.whatsapp.net',
-        quotedMessage: {
-            conversation: 'FLEXI EDUCATIONAL CONSULT'
-        },
+        quotedMessage: { conversation: FLEXI_NEWSLETTER_NAME },
         forwardedNewsletterMessageInfo: {
             newsletterJid: FLEXI_NEWSLETTER_JID,
             newsletterName: FLEXI_NEWSLETTER_NAME,
@@ -1017,57 +1014,27 @@ function buildFlexiNewsletterContext(content = {}) {
 }
 
 function installGlobalOutgoingRenderer(socket) {
-    if (!socket || typeof socket.sendMessage !== 'function') {
-        throw new Error('WhatsApp socket is not available for the global renderer.');
-    }
-    if (socket.__flexiOutgoingRendererInstalled) return;
-
+    if (!socket || typeof socket.sendMessage !== 'function' || socket.__flexiRendererInstalled) return;
     const originalSendMessage = socket.sendMessage.bind(socket);
-
-    socket.sendMessage = async (jid, content, options = {}) => {
+    socket.sendMessage = async (jid, content, options) => {
         if (!content || typeof content !== 'object' || Array.isArray(content)) {
             return originalSendMessage(jid, content, options);
         }
-
-        // Keep non-message control operations unchanged.
-        const isControlPayload = Boolean(
-            content.react || content.delete || content.protocolMessage || content.pin
+        const controlPayload = Boolean(
+            content.react || content.delete || content.protocolMessage ||
+            content.pin || content.disappearingMessagesInChat || content.groupInviteMessage
         );
-        if (isControlPayload) return originalSendMessage(jid, content, options);
-
-        const brandedContent = {
+        if (controlPayload) return originalSendMessage(jid, content, options);
+        const branded = {
             ...content,
             contextInfo: buildFlexiNewsletterContext(content)
         };
-        return originalSendMessage(jid, brandedContent, options);
+        return originalSendMessage(jid, branded, options);
     };
-
-    Object.defineProperty(socket, '__flexiOutgoingRendererInstalled', {
-        value: true, configurable: false, enumerable: false, writable: false
+    Object.defineProperty(socket, '__flexiRendererInstalled', {
+        value: true, enumerable: false, configurable: false
     });
     console.log('✅ Flexi global outgoing renderer installed.');
-}
-
-async function sendFlexiBrandedMedia(socket, jid, content, options = {}) {
-    if (!socket || typeof socket.sendMessage !== 'function') {
-        throw new Error('WhatsApp socket is not available.');
-    }
-    if (!content || typeof content !== 'object') {
-        throw new Error('A media message payload is required.');
-    }
-
-    const isMediaMessage = Boolean(
-        content.image || content.video || content.document || content.audio
-    );
-    if (!isMediaMessage) {
-        throw new Error('A supported media message payload is required for this helper.');
-    }
-
-    const brandedContent = {
-        ...content,
-        contextInfo: buildFlexiNewsletterContext(content)
-    };
-    return socket.sendMessage(jid, brandedContent, options);
 }
 
 // --- BOT START ---
@@ -1087,7 +1054,6 @@ async function startJARVIS() {
     });
 
 
-    // Apply Flexi newsletter attribution globally to normal outgoing messages.
     installGlobalOutgoingRenderer(sock);
 
     sock.sendFlexiBrandedMedia = (jid, content, options = {}) =>
@@ -2751,31 +2717,40 @@ const aiContextInfo =
     m.message?.videoMessage?.contextInfo ||
     m.message?.documentMessage?.contextInfo ||
     m.message?.audioMessage?.contextInfo ||
+    m.message?.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
     {};
 
-const botJid = sock.user?.id || '';
-const botNumber = botJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+const botIdentities = [sock.user?.id, sock.user?.lid]
+    .filter(Boolean);
 const mentionedJids = aiContextInfo.mentionedJid || [];
-const hasBotJidMention = mentionedJids.some(mentioned => {
+const jidLocalPart = value => String(value || '').split('@')[0].split(':')[0];
+const hasBotJidMention = mentionedJids.some(mentioned => botIdentities.some(identity => {
     try {
-        return areJidsSameUser(mentioned, botJid) ||
-            String(mentioned).split('@')[0].split(':')[0].replace(/\D/g, '') === botNumber;
-    } catch (_) {
-        return false;
-    }
-});
+        if (areJidsSameUser(mentioned, identity)) return true;
+    } catch (_) {}
+    // LID and phone JIDs are distinct namespaces: compare their local IDs
+    // only against the matching namespace, never across @lid/@s.whatsapp.net.
+    const mentionedDomain = String(mentioned).split('@')[1] || '';
+    const identityDomain = String(identity).split('@')[1] || '';
+    return mentionedDomain === identityDomain &&
+        jidLocalPart(mentioned) === jidLocalPart(identity);
+}));
 
+const botMentionNumbers = botIdentities
+    .filter(identity => String(identity).endsWith('@s.whatsapp.net'))
+    .map(jidLocalPart)
+    .filter(Boolean);
 const hasJarvisAlias = /@jarvis\b/i.test(body || '');
 const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
 const isAiCommand = command === '!ai' || isJarvisTagged;
 
-// Remove the trigger and mention text before sending the actual question to AI.
-const aiPromptText = (body || '')
-    .replace(/^\s*!ai\b\s*/i, '')
-    .replace(/@jarvis\b/gi, '')
-    .replace(new RegExp(`@?${botNumber}\\b`, 'g'), '')
-    .replace(/\s+/g, ' ')
-    .trim();
+// Strip only the actual trigger/known bot identities from the AI prompt.
+let aiPromptText = String(body || '').replace(/^\s*!ai\b\s*/i, '').replace(/@jarvis\b/gi, '');
+for (const identity of botIdentities) {
+    const local = jidLocalPart(identity);
+    if (local) aiPromptText = aiPromptText.replace(new RegExp(`@?${local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), '');
+}
+aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 
 
 // ============================================================
@@ -4158,41 +4133,69 @@ if (command === "!listadmins") {
 
 // --- MENU / HELP COMMAND ---
 if (command === "!menu" || command === "!help") {
-    const menuText = `🤖 *${BOT_NAME} SYSTEM MENU*
-    
+    const menuText = `🤖 *${BOT_NAME} — COMMAND MENU*
+
 *Powered by ${POWERED_BY}*
 
-━━━━━━━━━━━━━━━━━━━━
-✨ *AI & UTILITY*
-🔹 *!ai [query]* - Ask anything
-🔹 *!ginfo* - Group status report
-🔹 *!listonline* - Activity tracker
-🔹 *!timetable* - Get latest tutorial schedule
-🔹 *!listadmins* - View group admins
-🔹 *!image* - To generate images
+━━━━━━━━━━━━━━━━━━
+🧠 *AI & LEARNING*
+🔹 !ai [question] — Ask Jarvis anything (or tag Jarvis)
+🔹 !define [word] / !dictionary [word] — Word meanings
+🔹 !quiz [subject] — Start a subject quiz
+🔹 !timetable — Get the tutorial timetable
+🔹 !image [prompt] — Generate an image
+🔹 !vv — Retrieve view-once media (reply to it)
+🔹 !createfile / !create document / !generate pdf — Create study notes/files
 
-🛡️ *GROUP MODERATION*
-🔸 *!add [number]* - Add new member
-🔸 *!kick @user* - Remove member
-🔸 *!ban @user* - Ban member and block rejoining
-🔸 *!unban @user* - Lift a member's ban
-🔸 *!promote @user* - Make admin
-🔸 *!mute [time] [unit]* - Lock group
-🔸 *!unmute [time] [unit]* - Open group
-🔸 *!reset @user* - Clear warnings
+🌐 *WEB, TRANSLATION & MEDIA*
+🔹 !crawl [URL] — Inspect a website and capture a screenshot
+🔹 !sitecheck [URL] — Check if a website is online
+🔹 !translate [source] [target] [text] — Translate text
+🔹 !yt search [query] — Search YouTube
+🔹 !yt video [VIDEO_ID] — View video details
+🔹 !yt download [VIDEO_ID] — Download/send supported video
 
-🚫 *SYSTEM PROTECTIONS*
-✅ *Watchdog:* Anti-Link & Anti-Badword
-✅ *Anti-Status:* Deletes status tags
-✅ *Auto-Greet:* Welcome/Goodbye
-━━━━━━━━━━━━━━━━━━━━
+⏰ *REMINDERS & VOICE*
+🔹 !remind [30m] [message] — Create a reminder
+🔹 !reminders — List pending reminders
+🔹 !cancelreminder [ID] — Cancel a reminder
+🔹 !tts on / !tts off — Enable/disable voice replies
+🔹 !tts status — Check voice-reply setting
 
-_Type !mute 30 min to test the timer!_`;
+📊 *BOT & GROUP INFO*
+🔹 !status — Jarvis health/status report
+🔹 !healthgraph — Send health graph
+🔹 !ginfo — Group information
+🔹 !listadmins — List group admins
+🔹 !listonline — View recently active members
+🔹 !getjid — Get current chat JID
+🔹 !groupids / !getgroupids — List group IDs
+🔹 !groupname [GROUP_ID] [name] — Rename a group by ID
+
+🛡️ *GROUP MANAGEMENT* (Admin permissions required)
+🔸 !add [phone number] — Add a member
+🔸 !kick @user — Remove a member
+🔸 !ban @user — Ban a member from this group
+🔸 !unban @user — Remove a group ban
+🔸 !promote @user — Promote a member
+🔸 !mute [duration] — Close group messaging
+🔸 !unmute [duration] — Reopen group messaging
+🔸 !reset @user — Reset member warnings
+
+🎓 *FLEXI / ACCOUNT*
+🔹 !pay month / !pay week — Open tutorial payment flow
+🔹 !name [your name] — Register/update your learner profile
+🔹 !addxxjarvis meta [GROUP_ID] — Link supported group integration (owner)
+
+ℹ️ *OTHER*
+🔹 !menu / !help — Show this menu
+
+Use commands as written. Replace items in [brackets] with your details.
+━━━━━━━━━━━━━━━━━━`;
 
     return sock.sendMessage(jid, {
-        text: menuText,
-        quoted: m
-    });
+        text: menuText
+    }, { quoted: m });
 }
 
                 // =====================================================
