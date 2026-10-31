@@ -321,6 +321,45 @@ async function downloadYouTubeVideo(videoId) {
     return { buffer, contentType: contentType || 'video/mp4' };
 }
 
+async function downloadYouTubeAudio(videoId) {
+    const { baseUrl, apiKey } = getYouTubeServiceConfig();
+    const response = await axios.get(`${baseUrl}/youtube/audio/${encodeURIComponent(videoId)}`, {
+        headers: { 'X-API-Key': apiKey, Accept: 'audio/mpeg, application/octet-stream, application/json' },
+        responseType: 'arraybuffer',
+        timeout: 240000,
+        maxContentLength: 55 * 1024 * 1024,
+        maxBodyLength: 55 * 1024 * 1024,
+        validateStatus: () => true
+    });
+
+    const buffer = Buffer.from(response.data || []);
+    const contentType = String(response.headers?.['content-type'] || '').toLowerCase();
+    if (response.status < 200 || response.status >= 300) {
+        let detail = '';
+        try {
+            const body = JSON.parse(buffer.toString('utf8'));
+            detail = body.detail || body.error || body.message || '';
+        } catch (_) {
+            detail = buffer.toString('utf8').slice(0, 250);
+        }
+        throw new Error(`YouTube audio download failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
+    }
+    if (!buffer.length || /application\/json|text\/html/.test(contentType)) {
+        throw new Error('YouTube service did not return a valid audio file.');
+    }
+    // Accept common MP3 signatures (ID3 tag or MPEG frame sync).
+    const isMp3 = /audio\/(mpeg|mp3)/.test(contentType) ||
+        buffer.subarray(0, 3).toString('ascii') === 'ID3' ||
+        (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0);
+    if (!isMp3) {
+        throw new Error('YouTube service did not return a valid MP3 file.');
+    }
+    if (buffer.length > 50 * 1024 * 1024) {
+        throw new Error("The MP3 is larger than Jarvis' 50 MB send limit.");
+    }
+    return buffer;
+}
+
 
 // Send due reminders once after a successful DB connection; MongoDB status prevents duplicate sends.
 let reminderWorkerStarted = false;
@@ -1016,6 +1055,8 @@ function buildFlexiNewsletterContext(content = {}) {
 function installGlobalOutgoingRenderer(socket) {
     if (!socket || typeof socket.sendMessage !== 'function' || socket.__flexiRendererInstalled) return;
     const originalSendMessage = socket.sendMessage.bind(socket);
+    // Allow callers (e.g. TTS / !ai voice notes) to opt out of newsletter branding.
+    socket.sendMessageRaw = originalSendMessage;
     socket.sendMessage = async (jid, content, options) => {
         if (!content || typeof content !== 'object' || Array.isArray(content)) {
             return originalSendMessage(jid, content, options);
@@ -1024,7 +1065,11 @@ function installGlobalOutgoingRenderer(socket) {
             content.react || content.delete || content.protocolMessage ||
             content.pin || content.disappearingMessagesInChat || content.groupInviteMessage
         );
-        if (controlPayload) return originalSendMessage(jid, content, options);
+        // Voice notes / audio must stay clean — newsletter context breaks PTT playback.
+        const isAudioOrPtt = Boolean(content.audio || content.ptt === true);
+        if (controlPayload || isAudioOrPtt || options?.skipFlexiBrand) {
+            return originalSendMessage(jid, content, options);
+        }
         const branded = {
             ...content,
             contextInfo: buildFlexiNewsletterContext(content)
@@ -1417,7 +1462,7 @@ if (
         return;
     }
 
-    // YouTube search, metadata and video download via the Piper/yt-dlp service.
+    // YouTube search, video download, and audio (MP3) via the Piper/yt-dlp service.
     let ytQuery = rawMsgCheck.match(/^!yt\s+search\s+([\s\S]+)$/i)?.[1];
     if (!ytQuery) ytQuery = rawMsgCheck.match(/^(?:search|find)\s+(?:for\s+)?(?:videos?\s+)?on youtube\s*[:：]?\s*([\s\S]+)$/i)?.[1];
     if (ytQuery) {
@@ -1430,9 +1475,9 @@ if (
                     const duration = Number.isFinite(Number(v.duration)) && v.duration !== null
                         ? `\nDuration: ${Math.floor(Number(v.duration) / 60)}:${String(Math.floor(Number(v.duration) % 60)).padStart(2, '0')}`
                         : '';
-                    return `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}${duration}\n${v.url || `https://www.youtube.com/watch?v=${v.id}`}`;
+                    return `${i + 1}. *${v.title || 'Untitled video'}*\nChannel: ${v.channel || 'Unknown'}${duration}\nID: ${v.id || 'Unavailable'}\n${v.url || (v.id ? `https://www.youtube.com/watch?v=${v.id}` : '')}`;
                 }).join('\n\n');
-                await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${listing}\n\nUse *!yt video VIDEO_ID* for details or *!yt download VIDEO_ID* to send a supported video here.`);
+                await operationalReply(`▶️ *YOUTUBE SEARCH*\nQuery: ${ytQuery.trim()}\n\n${listing}\n\nUse *!yt video <query or ID>* to send video or *!yt audio <query or ID>* for MP3.`);
             }
         } catch (err) {
             await operationalReply(`⚠️ YouTube search failed: ${getYouTubeApiError(err, 'Search request failed')}\n\nCheck that the Piper service is deployed and Jarvis has the correct PIPER_API_KEY.`);
@@ -1440,24 +1485,61 @@ if (
         return;
     }
 
-    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\w-]{11})$/i);
+    // !yt video <search query OR 11-char ID> — find top result (if query) and send the video file
+    const ytVideoMatch = rawMsgCheck.match(/^!yt\s+video\s+([\s\S]+)$/i);
     if (ytVideoMatch) {
         try {
-            const videoId = ytVideoMatch[1];
-            const video = await getYouTubeVideo(videoId);
-            const duration = video.duration || (Number.isFinite(Number(video.duration_seconds))
-                ? `${Math.floor(Number(video.duration_seconds) / 60)}:${String(Math.floor(Number(video.duration_seconds) % 60)).padStart(2, '0')}`
-                : 'Unknown');
-            const views = Number.isFinite(Number(video.view_count))
-                ? Number(video.view_count).toLocaleString('en-US')
-                : 'Unknown';
-            await operationalReply(`🎬 *YOUTUBE VIDEO DETAILS*\n\n*${video.title || 'Untitled video'}*\nChannel: ${video.channel || 'Unknown'}\nDuration: ${duration}\nViews: ${views}\n${video.upload_date ? `Upload date: ${video.upload_date}\n` : ''}\n${video.url || `https://www.youtube.com/watch?v=${videoId}`}\n\nUse *!yt download ${videoId}* to request the video file (50 MB / 15-minute service limits apply).`);
+            const requested = ytVideoMatch[1].trim();
+            const results = /^[\w-]{11}$/.test(requested)
+                ? [{ id: requested, title: 'YouTube video' }]
+                : await searchYouTube(requested, 1);
+            const selected = results[0];
+            if (!selected?.id || !/^[\w-]{11}$/.test(selected.id)) {
+                await operationalReply(`🔎 No downloadable YouTube result found for: ${requested}`);
+                return;
+            }
+            await operationalReply(`⏳ Finding and sending: *${selected.title || requested}*\nPlease wait...`);
+            const video = await getYouTubeVideo(selected.id).catch(() => ({ title: selected.title || 'YouTube video' }));
+            const downloaded = await downloadYouTubeVideo(selected.id);
+            await sock.sendMessage(jid, {
+                video: downloaded.buffer,
+                mimetype: downloaded.contentType.includes('mp4') ? 'video/mp4' : downloaded.contentType,
+                caption: `▶️ *${video.title || selected.title || 'YouTube video'}*\nhttps://www.youtube.com/watch?v=${selected.id}`
+            }, { quoted: m });
         } catch (err) {
-            await operationalReply(`⚠️ Could not retrieve YouTube video details: ${getYouTubeApiError(err, 'Video lookup failed')}`);
+            await operationalReply(`⚠️ Could not find/send the YouTube video: ${getYouTubeApiError(err, 'Video request failed')}\n\nThe video must be available and within the 50 MB / 15-minute limits.`);
         }
         return;
     }
 
+    // !yt audio <search query OR 11-char ID> — find top result (if query) and send MP3
+    const ytAudioMatch = rawMsgCheck.match(/^!yt\s+audio\s+([\s\S]+)$/i);
+    if (ytAudioMatch) {
+        try {
+            const requested = ytAudioMatch[1].trim();
+            const results = /^[\w-]{11}$/.test(requested)
+                ? [{ id: requested, title: 'YouTube audio' }]
+                : await searchYouTube(requested, 1);
+            const selected = results[0];
+            if (!selected?.id || !/^[\w-]{11}$/.test(selected.id)) {
+                await operationalReply(`🔎 No audio result found for: ${requested}`);
+                return;
+            }
+            await operationalReply(`🎵 Preparing MP3: *${selected.title || requested}*\nPlease wait...`);
+            const audio = await downloadYouTubeAudio(selected.id);
+            await sock.sendMessage(jid, {
+                audio,
+                mimetype: 'audio/mpeg',
+                fileName: `${String(selected.title || 'YouTube audio').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 80)}.mp3`,
+                ptt: false
+            }, { quoted: m });
+        } catch (err) {
+            await operationalReply(`⚠️ Could not find/send the MP3: ${getYouTubeApiError(err, 'Audio request failed')}\n\nThe source must be available and within the 50 MB / 15-minute service limits.`);
+        }
+        return;
+    }
+
+    // Backward-compatible ID-only download command.
     const ytDownloadMatch = rawMsgCheck.match(/^!yt\s+download\s+([\w-]{11})$/i);
     if (ytDownloadMatch) {
         const videoId = ytDownloadMatch[1];
@@ -1475,6 +1557,7 @@ if (
         }
         return;
     }
+
     // Persistent per-chat TTS toggle. Operational responses intentionally stay text.
     const ttsOnPhrases = ['switch on voice mode', 'turn on voice mode', 'enable voice replies', 'i want voice replies', 'reply with voice', 'start speaking', 'use voice replies'];
     const ttsOffPhrases = ['switch off voice mode', 'turn off voice mode', 'disable voice replies', 'stop speaking and reply with text', 'return to text mode', 'reply with text', 'stop voice replies'];
@@ -4152,8 +4235,9 @@ if (command === "!menu" || command === "!help") {
 🔹 !sitecheck [URL] — Check if a website is online
 🔹 !translate [source] [target] [text] — Translate text
 🔹 !yt search [query] — Search YouTube
-🔹 !yt video [VIDEO_ID] — View video details
-🔹 !yt download [VIDEO_ID] — Download/send supported video
+🔹 !yt video [query or VIDEO_ID] — Download/send video
+🔹 !yt audio [query or VIDEO_ID] — Download/send MP3 audio
+🔹 !yt download [VIDEO_ID] — Download/send supported video (ID only)
 
 ⏰ *REMINDERS & VOICE*
 🔹 !remind [30m] [message] — Create a reminder
