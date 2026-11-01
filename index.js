@@ -235,6 +235,78 @@ async function translateText(source, target, input) {
 }
 
 // ============================================================
+// MAGIC HOUR VIDEO GENERATION — proxied through the existing Piper service.
+// Piper holds MAGIC_HOUR_API_KEY; Jarvis authenticates to Piper with PIPER_API_KEY.
+// ============================================================
+function getMagicHourServiceConfig() {
+    const baseUrl = String(process.env.MAGIC_HOUR_SERVICE_URL || process.env.YOUTUBE_SERVICE_URL || 'https://flexi-jarvis-piper-tts.onrender.com').trim().replace(/\/$/, '');
+    const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+    if (!apiKey) throw new Error('PIPER_API_KEY is missing in the Jarvis hosting environment.');
+    return { baseUrl, apiKey };
+}
+
+function getMagicHourError(err, fallback) {
+    const detail = err.response?.data?.detail || err.response?.data?.error || err.response?.data?.message;
+    if (detail) return String(detail).slice(0, 500);
+    if (err.response?.status) return `${fallback} (HTTP ${err.response.status}).`;
+    return `${fallback}: ${err.code || err.message || 'network error'}`;
+}
+
+async function createMagicHourVideo(prompt) {
+    const { baseUrl, apiKey } = getMagicHourServiceConfig();
+    const response = await axios.post(`${baseUrl}/video/generate`, { prompt: String(prompt).trim() }, {
+        headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+        timeout: 200000, maxContentLength: 2 * 1024 * 1024
+    });
+    return response.data;
+}
+
+async function getMagicHourVideoStatus(projectId) {
+    const { baseUrl, apiKey } = getMagicHourServiceConfig();
+    const response = await axios.get(`${baseUrl}/video/jobs/${encodeURIComponent(projectId)}`, {
+        headers: { 'X-API-Key': apiKey, Accept: 'application/json' }, timeout: 60000, maxContentLength: 4 * 1024 * 1024
+    });
+    return response.data;
+}
+
+function findMagicHourValue(data, keys, depth = 0) {
+    if (!data || typeof data !== 'object' || depth > 7) return null;
+    for (const key of keys) {
+        const value = data[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    for (const value of Object.values(data)) {
+        if (value && typeof value === 'object') {
+            const found = findMagicHourValue(value, keys, depth + 1);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+function findMagicHourVideoUrl(data) {
+    return findMagicHourValue(data, ['url', 'video_url', 'videoUrl', 'download_url', 'downloadUrl', 'output_url', 'outputUrl', 'result_url', 'resultUrl']);
+}
+
+async function downloadMagicHourVideo(videoUrl) {
+    let parsed;
+    try { parsed = new URL(videoUrl); } catch { throw new Error('Magic Hour returned an invalid video URL.'); }
+    if (parsed.protocol !== 'https:') throw new Error('Magic Hour returned a non-HTTPS video URL; download blocked.');
+    const response = await axios.get(parsed.toString(), {
+        responseType: 'arraybuffer', timeout: 180000, maxContentLength: 60 * 1024 * 1024,
+        maxBodyLength: 60 * 1024 * 1024, validateStatus: () => true
+    });
+    const buffer = Buffer.from(response.data || []);
+    const type = String(response.headers?.['content-type'] || '').toLowerCase();
+    if (response.status < 200 || response.status >= 300 || !buffer.length || /application\/json|text\/html/.test(type)) {
+        throw new Error(`Could not download generated video (HTTP ${response.status}).`);
+    }
+    if (buffer.length > 55 * 1024 * 1024) throw new Error('Generated video exceeds WhatsApp’s 55 MB transfer limit.');
+    if (buffer.length < 12 || buffer.toString('ascii', 4, 8) !== 'ftyp') throw new Error('The generated file is not a valid MP4 video.');
+    return buffer;
+}
+
+// ============================================================
 // YOUTUBE — use the NovaStack-backed YouTube routes exposed by the Piper service.
 // The existing PIPER_API_KEY authenticates Jarvis to the Python service.
 // ============================================================
@@ -1470,6 +1542,48 @@ if (
             const translated = await translateText(sourceLang, targetLang, translationParts[3]);
             await operationalReply(`🌍 *TRANSLATION* (${translationParts[1]} → ${translationParts[2]})\n\n${translated}`);
         } catch (err) { await operationalReply(`⚠️ Translation failed: ${err.response?.data?.error || err.message}\nYou may configure LIBRETRANSLATE_URL and, if required, LIBRETRANSLATE_API_KEY in Render.`); }
+        return;
+    }
+
+    // Magic Hour: !video <prompt> creates a video; !video status <project_id> checks it.
+    const magicHourStatusMatch = rawMsgCheck.match(/^!video\s+status\s+([\w-]+)$/i);
+    if (magicHourStatusMatch) {
+        try {
+            const statusData = await getMagicHourVideoStatus(magicHourStatusMatch[1]);
+            const state = findMagicHourValue(statusData, ['status', 'state', 'project_status']) || 'unknown';
+            const videoUrl = findMagicHourVideoUrl(statusData);
+            if (videoUrl) {
+                const videoBuffer = await downloadMagicHourVideo(videoUrl);
+                await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: `🎬 *Magic Hour video ready*\nProject: ${magicHourStatusMatch[1]}` }, { quoted: m });
+            } else {
+                await operationalReply(`🎬 *MAGIC HOUR STATUS*\nProject: ${magicHourStatusMatch[1]}\nStatus: ${state}\n\nNo downloadable video URL is available yet. Check again with *!video status ${magicHourStatusMatch[1]}*.`);
+            }
+        } catch (err) {
+            await operationalReply(`⚠️ Magic Hour status check failed: ${getMagicHourError(err, 'Status request failed')}`);
+        }
+        return;
+    }
+
+    const magicHourPromptMatch = rawMsgCheck.match(/^!video\s+([\s\S]+)$/i);
+    if (magicHourPromptMatch && !/^status\b/i.test(magicHourPromptMatch[1].trim())) {
+        try {
+            const prompt = magicHourPromptMatch[1].trim();
+            if (prompt.length < 5) throw new Error('Please provide a more descriptive video prompt.');
+            await operationalReply('🎬 Submitting your video prompt to Magic Hour. Please wait...');
+            const result = await createMagicHourVideo(prompt);
+            const projectId = findMagicHourValue(result, ['project_id', 'projectId', 'id', 'job_id', 'jobId']);
+            const videoUrl = findMagicHourVideoUrl(result);
+            if (videoUrl) {
+                const videoBuffer = await downloadMagicHourVideo(videoUrl);
+                await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: '🎬 *Your Magic Hour video is ready!*' }, { quoted: m });
+            } else if (projectId) {
+                await operationalReply(`✅ *Magic Hour request submitted*\nProject ID: ${projectId}\n\nGeneration is processing. Use:\n*!video status ${projectId}*\nto check and receive the video when it is ready.`);
+            } else {
+                await operationalReply(`⚠️ Magic Hour accepted a response, but Jarvis could not identify the project ID. Response:\n${JSON.stringify(result).slice(0, 2500)}`);
+            }
+        } catch (err) {
+            await operationalReply(`⚠️ Magic Hour video generation failed: ${getMagicHourError(err, 'Generation request failed')}\n\nConfirm MAGIC_HOUR_API_KEY is set in the Piper Render service and PIPER_API_KEY matches in both services.`);
+        }
         return;
     }
 
@@ -4249,6 +4363,8 @@ if (command === "!menu" || command === "!help") {
 🔹 !yt video [query or VIDEO_ID] — Download/send video
 🔹 !yt audio [query or VIDEO_ID] — Download/send MP3 audio
 🔹 !yt download [VIDEO_ID] — Download/send supported video (ID only)
+🔹 !video [prompt] — Generate a video with Magic Hour
+🔹 !video status [PROJECT_ID] — Check and receive generated video
 
 ⏰ *REMINDERS & VOICE*
 🔹 !remind [30m] [message] — Create a reminder
