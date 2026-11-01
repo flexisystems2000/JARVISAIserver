@@ -851,6 +851,10 @@ async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null,
 // --- GLOBAL STATE ---
 const groupCache = new Map();
 const activityTracker = new Map();
+// Short-lived group transcript used only as context when !ai is invoked or
+// someone replies directly to a Jarvis message. Ordinary messages never trigger AI.
+const jarvisGroupConversation = new Map();
+const JARVIS_GROUP_CONTEXT_LIMIT = 35;
 
 // Recent operational events shown in the web dashboard. Kept in memory so
 // diagnostic output is visible without introducing a new database dependency.
@@ -1428,6 +1432,21 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
     activityTracker.set(sender, Date.now());
+
+    // Silently observe ordinary group conversation for later !ai/reply context.
+    // This block only stores text; it never sends a response or invokes Gemini.
+    if (jid?.endsWith('@g.us') && !m.key.fromMe && earlyBody.trim()) {
+        const transcript = jarvisGroupConversation.get(jid) || [];
+        const participantLabel = String(sender || '').split('@')[0].split(':')[0] || 'Member';
+        transcript.push({
+            sender: participantLabel,
+            text: earlyBody.trim().slice(0, 1200),
+            timestamp: Date.now()
+        });
+        if (transcript.length > JARVIS_GROUP_CONTEXT_LIMIT) transcript.splice(0, transcript.length - JARVIS_GROUP_CONTEXT_LIMIT);
+        jarvisGroupConversation.set(jid, transcript);
+    }
+
     
        // ============================================================
 // 💬 DASHBOARD — SAVE INCOMING GROUP MESSAGE
@@ -2993,9 +3012,9 @@ if (hasReaction) {
 const args = body.trim().split(/ +/).slice(1);
 
 // ============================================================
-// 🤖 JARVIS TAG-TO-ENGAGE
-// Anyone can tag the bot with @Jarvis instead of typing !ai.
-// Also recognizes WhatsApp's actual mentionedJid metadata.
+// 🤖 JARVIS GROUP ENGAGEMENT
+// In groups, Jarvis responds only to !ai or a direct reply to Jarvis.
+// Ordinary group messages are silently retained as short-lived context.
 // ============================================================
 const aiContextInfo =
     m.message?.extendedTextMessage?.contextInfo ||
@@ -3006,38 +3025,20 @@ const aiContextInfo =
     m.message?.ephemeralMessage?.message?.extendedTextMessage?.contextInfo ||
     {};
 
-const botIdentities = [sock.user?.id, sock.user?.lid]
-    .filter(Boolean);
-const mentionedJids = aiContextInfo.mentionedJid || [];
-const jidLocalPart = value => String(value || '').split('@')[0].split(':')[0];
-const hasBotJidMention = mentionedJids.some(mentioned => botIdentities.some(identity => {
-    try {
-        if (areJidsSameUser(mentioned, identity)) return true;
-    } catch (_) {}
-    // LID and phone JIDs are distinct namespaces: compare their local IDs
-    // only against the matching namespace, never across @lid/@s.whatsapp.net.
-    const mentionedDomain = String(mentioned).split('@')[1] || '';
-    const identityDomain = String(identity).split('@')[1] || '';
-    return mentionedDomain === identityDomain &&
-        jidLocalPart(mentioned) === jidLocalPart(identity);
-}));
+const botIdentities = [sock.user?.id, sock.user?.lid].filter(Boolean);
+const repliedParticipant = aiContextInfo.participant || '';
+const repliedToJarvis = !!aiContextInfo.quotedMessage && botIdentities.some(identity => {
+    try { if (areJidsSameUser(repliedParticipant, identity)) return true; } catch (_) {}
+    const a = String(repliedParticipant).split('@');
+    const b = String(identity).split('@');
+    return a[1] === b[1] && a[0].split(':')[0] === b[0].split(':')[0];
+});
+const isGroupChat = !!jid?.endsWith('@g.us');
+const isAiCommand = command === '!ai' || (isGroupChat && repliedToJarvis);
 
-const botMentionNumbers = botIdentities
-    .filter(identity => String(identity).endsWith('@s.whatsapp.net'))
-    .map(jidLocalPart)
-    .filter(Boolean);
-const hasJarvisAlias = /@jarvis\b/i.test(body || '');
-const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
-const isAiCommand = command === '!ai' || isJarvisTagged;
-
-// Strip only the actual trigger/known bot identities from the AI prompt.
-let aiPromptText = String(body || '').replace(/^\s*!ai\b\s*/i, '').replace(/@jarvis\b/gi, '');
-for (const identity of botIdentities) {
-    const local = jidLocalPart(identity);
-    if (local) aiPromptText = aiPromptText.replace(new RegExp(`@?${local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'), '');
-}
-aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
-
+// Remove the command prefix only. A reply to Jarvis can have an empty body;
+// in that case the quoted message and group transcript provide the context.
+let aiPromptText = String(body || '').replace(/^\s*!ai\b\s*/i, '').trim();
 
 // ============================================================
 // 🧠 JARVIS LIVE QUIZ COMMAND SYSTEM
@@ -4145,10 +4146,7 @@ if (natural === "define") {
     // =========================
     // FILE / AI SYSTEM (FIXED IMAGE + DOC HANDLING)
     // =========================
-    if (
-        jid.endsWith('@g.us') &&
-        (text.startsWith("!ai") || text.includes("jarvis"))
-    ) {
+    if (jid.endsWith('@g.us') && isAiCommand) {
 
         const isDoc = !!m.message.documentMessage;
 
@@ -4674,11 +4672,23 @@ if (isAiCommand) {
         }
     }
 
-    const actualPrompt = prompt || "Analyze this image clearly.";
+    const recentGroupTranscript = (jarvisGroupConversation.get(jid) || [])
+        .slice(-JARVIS_GROUP_CONTEXT_LIMIT)
+        .map(item => `${item.sender}: ${item.text}`)
+        .join('\n');
+    const quotedText = aiContextInfo.quotedMessage?.conversation ||
+        aiContextInfo.quotedMessage?.extendedTextMessage?.text ||
+        aiContextInfo.quotedMessage?.imageMessage?.caption || '';
+    const actualPrompt = prompt || (quotedText
+        ? `Please respond to my reply in the context of this quoted message: ${quotedText}`
+        : (base64Image ? "Analyze this image clearly." : "Continue our conversation based on the recent group discussion."));
+    const contextualPrompt = isGroupChat
+        ? `You are participating in this WhatsApp group. Use the recent group conversation to understand references, follow-ups, and the current topic. Do not answer unrelated messages.\n\nRECENT GROUP CONVERSATION (oldest to newest):\n${recentGroupTranscript || '(No earlier group messages available.)'}\n\nMESSAGE THAT TRIGGERED YOU:\n${actualPrompt}`
+        : actualPrompt;
     const aiReply = await askAIWithMemory(
         jid,
         sender,
-        actualPrompt,
+        contextualPrompt,
         base64Image
     );
 
