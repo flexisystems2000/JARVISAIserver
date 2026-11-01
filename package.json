@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js"
+    "check": "node --check index.js && node --check rich-renderer.js"
   },
   "keywords": [
     "whatsapp",
@@ -29,6 +29,7 @@
     "@google/generative-ai": "^0.21.0",
     "@hapi/boom": "^10.0.1",
     "@musteqeem/baileys": "^1.0.7",
+    "@innovatorssoft/baileys": "7.4.9",
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

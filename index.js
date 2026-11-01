@@ -21,6 +21,7 @@ const naturalLanguageRouter =
     require('./naturalLanguageRouter');
 const grammarWatchdog = require('./grammarWatchdog');
 const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
+const { sendRichReply } = require('./rich-renderer');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -748,7 +749,13 @@ async function sendAIReply(jid, text, quotedMessage = null) {
             console.log('[TTS] Audio replies are enabled but there is no speakable text.');
         }
     }
-    return sendWithTyping(jid, { text: cleanText }, quotedMessage);
+    // Rich Markdown path is used only for text replies. TTS above remains untouched.
+    try {
+        return await sendRichReply(sock, jid, cleanText, quotedMessage);
+    } catch (richErr) {
+        console.warn('[RICH] Native rich reply failed; falling back to standard text:', richErr.message);
+        return sendWithTyping(jid, { text: cleanText }, quotedMessage);
+    }
 }
 
 if (MONGO_URI) {
