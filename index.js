@@ -308,6 +308,66 @@ async function downloadMagicHourVideo(videoUrl) {
     return buffer;
 }
 
+// Automatically deliver asynchronous video jobs when the provider finishes.
+// Each chat is monitored independently; a newer request supersedes an older one.
+const magicHourVideoMonitors = new Set();
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function monitorAndDeliverMagicHourVideo(sock, chatJid, projectId) {
+    const monitorKey = `${chatJid}:${projectId}`;
+    if (magicHourVideoMonitors.has(monitorKey)) return;
+    magicHourVideoMonitors.add(monitorKey);
+    try {
+        // Check for up to 30 minutes. Temporary network errors do not stop monitoring.
+        for (let attempt = 0; attempt < 120; attempt++) {
+            await sleep(15000);
+            if (latestMagicHourVideoByChat.get(chatJid) !== String(projectId)) return;
+            let statusData;
+            try {
+                statusData = await getMagicHourVideoStatus(projectId);
+            } catch (err) {
+                console.warn('Video status polling error:', getMagicHourError(err, 'Status request failed'));
+                continue;
+            }
+
+            const videoUrl = findMagicHourVideoUrl(statusData);
+            const state = String(findMagicHourValue(statusData, ['status', 'state', 'project_status']) || '').toLowerCase();
+            const failed = ['failed', 'error', 'cancelled', 'canceled'].some(value => state.includes(value));
+            const ready = ['ready', 'completed', 'complete', 'succeeded', 'success', 'finished', 'done'].some(value => state.includes(value));
+
+            if (videoUrl || ready) {
+                if (!videoUrl) {
+                    // Some provider responses mark completion before the output URL appears.
+                    continue;
+                }
+                try {
+                    const videoBuffer = await downloadMagicHourVideo(videoUrl);
+                    if (latestMagicHourVideoByChat.get(chatJid) !== String(projectId)) return;
+                    await sock.sendMessage(chatJid, {
+                        video: videoBuffer,
+                        mimetype: 'video/mp4',
+                        caption: '🎬 *Your video is ready!*'
+                    });
+                    return;
+                } catch (err) {
+                    console.error('Automatic video delivery failed:', err.message);
+                    await sock.sendMessage(chatJid, { text: `⚠️ Your video was generated, but I couldn't deliver it: ${err.message}` });
+                    return;
+                }
+            }
+            if (failed) {
+                await sock.sendMessage(chatJid, { text: '❌ *Your video generation failed.*' });
+                return;
+            }
+        }
+        if (latestMagicHourVideoByChat.get(chatJid) === String(projectId)) {
+            await sock.sendMessage(chatJid, { text: '⚠️ Your video is taking longer than expected. Use *!video status* to check its readiness.' });
+        }
+    } finally {
+        magicHourVideoMonitors.delete(monitorKey);
+    }
+}
+
 // ============================================================
 // YOUTUBE — use the NovaStack-backed YouTube routes exposed by the Piper service.
 // The existing PIPER_API_KEY authenticates Jarvis to the Python service.
@@ -1586,7 +1646,9 @@ if (
                 const videoBuffer = await downloadMagicHourVideo(videoUrl);
                 await sock.sendMessage(jid, { video: videoBuffer, mimetype: 'video/mp4', caption: '🎬 *Your video is ready!*' }, { quoted: m });
             } else if (projectId) {
-                await operationalReply('⏳ *Your video is processing.*\n\nUse *!video status* to check whether your latest video is ready.');
+                // Keep the command response short, then deliver the finished MP4 automatically.
+                void monitorAndDeliverMagicHourVideo(sock, jid, String(projectId));
+                await operationalReply('⏳ *Your video is processing.*\n\nI’ll send it here automatically when it is ready.');
             } else {
                 await operationalReply(`⚠️ Your video request was accepted, but Jarvis could not identify its request ID. Response:\n${JSON.stringify(result).slice(0, 2500)}`);
             }
