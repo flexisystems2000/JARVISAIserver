@@ -688,31 +688,95 @@ async function generateTTSAudio(speechText) {
 async function sendAIReply(jid, text, quotedMessage = null) {
     const cleanText = String(text || '').trim();
     const sendOptions = quotedMessage ? { quoted: quotedMessage } : undefined;
-    if (!cleanText) return sock.sendMessage(jid, { text: '⚠️ I received an empty reply.' }, sendOptions);
+
+    if (!cleanText) {
+        return sock.sendMessage(
+            jid,
+            { text: '⚠️ I received an empty reply.' },
+            sendOptions
+        );
+    }
 
     if (await getTTSMode(jid)) {
         const speechText = extractTTSPlainText(cleanText);
+
         if (speechText) {
             let deliveredFiles = 0;
+            let presenceTimer = null;
+            let recordingPresenceStarted = false;
+
             try {
-                const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
+                const provider = String(
+                    process.env.TTS_PROVIDER || 'piper'
+                ).trim().toLowerCase();
+
+                // WhatsApp's recording state is sent before Piper starts.
+                // Presence is best-effort: failure must never block the reply.
+                if (typeof sock.sendPresenceUpdate === 'function') {
+                    try {
+                        await sock.sendPresenceUpdate('recording', jid);
+                        recordingPresenceStarted = true;
+                        console.log(`[TTS] Recording presence started for ${jid}.`);
+
+                        // Refresh periodically because WhatsApp presence expires.
+                        presenceTimer = setInterval(async () => {
+                            try {
+                                await sock.sendPresenceUpdate('recording', jid);
+                            } catch (presenceErr) {
+                                console.warn(
+                                    `[TTS] Recording presence refresh failed for ${jid}:`,
+                                    presenceErr?.message || presenceErr
+                                );
+                            }
+                        }, 7000);
+
+                        // Do not keep Node alive solely for this refresh timer.
+                        presenceTimer.unref?.();
+                    } catch (presenceErr) {
+                        console.warn(
+                            `[TTS] Recording presence is unavailable for ${jid}:`,
+                            presenceErr?.message || presenceErr
+                        );
+                    }
+                } else {
+                    console.warn(
+                        '[TTS] This Baileys socket does not expose sendPresenceUpdate().'
+                    );
+                }
+
                 // Piper accepts up to 500 characters per request.
                 // Each OGG/Opus response is sent as a WhatsApp PTT voice note.
                 const chunks = splitTTSChunks(speechText, 500);
-                console.log(`[TTS] Starting ${provider} audio reply for ${jid}; ${chunks.length} file(s) planned.`);
+                console.log(
+                    `[TTS] Starting ${provider} audio reply for ${jid}; ${chunks.length} file(s) planned.`
+                );
 
                 for (let i = 0; i < chunks.length; i++) {
-                    console.log(`[TTS] Generating audio file ${i + 1}/${chunks.length} (${chunks[i].length} characters).`);
+                    console.log(
+                        `[TTS] Generating audio file ${i + 1}/${chunks.length} (${chunks[i].length} characters).`
+                    );
+
                     const audioResult = await generateTTSAudio(chunks[i]);
 
-                    if (!Buffer.isBuffer(audioResult?.buffer) || audioResult.buffer.length < 12) {
+                    if (
+                        !Buffer.isBuffer(audioResult?.buffer) ||
+                        audioResult.buffer.length < 12
+                    ) {
                         throw new Error(`Audio part ${i + 1} is empty or invalid.`);
                     }
-                    if (audioResult.mimeType !== 'audio/ogg; codecs=opus' || !audioResult.isOggOpus) {
-                        throw new Error(`Audio part ${i + 1} is not verified OGG/Opus audio.`);
+
+                    if (
+                        audioResult.mimeType !== 'audio/ogg; codecs=opus' ||
+                        !audioResult.isOggOpus
+                    ) {
+                        throw new Error(
+                            `Audio part ${i + 1} is not verified OGG/Opus audio.`
+                        );
                     }
 
-                    console.log(`[TTS] Piper returned ${audioResult.buffer.length} bytes for voice note ${i + 1}; sending as WhatsApp PTT audio.`);
+                    console.log(
+                        `[TTS] Piper returned ${audioResult.buffer.length} bytes for voice note ${i + 1}; sending as WhatsApp PTT audio.`
+                    );
 
                     const sent = await sock.sendMessage(jid, {
                         audio: audioResult.buffer,
@@ -721,44 +785,83 @@ async function sendAIReply(jid, text, quotedMessage = null) {
                     }, i === 0 ? sendOptions : undefined);
 
                     if (!sent?.key?.id) {
-                        throw new Error(`WhatsApp did not return a message ID for voice note ${i + 1}.`);
+                        throw new Error(
+                            `WhatsApp did not return a message ID for voice note ${i + 1}.`
+                        );
                     }
+
                     deliveredFiles++;
-                    console.log(`[TTS] WhatsApp accepted voice note ${i + 1}; message ID: ${sent.key.id}.`);
+                    console.log(
+                        `[TTS] WhatsApp accepted voice note ${i + 1}; message ID: ${sent.key.id}.`
+                    );
                 }
 
-                console.log(`[TTS] Audio reply completed successfully: ${deliveredFiles}/${chunks.length} file(s) delivered to ${jid}.`);
+                console.log(
+                    `[TTS] Audio reply completed successfully: ${deliveredFiles}/${chunks.length} file(s) delivered to ${jid}.`
+                );
                 return;
+
             } catch (err) {
-                console.error(`[TTS] Audio delivery failed for ${jid} after ${deliveredFiles} file(s):`, err?.stack || err?.message || err);
-                // Keep the existing reliable text fallback so a TTS problem never
-                // prevents Jarvis from answering the user.
+                console.error(
+                    `[TTS] Audio delivery failed for ${jid} after ${deliveredFiles} file(s):`,
+                    err?.stack || err?.message || err
+                );
+
+                // Preserve the existing text fallback so TTS problems never
+                // prevent Jarvis from answering the user.
                 try {
                     await sock.sendMessage(jid, {
                         text: deliveredFiles
-                            ? `⚠️ I sent ${deliveredFiles} audio file(s), but the remaining audio could not be delivered. Here is the complete reply in text:\n\n${cleanText}`
+                            ? `⚠️ I sent ${deliveredFiles} audio file(s), but the remaining audio could not be delivered. Here is the complete reply in text instead:\n\n${cleanText}`
                             : `⚠️ I couldn't deliver the audio file. Here is my reply in text instead:\n\n${cleanText}`
                     }, sendOptions);
                     return;
                 } catch (fallbackErr) {
-                    console.error(`[TTS] Text fallback also failed for ${jid}:`, fallbackErr?.stack || fallbackErr?.message || fallbackErr);
+                    console.error(
+                        `[TTS] Text fallback also failed for ${jid}:`,
+                        fallbackErr?.stack || fallbackErr?.message || fallbackErr
+                    );
                     throw fallbackErr;
+                }
+
+            } finally {
+                if (presenceTimer) clearInterval(presenceTimer);
+
+                // Always stop the recording indicator, including on TTS errors.
+                if (
+                    recordingPresenceStarted &&
+                    typeof sock.sendPresenceUpdate === 'function'
+                ) {
+                    try {
+                        await sock.sendPresenceUpdate('paused', jid);
+                        console.log(`[TTS] Recording presence stopped for ${jid}.`);
+                    } catch (presenceErr) {
+                        console.warn(
+                            `[TTS] Could not clear recording presence for ${jid}:`,
+                            presenceErr?.message || presenceErr
+                        );
+                    }
                 }
             }
         } else {
             console.log('[TTS] Audio replies are enabled but there is no speakable text.');
         }
     }
-    // Use the original native relay path for richResponseMessage. The
-    // composer-generated rich payload must be relayed with its generated ID.
+
+    // Preserve native richResponseMessage / botForwardedMessage relay.
     try {
         const sent = await sendRichReply(sock, jid, cleanText, quotedMessage);
         if (sent?.key?.id) {
-            console.log(`[RICH] Native rich reply relayed for ${jid}; message ID: ${sent.key.id}.`);
+            console.log(
+                `[RICH] Native rich reply relayed for ${jid}; message ID: ${sent.key.id}.`
+            );
         }
         return sent;
     } catch (richErr) {
-        console.warn(`[RICH] Native rich reply failed for ${jid}; using plain-text fallback:`, richErr?.stack || richErr?.message || richErr);
+        console.warn(
+            `[RICH] Native rich reply failed for ${jid}; using plain-text fallback:`,
+            richErr?.stack || richErr?.message || richErr
+        );
         return sendWithTyping(jid, { text: cleanText }, quotedMessage);
     }
 }
@@ -1837,7 +1940,7 @@ if (
         const enabled = await getTTSMode(jid);
         const provider = String(process.env.TTS_PROVIDER || 'piper').trim().toLowerCase();
         const endpoint = String(process.env.PIPER_TTS_URL || process.env.TTS_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com/tts').trim();
-        await sendWithTyping(jid, { text: `🎙️ *Audio reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nDelivery format: downloadable WAV audio file (not voice note)\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
+        await sendWithTyping(jid, { text: `🎙️ *Audio reply status:* ${enabled ? 'ON 🔊' : 'OFF 💬'}\nTTS provider: ${provider}\nDelivery format: OGG/Opus WhatsApp PTT voice note\nEndpoint: ${endpoint}\nPiper API key: ${process.env.PIPER_API_KEY ? 'configured' : 'MISSING'}\nPreference scope: this chat` }, m);
         return;
     }
     if (['!status', 'jarvis health', 'jarvis system status', 'check jarvis health', 'how healthy is jarvis'].includes(normalizedOperationalText)) {
