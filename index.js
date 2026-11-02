@@ -1267,7 +1267,10 @@ function installGlobalOutgoingRenderer(socket) {
         );
         // Voice notes / audio must stay clean — newsletter context breaks PTT playback.
         const isAudioOrPtt = Boolean(content.audio || content.ptt === true);
-        if (controlPayload || isAudioOrPtt || options?.skipFlexiBrand) {
+        // Rich composer payloads must retain their native botForwardedMessage
+        // and richResponseMessage structure without newsletter context injected.
+        const isNativeRichPayload = Boolean(content.botForwardedMessage || content.richResponseMessage);
+        if (controlPayload || isAudioOrPtt || isNativeRichPayload || options?.skipFlexiBrand) {
             return originalSendMessage(jid, content, options);
         }
         const branded = {

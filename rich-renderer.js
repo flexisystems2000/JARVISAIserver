@@ -65,9 +65,8 @@ function parseMarkdownBlocks(markdown) {
   return blocks;
 }
 
-// The upstream composer currently nests richResponseMessage inside
-// botForwardedMessage. Extract only the rich payload and relay it directly.
-// This deliberately avoids fabricating or forwarding a media wrapper.
+// Locate the native rich response for validation while preserving the
+// complete composer-generated botForwardedMessage wrapper for transmission.
 function findRichResponse(value, seen = new Set()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return null;
   seen.add(value);
@@ -98,8 +97,14 @@ async function sendRichReply(sock, jid, markdown, quotedMessage = null) {
     throw new Error('Composer did not produce a richResponseMessage payload.');
   }
 
-  // No botForwardedMessage wrapper: relay only the native rich response.
-  const message = { richResponseMessage: richPayload };
+  // Keep the complete message produced by the composer. In particular,
+  // preserve botForwardedMessage around richResponseMessage: WhatsApp's
+  // rich-response verification expects the original wrapper and its metadata.
+  // Do not extract and rebuild the inner richResponseMessage payload.
+  const message = generated.message;
+  if (!message || typeof message !== 'object') {
+    throw new Error('Rich composer did not return a complete message payload.');
+  }
   const messageId = generated.messageId;
   if (!messageId) throw new Error('Rich composer did not return a message ID.');
 
