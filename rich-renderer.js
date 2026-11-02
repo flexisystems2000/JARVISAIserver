@@ -65,6 +65,9 @@ function parseMarkdownBlocks(markdown) {
   return blocks;
 }
 
+// The upstream composer currently nests richResponseMessage inside
+// botForwardedMessage. Extract only the rich payload and relay it directly.
+// This deliberately avoids fabricating or forwarding a media wrapper.
 function findRichResponse(value, seen = new Set()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return null;
   seen.add(value);
@@ -79,12 +82,11 @@ function findRichResponse(value, seen = new Set()) {
 }
 
 async function sendRichReply(sock, jid, markdown, quotedMessage = null) {
-  if (!sock || typeof sock.sendMessage !== 'function') {
-    throw new Error('The connected Baileys socket does not expose sendMessage().');
+  if (!sock || typeof sock.relayMessage !== 'function') {
+    throw new Error('The connected Baileys socket does not expose relayMessage().');
   }
-
   const submessages = parseMarkdownBlocks(markdown);
-  if (!submessages.length) throw new Error('There is no rich-response content to send.');
+  if (!submessages.length) return null;
 
   const generated = generateRichMessageContent(
     submessages,
@@ -92,19 +94,22 @@ async function sendRichReply(sock, jid, markdown, quotedMessage = null) {
     { useMarkdown: true, botJid: sock.user?.id }
   );
   const richPayload = findRichResponse(generated?.message);
-  if (!richPayload) throw new Error('Composer did not produce a richResponseMessage payload.');
-
-  // Use Baileys sendMessage so the active @musteqeem/baileys socket performs
-  // message generation, encoding and relay. Do not manually relay a stripped
-  // proto object: that can resolve without WhatsApp displaying the response.
-  const content = { richResponseMessage: richPayload };
-  const options = quotedMessage ? { quoted: quotedMessage } : undefined;
-  const sent = await sock.sendMessage(jid, content, options);
-
-  if (!sent?.key?.id) {
-    throw new Error('Baileys did not return a message ID for the rich response.');
+  if (!richPayload) {
+    throw new Error('Composer did not produce a richResponseMessage payload.');
   }
-  return sent;
+
+  // No botForwardedMessage wrapper: relay only the native rich response.
+  const message = { richResponseMessage: richPayload };
+  const messageId = generated.messageId;
+  if (!messageId) throw new Error('Rich composer did not return a message ID.');
+
+  await sock.sendPresenceUpdate?.('composing', jid);
+  try {
+    const result = await sock.relayMessage(jid, message, { messageId });
+    return result || { key: { id: messageId } };
+  } finally {
+    try { await sock.sendPresenceUpdate?.('paused', jid); } catch (_) {}
+  }
 }
 
 module.exports = { parseMarkdownBlocks, sendRichReply, findRichResponse };

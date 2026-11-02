@@ -749,21 +749,17 @@ async function sendAIReply(jid, text, quotedMessage = null) {
             console.log('[TTS] Audio replies are enabled but there is no speakable text.');
         }
     }
-    // Send native richResponseMessage through the active @musteqeem/baileys
-    // socket's sendMessage pipeline. This avoids manually relaying a stripped
-    // proto payload, which can resolve without WhatsApp displaying it.
+    // Use the original native relay path for richResponseMessage. The
+    // composer-generated rich payload must be relayed with its generated ID.
     try {
         const sent = await sendRichReply(sock, jid, cleanText, quotedMessage);
-        console.log(`[RICH] WhatsApp accepted rich reply for ${jid}; message ID: ${sent.key.id}.`);
+        if (sent?.key?.id) {
+            console.log(`[RICH] Native rich reply relayed for ${jid}; message ID: ${sent.key.id}.`);
+        }
         return sent;
     } catch (richErr) {
-        console.error(`[RICH] Rich reply failed for ${jid}; sending plain-text fallback:`, richErr?.stack || richErr?.message || richErr);
-        const fallback = await sendWithTyping(jid, { text: cleanText }, quotedMessage);
-        if (!fallback?.key?.id) {
-            throw new Error('Rich reply and plain-text fallback both failed to return a WhatsApp message ID.');
-        }
-        console.log(`[AI] Plain-text fallback accepted for ${jid}; message ID: ${fallback.key.id}.`);
-        return fallback;
+        console.warn(`[RICH] Native rich reply failed for ${jid}; using plain-text fallback:`, richErr?.stack || richErr?.message || richErr);
+        return sendWithTyping(jid, { text: cleanText }, quotedMessage);
     }
 }
 
@@ -3110,7 +3106,19 @@ const hasBotJidMention = mentionedJids.some(mentioned =>
 // Keep the readable @Jarvis alias as an optional compatibility trigger.
 const hasJarvisAlias = /@jarvis\b/i.test(body || '');
 const isJarvisTagged = hasBotJidMention || hasJarvisAlias;
-const isAiCommand = command.toLowerCase() === '!ai' || isJarvisTagged;
+
+// A direct reply to one of JARVIS's own messages is also an AI trigger.
+// In group chats, participant is the author of the quoted message.
+// In a private chat, a quoted message in this conversation is necessarily
+// from the bot when the user is replying to a bot response.
+const quotedSender = aiContextInfo.participant || null;
+const isReplyToJarvis =
+    botIdentities.some(identity => sameBotIdentity(quotedSender, identity)) ||
+    (!jid.endsWith('@g.us') && !!aiContextInfo.quotedMessage);
+const isAiCommand =
+    command.toLowerCase() === '!ai' ||
+    isJarvisTagged ||
+    isReplyToJarvis;
 
 // Remove the !ai trigger and only bot identities that actually appear in the text.
 // The WhatsApp mention metadata—not a guessed phone number—is authoritative.
