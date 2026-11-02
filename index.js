@@ -749,14 +749,21 @@ async function sendAIReply(jid, text, quotedMessage = null) {
             console.log('[TTS] Audio replies are enabled but there is no speakable text.');
         }
     }
-    // Keep the native richResponseMessage, but send it without the
-    // botForwardedMessage wrapper that causes WhatsApp's forwarded-media
-    // security/download warning. TTS above intentionally remains unchanged.
+    // Send native richResponseMessage through the active @musteqeem/baileys
+    // socket's sendMessage pipeline. This avoids manually relaying a stripped
+    // proto payload, which can resolve without WhatsApp displaying it.
     try {
-        return await sendRichReply(sock, jid, cleanText, quotedMessage);
+        const sent = await sendRichReply(sock, jid, cleanText, quotedMessage);
+        console.log(`[RICH] WhatsApp accepted rich reply for ${jid}; message ID: ${sent.key.id}.`);
+        return sent;
     } catch (richErr) {
-        console.warn('[RICH] Unwrapped rich reply failed; using normal text:', richErr?.message || richErr);
-        return sendWithTyping(jid, { text: cleanText }, quotedMessage);
+        console.error(`[RICH] Rich reply failed for ${jid}; sending plain-text fallback:`, richErr?.stack || richErr?.message || richErr);
+        const fallback = await sendWithTyping(jid, { text: cleanText }, quotedMessage);
+        if (!fallback?.key?.id) {
+            throw new Error('Rich reply and plain-text fallback both failed to return a WhatsApp message ID.');
+        }
+        console.log(`[AI] Plain-text fallback accepted for ${jid}; message ID: ${fallback.key.id}.`);
+        return fallback;
     }
 }
 

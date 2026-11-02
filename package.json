@@ -7,22 +7,7 @@
     "start": "node index.js",
     "check": "node --check index.js && node --check rich-renderer.js"
   },
-  "keywords": [
-    "whatsapp",
-    "bot",
-    "baileys",
-    "jarvis",
-    "ai",
-    "grammar",
-    "education",
-    "gemini",
-    "render",
-    "mongodb",
-    "tts",
-    "translation",
-    "youtube",
-    "reminders"
-  ],
+  "keywords": ["whatsapp", "bot", "baileys", "jarvis", "ai", "grammar", "education", "gemini", "render", "mongodb", "tts", "translation", "youtube", "reminders"],
   "author": "Flexi edTech Digital Academy",
   "license": "ISC",
   "dependencies": {
@@ -39,7 +24,5 @@
     "qrcode-terminal": "^0.12.0",
     "youtubei.js": "^13.0.0"
   },
-  "engines": {
-    "node": ">=20"
-  }
+  "engines": { "node": ">=20" }
 }
