@@ -3576,7 +3576,7 @@ if (jid.endsWith('@g.us')) {
 
         // Always fetch fresh metadata if cache is older than 5 mins, 
         // OR force an immediate re-fetch if someone attempts an administrative action
-        const isTryingAdminAction = ["!kick", "!ban", "!unban", "!promote", "!mute", "!unmute", "!reset", "!add"].includes(command);
+        const isTryingAdminAction = ["!kick", "!ban", "!unban", "!promote", "!mute", "!unmute", "!reset", "!add", "!remove"].includes(command);
 
         if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000 || isTryingAdminAction) {
             metadata = await sock.groupMetadata(jid);
@@ -5069,61 +5069,95 @@ if (command === "!remove" && String(args[0] || "").toLowerCase() === "all") {
     }
 
     try {
-        const groupMetadata = metadata || await sock.groupMetadata(jid);
+        // Always fetch fresh metadata immediately before a destructive action.
+        const groupMetadata = await sock.groupMetadata(jid);
+        groupCache.set(jid, { ...groupMetadata, lastFetch: Date.now() });
         const participants = Array.isArray(groupMetadata?.participants)
             ? groupMetadata.participants
             : [];
-        const botJid = sock.user?.id || "";
-        const protectedMembers = participants.filter(p =>
-            p.admin === "admin" ||
-            p.admin === "superadmin" ||
-            areJidsSameUser(p.id || p.jid || "", botJid)
+
+        const botJid = sock.user?.id || sock.user?.jid || "";
+        const botParticipant = participants.find(p =>
+            areJidsSameUser(p.id || p.jid || p.phoneNumber || "", botJid)
         );
+        const botIsAdmin = Boolean(botParticipant?.admin);
+
+        // WhatsApp will reject every removal if the bot itself is not an admin.
+        if (!botIsAdmin) {
+            return sock.sendMessage(jid, {
+                text: "❌ I cannot remove members because JARVIS is not an admin in this group. Promote JARVIS to group admin, then try again."
+            }, { quoted: m });
+        }
+
         const removable = participants
-            .filter(p => !protectedMembers.includes(p))
-            .map(p => p.id || p.jid)
+            .filter(p => {
+                const participantJid = p.id || p.jid || p.phoneNumber || p.lid;
+                return participantJid &&
+                    !p.admin &&
+                    !areJidsSameUser(participantJid, botJid);
+            })
+            .map(p => p.id || p.jid || p.phoneNumber || p.lid)
             .filter(Boolean);
 
         if (!removable.length) {
             return sock.sendMessage(jid, {
-                text: "ℹ️ There are no non-admin members to remove. Group admins and JARVIS are protected."
+                text: "ℹ️ There are no removable non-admin members. Group admins and JARVIS are protected."
             }, { quoted: m });
         }
 
         let removed = 0;
         const failed = [];
-        // Small batches help avoid oversized participant-update requests.
-        for (let i = 0; i < removable.length; i += 5) {
-            const batch = removable.slice(i, i + 5);
+
+        // Remove individually: this is more compatible across Baileys forks and
+        // gives us an accurate result for each participant instead of one failed batch.
+        for (const participantJid of removable) {
             try {
-                const result = await sock.groupParticipantsUpdate(jid, batch, "remove");
-                for (let j = 0; j < batch.length; j++) {
-                    const status = result?.[j]?.status;
-                    if (!status || status === "200") removed++;
-                    else failed.push(batch[j]);
+                const response = await sock.groupParticipantsUpdate(
+                    jid,
+                    [participantJid],
+                    "remove"
+                );
+
+                const item = Array.isArray(response) ? response[0] : response;
+                const status = String(item?.status ?? item?.content?.attrs?.code ?? "");
+                const success = status === "200" || status === "201" ||
+                    item?.status === 200 || item?.status === 201;
+
+                if (success) {
+                    removed++;
+                } else {
+                    const reason = item?.content?.attrs?.reason ||
+                        item?.content?.attrs?.error ||
+                        item?.message ||
+                        (status ? `WhatsApp status ${status}` : "No success status returned");
+                    failed.push({ jid: participantJid, reason });
+                    console.log(`!remove all: failed for ${participantJid}: ${reason}; response=${JSON.stringify(response)}`);
                 }
-            } catch (batchError) {
-                console.log("!remove all batch error:", batchError.message);
-                failed.push(...batch);
+            } catch (removeError) {
+                failed.push({ jid: participantJid, reason: removeError.message || "Unknown WhatsApp error" });
+                console.log(`!remove all: error for ${participantJid}:`, removeError);
             }
+
+            // A short pause reduces the chance of triggering group-action rate limits.
+            await new Promise(resolve => setTimeout(resolve, 700));
         }
 
-        const mentions = failed;
-        let resultText = `✅ *REMOVE ALL COMPLETED*\n\nRemoved: *${removed}* member(s).`;
+        const mentions = failed.map(entry => entry.jid);
+        let resultText = `🧹 *REMOVE ALL FINISHED*\n\nRemoved: *${removed}* member(s).`;
         if (failed.length) {
             resultText += `\nFailed: *${failed.length}* member(s).`;
-            resultText += `\n\n${failed.map(id => `@${id.split("@")[0]}`).join(" ")}`;
+            resultText += `\n\n${failed.map(entry => `@${entry.jid.split("@")[0]} — ${entry.reason}`).join("\n")}`;
         }
-        resultText += "\n\n_Group admins and JARVIS were not removed._";
+        resultText += "\n\n_Group admins and JARVIS were protected._";
 
         return sock.sendMessage(jid, {
             text: resultText,
             ...(mentions.length ? { mentions } : {})
         }, { quoted: m });
     } catch (err) {
-        console.log("!remove all error:", err.message);
+        console.log("!remove all fatal error:", err);
         return sock.sendMessage(jid, {
-            text: "❌ I couldn't complete the remove-all operation. Confirm JARVIS is a group admin and try again."
+            text: `❌ I couldn't complete !remove all. ${err.message || "Check the Render logs and confirm JARVIS is a group admin."}`
         }, { quoted: m });
     }
 }
