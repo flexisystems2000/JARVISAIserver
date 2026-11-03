@@ -1399,12 +1399,45 @@ function buildFlexiNewsletterContext(content = {}) {
     };
 }
 
+// Track outgoing self-chat text so messages sent by JARVIS itself are not
+// mistaken for fresh user instructions when WhatsApp syncs them back to the bot.
+const jarvisOutgoingSelfChat = new Map();
+
+function getMessageTextForLoopGuard(content = {}) {
+    if (typeof content === 'string') return content.trim();
+    return String(
+        content.text ||
+        content.caption ||
+        content.conversation ||
+        content.extendedTextMessage?.text ||
+        content.imageMessage?.caption ||
+        content.videoMessage?.caption ||
+        content.documentMessage?.caption ||
+        ''
+    ).trim();
+}
+
+function getJidForLoopGuard(jid = '') {
+    return String(jid).replace(/:\d+/, '');
+}
+
 function installGlobalOutgoingRenderer(socket) {
     if (!socket || typeof socket.sendMessage !== 'function' || socket.__flexiRendererInstalled) return;
     const originalSendMessage = socket.sendMessage.bind(socket);
     // Allow callers (e.g. TTS / !ai voice notes) to opt out of newsletter branding.
     socket.sendMessageRaw = originalSendMessage;
     socket.sendMessage = async (jid, content, options) => {
+        // Register before sending because Baileys may emit the synced message
+        // before sendMessage() resolves.
+        const selfJid = socket.user?.id;
+        const outgoingText = getMessageTextForLoopGuard(content);
+        if (outgoingText && jid) {
+            // Track bot-originated messages in every chat, including groups.
+            // The upsert handler uses this to distinguish our own replies from
+            // messages manually sent by the operator from JARVIS's account.
+            const fingerprint = `${getJidForLoopGuard(jid)}|${outgoingText}`;
+            jarvisOutgoingSelfChat.set(fingerprint, Date.now() + 30000);
+        }
         if (!content || typeof content !== 'object' || Array.isArray(content)) {
             return originalSendMessage(jid, content, options);
         }
@@ -1619,9 +1652,24 @@ We wish you success ahead from *${groupName}* 🎓`,
         '!getgroupids'
     ]);
 
-    // Keep ignoring the bot's own ordinary messages. Only these owner utility
-    // commands may pass through when they are issued from self-chat.
-    if (m.key.fromMe && !ownerUtilityCommands.has(earlyCommand)) return;
+    // Allow messages manually sent from JARVIS's own number in GROUPS.
+    // Suppress only messages previously sent by this process (loop guard).
+    // In private self-chat, retain the same safe behavior.
+    if (m.key.fromMe) {
+        const outgoingText = getMessageTextForLoopGuard(m.message);
+        const fingerprint = `${getJidForLoopGuard(jid)}|${outgoingText}`;
+        const expiry = jarvisOutgoingSelfChat.get(fingerprint);
+        const now = Date.now();
+        for (const [key, expiresAt] of jarvisOutgoingSelfChat) {
+            if (expiresAt <= now) jarvisOutgoingSelfChat.delete(key);
+        }
+        if (expiry && expiry > now) {
+            jarvisOutgoingSelfChat.delete(fingerprint);
+            return;
+        }
+        // Don't run bot-originated private messages back through its own AI.
+        if (!jid?.endsWith('@g.us')) return;
+    }
 
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
@@ -2137,160 +2185,85 @@ console.log(
         "";
 
         const text = body.toLowerCase().trim();
-    const isOwner = String(sender || '').includes(OWNER_NUMBER) || (m.key.fromMe && ownerUtilityCommands.has(earlyCommand));
+    const isOwner = String(sender || '').includes(OWNER_NUMBER) || Boolean(m.key.fromMe);
      
   
     // ============================================================
-// 🗓️ PHASE 3 — DEPARTMENT TIMETABLE SYSTEM
-// ============================================================
-
-const departmentTimetables = {
-    science: {
-        name: "SCIENCE DEPARTMENT",
-        emoji: "🔬",
-        image: "https://i.postimg.cc/9f7K6kfy/IMG-20260920-004437-377.png"
-    },
-
-    commercial: {
-        name: "COMMERCIAL DEPARTMENT",
-        emoji: "💼",
-        image: "https://i.postimg.cc/rpr3BHp1/IMG-20260920-004448-295.png"
-    },
-
-    art: {
-        name: "ART DEPARTMENT",
-        emoji: "📖",
-        image: "https://i.postimg.cc/MGQNCLGb/IMG-20260920-004500-164.png"
-    }
+// 🗓️ PERSISTENT DEPARTMENT TIMETABLE LINKS
+// Configure with: !settimetable science <URL>
+//                 !settimetable commercial <URL>
+//                 !settimetable art <URL>
+// Links are stored in MongoDB and survive restarts.
+const timetableAliases = {
+    science: { name: 'SCIENCE DEPARTMENT', emoji: '🔬' },
+    commercial: { name: 'COMMERCIAL DEPARTMENT', emoji: '💼' },
+    art: { name: 'ART DEPARTMENT', emoji: '📖' }
 };
+const timetableKey = department => `timetable:${department}`;
 
-const timetableText = body.trim().toLowerCase();
-
-let selectedDepartment = null;
-
-// ============================================================
-// 🔬 SCIENCE
-// ============================================================
-if (
-    /\bscience\b/.test(timetableText) &&
-    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
-) {
-    selectedDepartment = departmentTimetables.science;
-}
-
-// ============================================================
-// 💼 COMMERCIAL
-// ============================================================
-else if (
-    /\b(commercial|commerce)\b/.test(timetableText) &&
-    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
-) {
-    selectedDepartment = departmentTimetables.commercial;
-}
-
-// ============================================================
-// 📖 ART
-// ============================================================
-else if (
-    /\b(art|arts)\b/.test(timetableText) &&
-    /\b(timetable|schedule|class|classes)\b/.test(timetableText)
-) {
-    selectedDepartment = departmentTimetables.art;
-}
-
-// ============================================================
-// 🗓️ GENERAL TIMETABLE REQUEST
-// ============================================================
-
-const isGeneralTimetableRequest = [
-    /^!timetable$/i,
-    /^timetable$/i,
-    /^show timetable$/i,
-    /^show me the timetable$/i,
-    /^send timetable$/i,
-    /^send me the timetable$/i,
-    /^what is the timetable\??$/i,
-    /^what's the timetable\??$/i,
-    /^what is the schedule\??$/i,
-    /^class timetable$/i
-].some(pattern => pattern.test(timetableText));
-
-if (isGeneralTimetableRequest && !selectedDepartment) {
-    await sendWithTyping(
-        jid,
-        {
-            text:
-`🗓️ *TUTORIAL TIMETABLE*
-
-Please specify your department:
-
-🔬 *Science Department*
-💼 *Commercial Department*
-📖 *Art Department*
-
-You can ask:
-
-• "Science timetable"
-• "Commercial timetable"
-• "Art timetable"
-
-🤖 *JARVIS AI*
-_Powered by ${POWERED_BY}_`
-        },
-        m
-    );
-
-    return;
-}
-
-// ============================================================
-// 📸 SEND DEPARTMENT TIMETABLE
-// ============================================================
-
-if (selectedDepartment) {
+if (earlyCommand === '!settimetable') {
+    if (!isOwner) {
+        return sock.sendMessage(jid, { text: '❌ Only the bot owner can update timetable links.' }, { quoted: m });
+    }
+    const timetableArgs = body.trim().split(/\s+/).slice(1);
+    const department = String(timetableArgs[0] || '').toLowerCase();
+    const link = String(timetableArgs[1] || '').trim();
+    if (!timetableAliases[department] || !/^https?:\/\//i.test(link)) {
+        return sock.sendMessage(jid, {
+            text: 'Usage: !settimetable science <link>\n!settimetable commercial <link>\n!settimetable art <link>'
+        }, { quoted: m });
+    }
     try {
-        const response = await axios.get(
-            selectedDepartment.image,
-            {
-                responseType: "arraybuffer"
-            }
+        await Config.findOneAndUpdate(
+            { keyName: timetableKey(department) },
+            { $set: { keyValue: link } },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
         );
-
-        await sendWithTyping(
-            jid,
-            {
-                image: Buffer.from(response.data),
-                caption:
-`🗓️ *${selectedDepartment.emoji} ${selectedDepartment.name}*
-
-📚 Here is your tutorial timetable.
-
-🤖 *JARVIS AI*
-_Powered by ${POWERED_BY}_`
-            },
-            m
-        );
-
-        return;
-
+        return sock.sendMessage(jid, {
+            text: `✅ ${timetableAliases[department].name} timetable link saved successfully.`
+        }, { quoted: m });
     } catch (err) {
-        console.log(
-            "❌ Timetable System Error:",
-            err.message
-        );
+        console.error('[TIMETABLE] Save failed:', err.message);
+        return sock.sendMessage(jid, { text: '❌ Could not save the timetable link. Check MongoDB connection.' }, { quoted: m });
+    }
+}
 
-        await sock.sendMessage(
-            jid,
-            {
-                text:
-`❌ Sorry, I couldn't load the *${selectedDepartment.name}* timetable right now.
-
-Please try again later.`
-            },
-            { quoted: m }
-        );
-
-        return;
+// Send a timetable ONLY when the message explicitly asks for one.
+const explicitTimetableRequest = /\b(timetable|schedule)\b/i.test(body) &&
+    (/\b(send|show|share|give|display|get|want|need|please)\b/i.test(body) ||
+     /\b(science|commercial|commerce|art|arts)\b/i.test(body) || /^!timetable\b/i.test(body.trim()));
+let requestedDepartment = null;
+if (explicitTimetableRequest) {
+    if (/\bscience\b/i.test(body)) requestedDepartment = 'science';
+    else if (/\b(commercial|commerce)\b/i.test(body)) requestedDepartment = 'commercial';
+    else if (/\b(art|arts)\b/i.test(body)) requestedDepartment = 'art';
+}
+const generalTimetableCommand = /^!timetable(?:\s+all)?$/i.test(body.trim()) ||
+    /^(show|send|get|share)( me)? (the )?(tutorial )?timetable$/i.test(body.trim());
+if (generalTimetableCommand && !requestedDepartment) {
+    return sock.sendMessage(jid, {
+        text: '🗓️ Which department timetable do you need?\n\n🔬 Science\n💼 Commercial\n📖 Art\n\nExample: !timetable science'
+    }, { quoted: m });
+}
+if (/^!timetable\s+(science|commercial|commerce|art|arts)$/i.test(body.trim())) {
+    const match = body.trim().match(/^!timetable\s+(science|commercial|commerce|art|arts)$/i);
+    requestedDepartment = /^science$/i.test(match[1]) ? 'science' : /^(commercial|commerce)$/i.test(match[1]) ? 'commercial' : 'art';
+}
+if (requestedDepartment) {
+    const departmentInfo = timetableAliases[requestedDepartment];
+    try {
+        const saved = await Config.findOne({ keyName: timetableKey(requestedDepartment) }).lean();
+        if (!saved?.keyValue) {
+            return sock.sendMessage(jid, {
+                text: `⚠️ No ${departmentInfo.name.toLowerCase()} timetable link has been configured yet.`
+            }, { quoted: m });
+        }
+        return sock.sendMessage(jid, {
+            text: `🗓️ *${departmentInfo.emoji} ${departmentInfo.name}*\n\n📚 Here is your tutorial timetable:\n${saved.keyValue}`
+        }, { quoted: m });
+    } catch (err) {
+        console.error('[TIMETABLE] Load failed:', err.message);
+        return sock.sendMessage(jid, { text: '❌ Could not load the timetable link right now.' }, { quoted: m });
     }
 }
 
@@ -4886,10 +4859,44 @@ Please try again later.`
 }       
 
     
+// =========================
+// PER-CHAT AI QUIET MODE
+// !quiet disables only !ai / @JARVIS AI replies. Other commands remain active.
+// !unquiet re-enables AI replies. State is persistent in MongoDB.
+// =========================
+if (command === '!quiet' || command === '!unquiet') {
+    if (!isStaff) {
+        return sock.sendMessage(jid, { text: '❌ Only group admins or the bot owner can change JARVIS AI quiet mode.' }, { quoted: m });
+    }
+    const quiet = command === '!quiet';
+    try {
+        await Config.findOneAndUpdate(
+            { keyName: `ai-quiet:${jid}` },
+            { $set: { keyValue: quiet ? 'true' : 'false' } },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+        return sock.sendMessage(jid, {
+            text: quiet
+                ? '🔕 JARVIS AI is now quiet. I will ignore !ai, @Jarvis mentions and replies to my messages. All other commands remain active. Use !unquiet to resume.'
+                : '🔔 JARVIS AI is active again. !ai and @Jarvis responses are enabled.'
+        }, { quoted: m });
+    } catch (err) {
+        console.error('[AI QUIET] Save failed:', err.message);
+        return sock.sendMessage(jid, { text: '❌ Could not update quiet mode. Check MongoDB connection.' }, { quoted: m });
+    }
+}
+
 // =======================
 // AI COMMAND (FIXED SAFE VERSION)
 // =======================
 if (isAiCommand) {
+    try {
+        const quietSetting = await Config.findOne({ keyName: `ai-quiet:${jid}` }).lean();
+        if (quietSetting?.keyValue === 'true') return;
+    } catch (err) {
+        console.error('[AI QUIET] Could not read setting:', err.message);
+    }
+
     // AI engagement is intentionally available to every group member.
     const prompt = aiPromptText;
     const quoted = aiContextInfo.quotedMessage;
