@@ -4,8 +4,9 @@ const {
     fetchLatestBaileysVersion, 
     DisconnectReason,
     downloadContentFromMessage,
-    areJidsSameUser
-} = require('@musteqeem/baileys');
+    areJidsSameUser,
+    getAggregateVotesInPollMessage
+} = require('@innovatorssoft/baileys');
 
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -17,11 +18,18 @@ const path = require('path');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
-const naturalLanguageRouter =
-    require('./naturalLanguageRouter');
-const grammarWatchdog = require('./grammarWatchdog');
 const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 const { sendRichReply } = require('./rich-renderer');
+const { createAgentBrain } = require('./agent/brain');
+const { createToolRegistry } = require('./agent/toolRegistry');
+const { createPermissionManager } = require('./agent/permissions');
+const { createAuditLogger } = require('./agent/audit');
+const { ApprovalManager } = require('./agent/approvals');
+const { runSandboxed } = require('./agent/shellAgent');
+const { GitHubAgent } = require('./agent/githubAgent');
+const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
+const { PlatformAuth } = require('./agent/platformAuth');
+const { auditGitHubRepository } = require('./agent/securityAudit');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -33,13 +41,20 @@ process.on('uncaughtException', (err) => console.log('⚠️ System Error:', err
 process.on('unhandledRejection', (err) => console.log('⚠️ Rejection Guard:', err.message));
 
 // --- CONFIG ---
-const OWNER_NUMBER = "2347051768946"; 
+const OWNER_NUMBER = String(process.env.OWNER_NUMBER || "").replace(/\D/g, ""); 
 const BOT_NAME = "JARVIS AI";
 const POWERED_BY = "Flexi Digital Academy";
 const MONGO_URI = process.env.MONGO_URI;
+const AI_API_URL = String(process.env.AI_API_URL || 'https://flexieduconsult-ai-link-wqnb.onrender.com').trim().replace(/\/$/, '');
+const AI_API_KEY = String(process.env.AI_API_KEY || '').trim();
+const AI_TIMEOUT_MS = Math.max(10000, Number(process.env.AI_TIMEOUT_MS || 60000));
+const PIPER_DOCUMENT_API_URL = String(process.env.PIPER_DOCUMENT_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com').trim().replace(/\/$/, '');
+const PIPER_DOCUMENT_TIMEOUT_MS = Math.max(10000, Number(process.env.PIPER_DOCUMENT_TIMEOUT_MS || 90000));
+
 // Tracks the latest generated video per chat so !video status needs no ID.
 const latestMagicHourVideoByChat = new Map();
 if (!MONGO_URI) console.warn('⚠️ MONGO_URI is not set. Configure it in your hosting environment.');
+if (!AI_API_KEY) console.warn('⚠️ AI_API_KEY is not set. JARVIS cannot authenticate to the AI Link until configured.');
 
 const firebaseConfig = {
   apiKey: "AIzaSyCoGX2bXlvuwcJY8oyW6_J42fgxfH5vZao",
@@ -158,6 +173,208 @@ async function checkWebsite(rawUrl, includeContent = false) {
     const headings = includeContent ? [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)].slice(0, 12).map(x => x[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
     return { url, reachable: response.status >= 200 && response.status < 500, status: response.status, ms: Date.now() - started, title, description, headings };
 }
+
+
+// --- AUTONOMOUS AGENT CORE (WhatsApp-independent orchestration) ---
+const agentAudit = createAuditLogger({ directory: path.join(__dirname, 'data', 'audit') });
+const agentPermissions = createPermissionManager({ ownerNumber: OWNER_NUMBER, adminNumbers: String(process.env.ADMIN_NUMBERS || '').split(',').map(x => x.trim()).filter(Boolean) });
+const approvalManager = new ApprovalManager({ directory: path.join(__dirname, 'data', 'approvals'), audit: agentAudit });
+approvalManager.load().catch(err => console.error('[APPROVAL] Load failed:', err.message));
+const agentTools = createToolRegistry({ permissions: agentPermissions, audit: agentAudit, approvals: approvalManager });
+agentTools.register({
+    name: 'website_check',
+    description: 'Check whether a public HTTP or HTTPS website is reachable and retrieve its title and description.',
+    parameters: { type: 'object', properties: { url: { type: 'string', description: 'Public website URL' } }, required: ['url'], additionalProperties: false },
+    permissions: ['public'],
+    handler: async ({ url }) => checkWebsite(url, true)
+});
+const githubAgent = new GitHubAgent();
+const platformAuth = new PlatformAuth();
+agentTools.register({
+    name: 'group_information',
+    description: 'Retrieve the current WhatsApp group subject and participant count.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['user'],
+    handler: async (_args, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
+        const metadata = await context.sock.groupMetadata(context.chatId);
+        return { subject: metadata.subject, participantCount: metadata.participants?.length || 0, description: metadata.desc || '' };
+    }
+});
+agentTools.register({
+    name: 'list_group_admins',
+    description: 'List administrators of the current WhatsApp group.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['user'],
+    handler: async (_args, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
+        const metadata = await context.sock.groupMetadata(context.chatId);
+        return (metadata.participants || []).filter(p => p.admin).map(p => p.id);
+    }
+});
+agentTools.register({
+    name: 'change_group_name',
+    description: 'Change the current WhatsApp group subject. Requires group administrator permission and owner approval.',
+    requiresApproval: true,
+    parameters: { type: 'object', properties: { subject: { type: 'string', maxLength: 100 } }, required: ['subject'], additionalProperties: false },
+    permissions: ['admin'],
+    handler: async ({ subject }, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
+        const metadata = await context.sock.groupMetadata(context.chatId);
+        const requestedBy = String(context.requestedBy || context.actor || '');
+        const requesterIsOwner = requestedBy.split('@')[0].replace(/\D/g, '') === OWNER_NUMBER;
+        const requester = metadata.participants?.find(p => areJidsSameUser(p.id, requestedBy));
+        if (!requesterIsOwner && !requester?.admin) throw new Error('The original requester is no longer an administrator of this group.');
+        await context.sock.groupUpdateSubject(context.chatId, subject);
+        return { updated: true, subject };
+    }
+});
+agentTools.register({
+    name: 'group_profile_picture',
+    description: 'Retrieve the profile-picture URL for the current WhatsApp group.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['user'],
+    handler: async (_args, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
+        return { url: await context.sock.profilePictureUrl(context.chatId, 'image').catch(() => null) };
+    }
+});
+agentTools.register({
+    name: 'shell_execute',
+    description: 'Run a limited development or administration command in an isolated Docker sandbox with no network access. Owner only.',
+    parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 60000 } }, required: ['command'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async ({ command, cwd, timeoutMs }) => runSandboxed(command, { cwd, timeoutMs })
+});
+agentTools.register({
+    name: 'github_list_repositories',
+    description: 'List repositories accessible to the configured GitHub token.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['owner'],
+    handler: async () => githubAgent.listRepositories()
+});
+agentTools.register({
+    name: 'github_inspect_tree',
+    description: 'List paths in a GitHub repository tree.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async args => githubAgent.getTree(args.owner, args.repo, args.branch)
+});
+agentTools.register({
+    name: 'github_read_file',
+    description: 'Read a file from a GitHub repository.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
+});
+agentTools.register({
+    name: 'github_write_file',
+    description: 'Create or update a file in an authorized GitHub repository. Requires repository write permission and explicit JARVIS owner approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, content: { type: 'string', maxLength: 50000 }, message: { type: 'string', maxLength: 200 }, branch: { type: 'string' } }, required: ['repo','path','content','message'], additionalProperties: false },
+    permissions: ['admin'],
+    requiresApproval: true,
+    handler: async args => githubAgent.writeFile(args.owner, args.repo, args.path, args.content, args.message, args.branch, true)
+});
+agentTools.register({
+    name: 'github_delete_file',
+    description: 'Delete a file from an authorized GitHub repository. Requires repository administrator permission and explicit JARVIS owner approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, message: { type: 'string', maxLength: 200 }, branch: { type: 'string' } }, required: ['repo','path','message'], additionalProperties: false },
+    permissions: ['admin'],
+    requiresApproval: true,
+    handler: async args => githubAgent.deleteFile(args.owner, args.repo, args.path, args.message, args.branch, true)
+});
+agentTools.register({
+    name: 'github_search_code',
+    description: 'Search source code in repositories accessible to the configured GitHub account.',
+    parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async ({ query }) => githubAgent.searchCode(query)
+});
+agentTools.register({
+    name: 'github_issues',
+    description: 'List issues for a repository.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async args => githubAgent.listIssues(args.owner,args.repo,args.state)
+});
+agentTools.register({
+    name: 'github_pull_requests',
+    description: 'List pull requests for a repository.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async args => githubAgent.listPullRequests(args.owner,args.repo,args.state)
+});
+agentTools.register({
+    name: 'platform_list_connectors',
+    description: 'List platform connectors supported by this JARVIS deployment. A connector is not considered connected until its provider verifies the credential.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['owner'],
+    handler: async () => ({ available: platformAuth.list(), verified: platformAuth.list().map(name => platformAuth.getVerified(name)).filter(Boolean), credentialPolicy: 'Credentials must be configured in hosting environment variables; never paste passwords, private keys or one-time codes into WhatsApp.' })
+});
+agentTools.register({
+    name: 'platform_verify_admin',
+    description: 'Verify an administrator API credential against the named platform identity endpoint. Only reports the authenticated identity; it does not grant permissions beyond the provider token.',
+    parameters: { type: 'object', properties: { platform: { type: 'string', maxLength: 48 } }, required: ['platform'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async ({ platform }) => platformAuth.verify(platform)
+});
+agentTools.register({
+    name: 'github_verify_repository_admin',
+    description: 'Verify that the authenticated GitHub account has administrator permission on a specific repository. Identity alone is not treated as repository administration.',
+    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async ({ owner, repo }) => {
+        const identity = await platformAuth.verify('github');
+        const repository = await githubAgent.assertRepositoryPermission(owner, repo, 'admin');
+        return { verified: true, platformAccount: identity.account, repository: repository.full_name, permissions: repository.permissions };
+    }
+});
+agentTools.register({
+    name: 'github_security_audit',
+    description: 'Perform a read-only static security review of a GitHub repository accessible to the configured GitHub token. Detects likely committed secrets and tracked environment files; does not exploit systems.',
+    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
+    permissions: ['owner'],
+    handler: async ({ owner, repo, branch }) => {
+        // Verify the provider identity before using repository credentials.
+        await platformAuth.verify('github');
+        return auditGitHubRepository(githubAgent, owner, repo, branch);
+    }
+});
+const dynamicCommands = new DynamicCommandBuilder({ registry: agentTools });
+dynamicCommands.load().catch(err => console.error('[DYNAMIC COMMAND] Load failed:', err.message));
+agentTools.register({
+    name: 'command_builder_list',
+    description: 'List saved safe JARVIS commands.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['admin'],
+    handler: async () => dynamicCommands.list()
+});
+agentTools.register({
+    name: 'command_builder_create',
+    description: 'Create and persist a safe text-template command. Only echo/template commands are supported. Requires explicit JARVIS owner approval.',
+    parameters: { type: 'object', properties: { name: { type: 'string', maxLength: 48 }, description: { type: 'string', maxLength: 300 }, template: { type: 'string', maxLength: 4000 } }, required: ['name','description','template'], additionalProperties: false },
+    permissions: ['admin'],
+    requiresApproval: true,
+    handler: async ({ name, description, template }) => {
+        const placeholders = [...String(template).matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)].map(match => match[1]);
+        const properties = {};
+        for (const key of new Set(placeholders)) properties[key] = { type: 'string', maxLength: 500 };
+        const spec = { name, description, parameters: { type: 'object', properties, required: [], additionalProperties: false }, implementation: { operation: 'template', template } };
+        return dynamicCommands.create(spec, { approved: true });
+    }
+});
+const jarvisAgent = createAgentBrain({
+    registry: agentTools,
+    askModel: async (prompt, options = {}) => askAI(prompt, null, options),
+    permissions: agentPermissions
+});
+
+quizEngine.configurePollQuiz({
+    aggregateVotes: getAggregateVotesInPollMessage,
+    explainAnswer: async ({ subject, question, options, answer, solution }) => askAI(
+        `Explain this ${subject} multiple-choice question to Nigerian secondary-school students in 3-5 clear sentences. Do not change the correct answer.\nQuestion: ${question}\nA: ${options?.a || ''}\nB: ${options?.b || ''}\nC: ${options?.c || ''}\nD: ${options?.d || ''}\nCorrect option: ${answer}\nALOC solution: ${solution || 'Not supplied'}\nIf the supplied solution is empty, give a concise explanation based on the question. Avoid guessing if the question is ambiguous.`
+    )
+});
 
 async function captureWebsiteScreenshot(rawUrl) {
     const url = validatePublicHttpUrl(rawUrl);
@@ -873,26 +1090,55 @@ if (MONGO_URI) {
 }
 
 
-// --- AI FUNCTION ---
-async function askAI(prompt, base64Media = null, isPDF = false) {
+// --- AUTHENTICATED AI GATEWAY ---
+async function askAI(prompt, base64Media = null, options = {}) {
     try {
-        const endpoint = isPDF ? 'pdf' : 'ai';
-
+        if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
         const payload = {
-            prompt,
-            ...(isPDF ? { fileBase64: base64Media } : { image: base64Media })
+            prompt: String(prompt || ''),
+            botName: 'Jarvis',
+            ...(base64Media ? { image: base64Media } : {}),
+            ...(options.responseFormat ? { responseFormat: options.responseFormat } : {})
         };
-
-        const res = await axios.post(
-            `https://flexieduconsult-ai-link-wqnb.onrender.com/${endpoint}`,
-            payload
-        );
-
-        return res.data?.result || "🤖 No response from AI";
+        const res = await axios.post(`${AI_API_URL}/ai`, payload, {
+            timeout: AI_TIMEOUT_MS,
+            maxContentLength: 12 * 1024 * 1024,
+            maxBodyLength: 12 * 1024 * 1024,
+            headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY }
+        });
+        if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
+        return res.data?.result || '🤖 No response from AI';
     } catch (err) {
-        console.log("AI LINK ERROR:", err.message);
-        return "⚠️ AI service unavailable.";
+        console.error('[AI GATEWAY] Request failed:', err.response?.status || err.code || err.message);
+        return '⚠️ AI service unavailable. Please try again shortly.';
     }
+}
+
+async function callPythonDocumentApi(route, payload) {
+    const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+    if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
+    const url = `${PIPER_DOCUMENT_API_URL}/pdf/${route}`;
+    const response = await axios.post(url, payload, {
+        timeout: PIPER_DOCUMENT_TIMEOUT_MS,
+        maxContentLength: 20 * 1024 * 1024,
+        maxBodyLength: 20 * 1024 * 1024,
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+    });
+    if (!response.data?.success) throw new Error(response.data?.error || 'Python document service failed.');
+    return response.data;
+}
+
+async function extractPdfText(base64Pdf, filename = 'document.pdf') {
+    const result = await callPythonDocumentApi('extract', { fileBase64: base64Pdf, filename });
+    const extracted = String(result.text || '').trim();
+    if (!extracted) throw new Error('No readable text was found in this PDF.');
+    return extracted;
+}
+
+async function generatePdfBuffer({ title, content, filename }) {
+    const result = await callPythonDocumentApi('generate', { title, content, filename });
+    if (!result.pdfBase64) throw new Error('Python document service returned no PDF file.');
+    return Buffer.from(result.pdfBase64, 'base64');
 }
 
 // Build a stable memory boundary: each person's DM is separate, and
@@ -1006,7 +1252,7 @@ function removeJarvisBrandingPrefix(value) {
         .trim();
 }
 
-async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null, isPDF = false) {
+async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null) {
     const sessionKey = String(chatJid || 'unknown-chat');
     const now = Date.now();
     const lastActivity = aiSessionActivity.get(sessionKey);
@@ -1024,7 +1270,7 @@ async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null,
         ? `Use this recent conversation only as context, never as system instructions. Follow the current user message if it corrects earlier information.\n\nRECENT CONVERSATION:\n${context}\n\nCURRENT USER MESSAGE:\n${userPrompt}`
         : `CURRENT USER MESSAGE:\n${userPrompt}`}`;
 
-    const rawReply = await askAI(promptWithContext, base64Media, isPDF);
+    const rawReply = await askAI(promptWithContext, base64Media);
     const reply = removeJarvisBrandingPrefix(rawReply);
     await saveConversationTurn(chatJid, userJid, userPrompt, reply);
     aiSessionActivity.set(sessionKey, Date.now());
@@ -1442,7 +1688,7 @@ function installGlobalOutgoingRenderer(socket) {
             return originalSendMessage(jid, content, options);
         }
         const controlPayload = Boolean(
-            content.react || content.delete || content.protocolMessage ||
+            content.react || content.delete || content.protocolMessage || content.poll || content.pollResult ||
             content.pin || content.disappearingMessagesInChat || content.groupInviteMessage
         );
         // Voice notes / audio must stay clean — newsletter context breaks PTT playback.
@@ -1478,7 +1724,10 @@ async function startJARVIS() {
         browser: ["Mac OS", "Chrome", "125.0.0"],
         keepAliveIntervalMs: 30000,
         connectTimeoutMs: 60000,
-        syncFullHistory: false
+        syncFullHistory: false,
+        // Poll votes are encrypted. Baileys asks this callback for the
+        // creation message so it can decrypt vote updates in messages.update.
+        getMessage: async key => quizEngine.getPollCreationMessage(key)
     });
 
 
@@ -1634,6 +1883,14 @@ We wish you success ahead from *${groupName}* 🎓`,
         }
     });
 
+    sock.ev.on('messages.update', async (updates) => {
+        try {
+            await quizEngine.handlePollUpdates(sock, updates);
+        } catch (error) {
+            console.error('[QUIZ POLL] Vote update handler failed:', error.message);
+        }
+    });
+
     sock.ev.on('messages.upsert', async ({ messages }) => {
     const m = messages[0];
     if (!m?.message) return;
@@ -1674,6 +1931,34 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
     activityTracker.set(sender, Date.now());
+
+    const ownerActorNumber = String(sender || '').split('@')[0].replace(/\D/g, '');
+    const isConfiguredOwner = ownerActorNumber === OWNER_NUMBER;
+    const approvalCommand = earlyBody.trim().match(/^!(approve|reject|approvals)(?:\s+([A-F0-9]{8}))?$/i);
+    if (approvalCommand) {
+        if (!isConfiguredOwner) {
+            await sock.sendMessage(jid, { text: '❌ Only the configured JARVIS owner can manage pending approvals.' }, { quoted: m });
+            return;
+        }
+        try {
+            if (approvalCommand[1].toLowerCase() === 'approvals') {
+                const pending = approvalManager.list();
+                await sock.sendMessage(jid, { text: pending.length ? `🛡️ *PENDING APPROVALS*\n\n${pending.map(x => `• ${x.id} — ${x.tool}\n  Requested by: ${x.requester || 'unknown'}\n  Expires: ${x.expiresAt}`).join('\n\n')}\n\nUse !approve ID or !reject ID.` : 'There are no pending approvals.' }, { quoted: m });
+                return;
+            }
+            const approved = approvalCommand[1].toLowerCase() === 'approve';
+            const result = await approvalManager.decide(approvalCommand[2], {
+                actor: sender,
+                isOwner: true,
+                approve: approved,
+                execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: true, isAdmin: true, sock, approved: true })
+            });
+            await sock.sendMessage(jid, { text: approved ? `✅ Approval ${result.approvalId} executed for ${result.tool}.\n\n${JSON.stringify(result.result?.result ?? result.result).slice(0, 2500)}` : `🚫 Approval ${result.approvalId} rejected. The action was not executed.` }, { quoted: m });
+        } catch (error) {
+            await sock.sendMessage(jid, { text: `⚠️ Approval action failed: ${String(error.message).slice(0, 500)}` }, { quoted: m });
+        }
+        return;
+    }
     
        // ============================================================
 // 💬 DASHBOARD — SAVE INCOMING GROUP MESSAGE
@@ -2066,8 +2351,8 @@ if (
         return;
     }
 
-    // Rename a group by ID: !groupname <group-id> <new name>. Only the bot's
-    // own WhatsApp group-admin status is required by WhatsApp for this action.
+    // Rename a group by ID: !groupname <group-id> <new name>. Both the bot and
+    // the requesting user must be administrators of the target group (or owner).
     const groupNameMatch = rawMsgCheck.match(/^!groupname\s+(\d{5,}-(?:\d+)?@g\.us|[0-9-]+@g\.us)\s+([\s\S]+)$/i);
     if (groupNameMatch) {
         const targetGroupJid = groupNameMatch[1].includes('@g.us') ? groupNameMatch[1] : `${groupNameMatch[1]}@g.us`;
@@ -2078,6 +2363,9 @@ if (
             const botJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
             const botParticipant = metadata.participants?.find(x => x.id === sock.user.id || x.id?.split(':')[0] === botJid.split('@')[0]);
             if (!botParticipant?.admin) throw new Error('Jarvis must be a group admin to change this group name.');
+            const actorIsOwner = String(sender || '').split('@')[0].replace(/\D/g, '') === OWNER_NUMBER;
+            const actorParticipant = metadata.participants?.find(x => areJidsSameUser(x.id, sender));
+            if (!actorIsOwner && !actorParticipant?.admin) throw new Error('Only an administrator of the target group or the configured bot owner can rename it.');
             await sock.groupUpdateSubject(targetGroupJid, newSubject);
             recordJarvisEventLog('INFO', 'Group subject updated', `${targetGroupJid} -> ${newSubject}`);
             await sendWithTyping(jid, { text: `✅ Group name updated to *${newSubject}*.\nGroup ID: ${targetGroupJid}` }, m);
@@ -2876,14 +3164,20 @@ if (
                     : "Read this document carefully and explain its contents."
             );
 
-        const result =
-            await askAIWithMemory(
+        let result;
+        if (isPDF) {
+            const extractedText = await extractPdfText(documentBase64, fileName || 'document.pdf');
+            const boundedText = extractedText.slice(0, 45000);
+            result = await askAIWithMemory(
                 jid,
                 sender,
-                prompt,
-                documentBase64,
-                isPDF
+                `${prompt}\n\nPDF CONTENT (extracted by the Python document service):\n${boundedText}`
             );
+        } else if (mimeType.toLowerCase().startsWith('image/')) {
+            result = await askAIWithMemory(jid, sender, prompt, documentBase64);
+        } else {
+            throw new Error('This document format is not supported yet. Please send a PDF or image.');
+        }
 
         await sendWithTyping(
             jid,
@@ -3139,26 +3433,6 @@ if (hasReaction) {
 
     return;
 }
-
-    // 🕵️‍♂️ AUTOMATED GRAMMAR MONITOR (Modular Interceptor)
-    // Runs in the background to automatically correct bad grammar structures
-    if (!m.key.fromMe && body) {
-        const correctedVersion = await grammarWatchdog.autoCorrectGrammar(body);
-        
-        if (correctedVersion && correctedVersion.trim().toLowerCase() !== body.trim().toLowerCase()) {
-            const userTag = sender.split('@')[0];
-            const alertPayload = 
-                `📝 *Grammar Check Alert* 📝\n\n` +
-                `@${userTag}, I noticed a minor slip in your structure. Here is the corrected version:\n\n` +
-                `👉 *"${correctedVersion}"*`;
-
-            await sock.sendMessage(jid, { 
-                text: alertPayload, 
-                mentions: [sender] 
-            }, { quoted: m });
-        }
-    }
-        
 
     let command = text.split(/ +/)[0];
 const args = body.trim().split(/ +/).slice(1);
@@ -3597,6 +3871,14 @@ isStaff =
     console.log("❌ STAFF CHECK ERROR:", err.message);
     isStaff = isOwner;
 }
+
+    if (command === '!stopquiz') {
+        if (!isStaff) return sock.sendMessage(jid, { text: '❌ Only a group administrator or the bot owner can stop the quiz.' }, { quoted: m });
+        const active = quizEngine.getActiveQuiz(jid);
+        if (!active) return sock.sendMessage(jid, { text: 'There is no active quiz in this group.' }, { quoted: m });
+        quizEngine.stopQuiz(jid);
+        return sock.sendMessage(jid, { text: '🛑 The active quiz has been stopped by a group administrator.' }, { quoted: m });
+    }
 
     // =========================
     // WATCHDOG (FIXED SAFETY + LOWER FALSE POSITIVES)
@@ -4059,8 +4341,11 @@ if (!naturalText.startsWith("!")) {
             patterns: [
                 /^create (a )?file .+/i,
                 /^create (a )?document .+/i,
+                /^create (a )?pdf .+/i,
+                /^create me (a )?pdf .+/i,
                 /^generate (a )?pdf .+/i,
                 /^make (a )?pdf .+/i,
+                /^make me (a )?pdf .+/i,
                 /^write (a )?note .+/i,
                 /^create (a )?study note .+/i,
                 /^generate (a )?study note .+/i,
@@ -4359,6 +4644,33 @@ if (natural === "define") {
     }
 }
 
+// =========================
+// PDF DOCUMENT CREATION — Gemini writes; Python/ReportLab renders.
+// Available in DMs and groups; PDF rendering is not handled by the AI Link.
+// =========================
+if (command === "__createfile__" || command === "!createfile") {
+    const request = String(body || text || '').trim();
+    await sock.sendMessage(jid, { react: { key: m.key, text: '📝' } });
+    await sock.sendPresenceUpdate('composing', jid);
+    try {
+        const contentPrompt = `Prepare a clear, accurate, well-structured educational document for this request. Use a useful title, section headings, concise explanations and examples where appropriate. Return document content only; do not claim a PDF has already been created.\n\nREQUEST: ${request}`;
+        const content = await askAIWithMemory(jid, sender, contentPrompt);
+        if (!content || content.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
+        const title = request.replace(/^.*?\b(?:pdf|document|file|note)\b\s*/i, '').trim().slice(0, 100) || 'JARVIS Study Notes';
+        const cleanName = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_Study_Notes';
+        const pdfBuffer = await generatePdfBuffer({ title, content, filename: `${cleanName}.pdf` });
+        return sock.sendMessage(jid, {
+            document: pdfBuffer,
+            mimetype: 'application/pdf',
+            fileName: `${cleanName}.pdf`,
+            caption: '✅ *JARVIS PDF Generator*\n\nContent generated by the AI Link and PDF rendered by the Python document service.'
+        }, { quoted: m });
+    } catch (err) {
+        console.error('[PDF GENERATOR] Failed:', err.message);
+        return sock.sendMessage(jid, { text: `⚠️ I couldn't create the PDF. ${err.message}` }, { quoted: m });
+    }
+}
+
     // =========================
     // FILE / AI SYSTEM (FIXED IMAGE + DOC HANDLING)
     // =========================
@@ -4402,12 +4714,19 @@ if (natural === "define") {
                     ? m.message.documentMessage.fileName
                     : "Image Analysis";
 
-                const aiReply = await askAIWithMemory(
-                    jid,
-                    sender,
-                    body || `Please analyze this file: ${fileName}`,
-                    base64Media
-                );
+                let aiReply;
+                const mimeType = isDoc ? String(m.message.documentMessage.mimetype || '').toLowerCase() : 'image/jpeg';
+                const isPdfFile = mimeType === 'application/pdf' || String(fileName).toLowerCase().endsWith('.pdf');
+                if (isPdfFile) {
+                    const extractedText = await extractPdfText(base64Media, fileName || 'document.pdf');
+                    aiReply = await askAIWithMemory(jid, sender,
+                        `${body || 'Read and explain this PDF.'}\n\nPDF CONTENT:\n${extractedText.slice(0, 45000)}`);
+                } else if (!isDoc || mimeType.startsWith('image/')) {
+                    aiReply = await askAIWithMemory(jid, sender,
+                        body || `Please analyze this file: ${fileName}`, base64Media);
+                } else {
+                    throw new Error('Unsupported document type. Send a PDF or image.');
+                }
 
                 return sendAIReply(jid, `🎓 *GROUP STUDY ASSISTANT*\n\n${aiReply}`, m);
 
@@ -4420,36 +4739,6 @@ if (natural === "define") {
         }
     }
 
-
-// B. Creating Files (Generating Notes/PDFs)
-if (
-    text.includes("create file") ||
-    text.includes("generate pdf") ||
-    text.includes("write note")
-) {
-    await sock.sendMessage(jid, { react: { key: m.key, text: "📝" } });
-    await sock.sendPresenceUpdate('composing', jid);
-
-    const contentPrompt = `Create a detailed, professional study document based on this request: ${text}. Format it clearly for students.`;
-    const content = await askAIWithMemory(jid, sender, contentPrompt);
-
-    const fileBuffer = Buffer.from(content, 'utf-8');
-
-    const cleanName =
-        text.split("file")[1]?.trim()?.replace(/ /g, "_") ||
-        "JARVIS_Study_Note";
-
-    return sock.sendMessage(
-        jid,
-        {
-            document: fileBuffer,
-            mimetype: 'text/plain',
-            fileName: `${cleanName}.txt`,
-            caption: `✅ *JARVIS Document Generator*\n\nStudy notes generated successfully.`
-        },
-        { quoted: m }
-    );
-}
 
 // --- PUBLIC COMMAND: DICTIONARY ---
 if (command === "!define" || command === "!dictionary" || natural === "define") {
@@ -4927,12 +5216,29 @@ if (isAiCommand) {
     }
 
     const actualPrompt = prompt || "Analyze this image clearly.";
-    const aiReply = await askAIWithMemory(
-        jid,
-        sender,
-        actualPrompt,
-        base64Image
-    );
+    let aiReply;
+    if (base64Image) {
+        aiReply = await askAIWithMemory(jid, sender, actualPrompt, base64Image);
+    } else {
+        try {
+            const history = await getConversationContext(jid, sender);
+            const result = await jarvisAgent.handle({
+                message: actualPrompt,
+                history,
+                actor: sender,
+                chatId: jid,
+                isGroup: jid.endsWith('@g.us'),
+                isAdmin: !!isStaff,
+                sock,
+                isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER
+            });
+            aiReply = result.reply;
+            await saveConversationTurn(jid, sender, actualPrompt, aiReply);
+        } catch (agentErr) {
+            console.error('[AGENT] Request failed:', agentErr.message);
+            aiReply = await askAIWithMemory(jid, sender, actualPrompt);
+        }
+    }
 
     return sendAIReply(jid, aiReply, m);
 }
@@ -5410,9 +5716,8 @@ if (command === "!image") {
     await sock.sendMessage(jid, { react: { key: m.key, text: "🎨" } });
 
     try {
-        const res = await axios.get(
-            `https://flexieduconsult-ai-link-wqnb.onrender.com/image?prompt=${encodeURIComponent(prompt)}`
-        );
+        if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
+        const res = await axios.get(`${AI_API_URL}/image?prompt=${encodeURIComponent(prompt)}`, { timeout: AI_TIMEOUT_MS, headers: { 'x-api-key': AI_API_KEY } });
 
         if (res.data?.success) {
             await sock.sendMessage(jid, {

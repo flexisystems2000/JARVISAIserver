@@ -1,19 +1,37 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "2.5.0",
-  "description": "JARVIS AI powered by Flexi edTech Digital Academy (Webshot API screenshots; no local Chromium required)",
+  "version": "3.0.0",
+  "description": "JARVIS AI WhatsApp agent with AI-first intent routing, approval-gated tools, poll quizzes, PDF tools and Piper TTS",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check rich-renderer.js"
+    "check": "node --check index.js && node --check quizEngine.js && node --check paymentHandler.js && node --check rich-renderer.js && for f in agent/*.js test/*.js; do node --check \"$f\" || exit 1; done",
+    "test": "node --test"
   },
-  "keywords": ["whatsapp", "bot", "baileys", "jarvis", "ai", "grammar", "education", "gemini", "render", "mongodb", "tts", "translation", "youtube", "reminders"],
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "jarvis",
+    "ai",
+    "education",
+    "gemini",
+    "render",
+    "mongodb",
+    "tts",
+    "translation",
+    "youtube",
+    "reminders",
+    "agent",
+    "tool-registry",
+    "github",
+    "sandbox"
+  ],
   "author": "Flexi edTech Digital Academy",
   "license": "ISC",
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
     "@hapi/boom": "^10.0.1",
-    "@musteqeem/baileys": "^1.0.7",
     "@innovatorssoft/baileys": "7.4.9",
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
@@ -24,5 +42,7 @@
     "qrcode-terminal": "^0.12.0",
     "youtubei.js": "^13.0.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
