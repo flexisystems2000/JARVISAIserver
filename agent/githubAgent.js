@@ -2,7 +2,7 @@
 const axios = require('axios');
 class GitHubAgent {
   constructor({ token = process.env.GITHUB_TOKEN, owner = process.env.GITHUB_OWNER } = {}) {
-    this.token=token; this.owner=owner;
+    this.token=token; this.owner=owner; this.createdRepositories = new Set();
   }
   client() {
     if(!this.token) throw new Error('GITHUB_TOKEN is not configured');
@@ -10,7 +10,7 @@ class GitHubAgent {
   }
   repo(owner,repo) { const resolvedOwner=owner||this.owner; for (const [label,value] of [['owner',resolvedOwner],['repo',repo]]) if (typeof value!=='string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(value)) throw new Error(`Invalid GitHub ${label} name`); return {owner:resolvedOwner,repo}; }
   safePath(filePath) { if (typeof filePath!=='string' || !filePath || filePath.startsWith('/') || filePath.includes('\\') || filePath.split('/').some(part => !part || part==='.' || part==='..') || /[?#]/.test(filePath)) throw new Error('Invalid GitHub repository file path'); return filePath.split('/').map(encodeURIComponent).join('/'); }
-  assertAllowedRepository(owner,repo) { const fullName=`${owner || this.owner || ''}/${repo || ''}`.toLowerCase(); const configured=String(process.env.GITHUB_ALLOWED_REPOS || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); if(configured.length && !configured.includes(fullName)) throw new Error(`Repository ${fullName} is outside GITHUB_ALLOWED_REPOS.`); }
+  assertAllowedRepository(owner,repo) { const fullName=`${owner || this.owner || ''}/${repo || ''}`.toLowerCase(); const configured=String(process.env.GITHUB_ALLOWED_REPOS || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); if(configured.length && !configured.includes(fullName) && !this.createdRepositories.has(fullName)) throw new Error(`Repository ${fullName} is outside GITHUB_ALLOWED_REPOS.`); }
   async listRepositories() { const r=await this.client().get('/user/repos',{params:{per_page:100,sort:'updated'}}); return r.data.map(x=>({full_name:x.full_name,private:x.private,default_branch:x.default_branch,html_url:x.html_url})); }
   async getRepository(owner,repo) { const p=this.repo(owner,repo); this.assertAllowedRepository(p.owner,p.repo); return (await this.client().get(`/repos/${p.owner}/${p.repo}`)).data; }
   async assertRepositoryPermission(owner,repo,required='push') { const info=await this.getRepository(owner,repo); const granted=info.permissions || {}; if (required==='admin' ? granted.admin !== true : !(granted.push === true || granted.admin === true)) throw new Error(`The configured GitHub account (${info.full_name}) does not have ${required} permission on this repository.`); return info; }
@@ -20,7 +20,40 @@ class GitHubAgent {
   async createBranch(owner,repo,branch,from) { const c=this.client(),p=this.repo(owner,repo); const base=await c.get(`/repos/${p.owner}/${p.repo}/git/ref/heads/${encodeURIComponent(from||'main')}`); return (await c.post(`/repos/${p.owner}/${p.repo}/git/refs`,{ref:`refs/heads/${branch}`,sha:base.data.object.sha})).data; }
   async writeFile(owner,repo,filePath,content,message,branch,approved=false) { if(!approved) throw new Error('Approval required before writing repository files'); await this.assertRepositoryPermission(owner,repo,'push'); const c=this.client(),p=this.repo(owner,repo),safePath=this.safePath(filePath); let sha; try{sha=(await c.get(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{params:branch?{ref:branch}:undefined})).data.sha;}catch(e){if(e.response?.status!==404)throw e;} return (await c.put(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{message,content:Buffer.from(String(content)).toString('base64'),branch,...(sha?{sha}:{})})).data; }
   async deleteFile(owner,repo,filePath,message,branch,approved=false) { if(!approved) throw new Error('Explicit approval required before deleting repository files'); await this.assertRepositoryPermission(owner,repo,'admin'); const c=this.client(),p=this.repo(owner,repo),safePath=this.safePath(filePath); const item=(await c.get(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{params:branch?{ref:branch}:undefined})).data; return (await c.delete(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{data:{message,sha:item.sha,branch}})).data; }
-  async listIssues(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/issues`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,pull_request:!!x.pull_request})); }
+
+  async createRepository(name, description = '', isPrivate = false) {
+    if (!/^[A-Za-z0-9_.-]{1,100}$/.test(String(name || ''))) throw new Error('Invalid GitHub repository name');
+    const response = await this.client().post('/user/repos', {
+      name, description: String(description || '').slice(0, 350),
+      private: Boolean(isPrivate), auto_init: true
+    });
+    this.createdRepositories.add(String(response.data.full_name).toLowerCase());
+    return { full_name: response.data.full_name, owner: response.data.owner.login,
+      name: response.data.name, default_branch: response.data.default_branch,
+      html_url: response.data.html_url, private: response.data.private };
+  }
+  async enableGitHubPages(owner, repo, branch = 'main') {
+    const p = this.repo(owner, repo); this.assertAllowedRepository(p.owner, p.repo);
+    const client = this.client();
+    try {
+      const response = await client.post(`/repos/${p.owner}/${p.repo}/pages`, {
+        source: { branch, path: '/' }
+      });
+      return { enabled: true, url: response.data.html_url, status: response.data.status || 'building' };
+    } catch (error) {
+      if (error.response?.status === 409 || error.response?.status === 422) {
+        const current = await client.get(`/repos/${p.owner}/${p.repo}/pages`);
+        return { enabled: true, url: current.data.html_url, status: current.data.status || 'building', alreadyEnabled: true };
+      }
+      throw error;
+    }
+  }
+  async getPagesStatus(owner, repo) {
+    const p = this.repo(owner, repo); this.assertAllowedRepository(p.owner, p.repo);
+    const response = await this.client().get(`/repos/${p.owner}/${p.repo}/pages`);
+    return { url: response.data.html_url, status: response.data.status, build_type: response.data.build_type };
+  }
+    async listIssues(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/issues`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,pull_request:!!x.pull_request})); }
   async listPullRequests(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/pulls`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,head:x.head.ref,base:x.base.ref})); }
   async createPullRequest(owner,repo,title,head,base,body='') { const p=this.repo(owner,repo); return (await this.client().post(`/repos/${p.owner}/${p.repo}/pulls`,{title,head,base,body})).data; }
 }
