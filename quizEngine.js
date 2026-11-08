@@ -1,16 +1,10 @@
 const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
 
 const ALOC_URL =
     "https://questions.aloc.com.ng/api/v2/q";
 
 const QUIZ_DURATION_MS =
     30 * 60 * 1000;
-
-const SCORE_FILE =
-    path.join(__dirname, "scores.json");
-
 
 // =====================================================
 // ALOC SUBJECT MASTER MAP
@@ -176,78 +170,137 @@ const SUBJECTS = {
 // =====================================================
 
 const activeQuizzes = new Map();
+const POLL_DURATION_MS = 30 * 1000;
+let pollVoteAggregator = null;
+let explainQuizAnswer = null;
 
-
-// =====================================================
-// LOAD SAVED SCORES
-// =====================================================
-
-let scores = {};
-
-try {
-
-    if (fs.existsSync(SCORE_FILE)) {
-
-        const raw =
-            fs.readFileSync(
-                SCORE_FILE,
-                "utf8"
-            );
-
-        scores =
-            raw.trim()
-                ? JSON.parse(raw)
-                : {};
-    }
-
-} catch (err) {
-
-    console.log(
-        "⚠️ Quiz score file error:",
-        err.message
-    );
-
-    scores = {};
+function configurePollQuiz({ aggregateVotes, explainAnswer } = {}) {
+    pollVoteAggregator = typeof aggregateVotes === 'function' ? aggregateVotes : null;
+    explainQuizAnswer = typeof explainAnswer === 'function' ? explainAnswer : null;
 }
 
+function optionLabel(letter, value) {
+    return `${letter}. ${cleanHTML(value || 'N/A')}`.slice(0, 180);
+}
 
-// =====================================================
-// SAVE SCORES
-// =====================================================
+async function sendPollQuestion(sock, groupJid, quiz, prefix = '') {
+    const options = ['a', 'b', 'c', 'd'];
+    const values = options.map((key, index) => optionLabel(String.fromCharCode(65 + index), quiz.option?.[key]));
+    const prompt = `${prefix}${String(quiz.subject).toUpperCase()} — ${cleanHTML(quiz.question)}`.slice(0, 250);
+    const sent = await sock.sendMessage(groupJid, {
+        poll: { name: prompt, values, selectableCount: 1 }
+    });
+    quiz.pollMessage = sent?.message || null;
+    quiz.pollMessageKey = sent?.key || null;
+    quiz.pollUpdates = [];
+    quiz.pollStartedAt = Date.now();
+    quiz.pollClosed = false;
+    quiz.pollTimer = setTimeout(() => closePollQuestion(sock, groupJid), POLL_DURATION_MS);
+    if (typeof quiz.pollTimer.unref === 'function') quiz.pollTimer.unref();
+    activeQuizzes.set(groupJid, quiz);
+    return sent;
+}
 
-async function saveScores() {
+async function startPollQuiz(sock, groupJid, resolved, firstQuestion = null) {
+    const question = firstQuestion || await fetchQuiz(resolved.slug);
+    const quiz = {
+        mode: 'poll', subject: resolved.name, subjectSlug: resolved.slug,
+        question: cleanHTML(question.question), option: question.option || {},
+        answer: normalizeAnswer(question.answer), solution: cleanHTML(question.solution),
+        startedAt: Date.now(), questionNumber: 1
+    };
+    await sock.sendMessage(groupJid, { text: `🏁 *${resolved.name.toUpperCase()} POLL QUIZ*\n\nYou have *30 seconds* to vote. One vote per participant. No individual student scores are collected.` });
+    await sendPollQuestion(sock, groupJid, quiz);
+    return { success: true, subject: resolved.name, subjectSlug: resolved.slug, groupJid, mode: 'poll', durationSeconds: 30 };
+}
 
+function aggregatePollCounts(sock, quiz) {
+    if (!pollVoteAggregator || !quiz.pollMessage || !quiz.pollUpdates?.length) return null;
     try {
-
-        await fs.promises.writeFile(
-
-            SCORE_FILE,
-
-            JSON.stringify(
-                scores,
-                null,
-                2
-            ),
-
-            "utf8"
-
-        );
-
-    } catch (err) {
-
-        console.log(
-            "❌ Quiz score save error:",
-            err.message
-        );
-
+        const rows = pollVoteAggregator({ message: quiz.pollMessage, pollUpdates: quiz.pollUpdates }, sock.user?.id);
+        if (rows && typeof rows.then === 'function') return rows;
+        return rows;
+    } catch (error) {
+        console.warn('[QUIZ POLL] Vote aggregation failed:', error.message);
+        return null;
     }
+}
 
+async function closePollQuestion(sock, groupJid) {
+    const quiz = activeQuizzes.get(groupJid);
+    if (!quiz || quiz.mode !== 'poll' || quiz.pollClosed) return;
+    quiz.pollClosed = true;
+    if (quiz.pollTimer) clearTimeout(quiz.pollTimer);
+    let rows = await aggregatePollCounts(sock, quiz);
+    let counts = new Map();
+    if (Array.isArray(rows)) {
+        for (const row of rows) {
+            const name = String(row.name || '').toUpperCase();
+            const match = name.match(/^([A-D])\./);
+            if (match) counts.set(match[1], Array.isArray(row.voters) ? row.voters.length : Number(row.votes || 0));
+        }
+    }
+    const totalVotes = [...counts.values()].reduce((sum, n) => sum + n, 0);
+    const correct = quiz.answer;
+    const correctOption = quiz.option?.[correct.toLowerCase()] || '';
+    let explanation = quiz.solution || '';
+    if (explainQuizAnswer) {
+        try {
+            const generated = await explainQuizAnswer({ subject: quiz.subject, question: quiz.question, options: quiz.option, answer: correct, solution: quiz.solution });
+            if (generated) explanation = String(generated).slice(0, 1800);
+        } catch (error) { console.warn('[QUIZ POLL] AI explanation failed:', error.message); }
+    }
+    if (activeQuizzes.get(groupJid) !== quiz) return;
+    const tally = ['A','B','C','D'].map(letter => `${letter}: ${counts.get(letter) || 0}`).join('  |  ');
+    const voteStatus = pollVoteAggregator
+        ? `📊 Votes: ${totalVotes}\n${tally}`
+        : '📊 Vote totals could not be decrypted by this Baileys build; the answer and explanation are still shown.';
+    await sock.sendMessage(groupJid, { text: `⏱️ *VOTING CLOSED — QUESTION ${quiz.questionNumber}*\n\n${voteStatus}\n\n✅ *Correct answer: ${correct}*\n${cleanHTML(correctOption)}\n\n📖 *Explanation*\n${explanation || 'No explanation was supplied by ALOC.'}` });
+    try {
+        const next = await fetchQuiz(quiz.subjectSlug);
+        if (activeQuizzes.get(groupJid) !== quiz) return;
+        const nextQuiz = { ...quiz, question: cleanHTML(next.question), option: next.option || {}, answer: normalizeAnswer(next.answer), solution: cleanHTML(next.solution), questionNumber: quiz.questionNumber + 1 };
+        delete nextQuiz.pollMessage; delete nextQuiz.pollMessageKey; delete nextQuiz.pollUpdates; delete nextQuiz.pollTimer; delete nextQuiz.pollClosed;
+        await sendPollQuestion(sock, groupJid, nextQuiz, `QUESTION ${nextQuiz.questionNumber} — `);
+    } catch (error) {
+        activeQuizzes.delete(groupJid);
+        await sock.sendMessage(groupJid, { text: `⚠️ I couldn't load the next ALOC question. The poll quiz has ended.\n${String(error.message).slice(0, 300)}` });
+    }
+}
+
+function getPollCreationMessage(key) {
+    if (!key?.remoteJid || !key?.id) return undefined;
+    const quiz = activeQuizzes.get(key.remoteJid);
+    if (quiz?.mode === 'poll' && quiz.pollMessageKey?.id === key.id) return quiz.pollMessage;
+    return undefined;
+}
+
+async function handlePollUpdates(sock, updates = []) {
+    if (!Array.isArray(updates)) return;
+    for (const item of updates) {
+        const update = item?.update || {};
+        const pollUpdates = update.pollUpdates;
+        if (!Array.isArray(pollUpdates) || !pollUpdates.length) continue;
+        const key = item?.key || pollUpdates[0]?.pollUpdateMessageKey;
+        const jid = key?.remoteJid;
+        if (!jid) continue;
+        const quiz = activeQuizzes.get(jid);
+        if (!quiz || quiz.mode !== 'poll' || quiz.pollClosed || quiz.pollMessageKey?.id !== key?.id) continue;
+        for (const vote of pollUpdates) {
+            const voteKey = vote.pollUpdateMessageKey || {};
+            const voter = voteKey.participant || voteKey.participantAlt || voteKey.remoteJid || voteKey.id || JSON.stringify(vote).slice(0, 80);
+            const existingIndex = quiz.pollUpdates.findIndex(previous => {
+                const previousKey = previous.pollUpdateMessageKey || {};
+                const previousVoter = previousKey.participant || previousKey.participantAlt || previousKey.remoteJid || previousKey.id || JSON.stringify(previous).slice(0, 80);
+                return previousVoter === voter;
+            });
+            if (existingIndex >= 0) quiz.pollUpdates[existingIndex] = vote;
+            else if (quiz.pollUpdates.length < 2000) quiz.pollUpdates.push(vote);
+        }
+    }
 }
 
 
-// =====================================================
-// NORMALIZE SUBJECT INPUT
-// =====================================================
 
 function normalizeSubjectInput(subject) {
 
@@ -702,584 +755,36 @@ D. ${quiz.option?.d || "N/A"}
 // START QUIZ
 // =====================================================
 
-async function fireQuiz(
-    sock,
-    quizData = {}
-) {
-
-    try {
-
-        if (!sock) {
-
-            return {
-
-                success: false,
-
-                error:
-                    "WhatsApp socket inactive"
-
-            };
-
-        }
-
-
-        const requestedSubject =
-            quizData.subject;
-
-
-        const resolved =
-            resolveSubject(
-                requestedSubject
-            );
-
-
-        if (!resolved) {
-
-            const subjects =
-                getSubjects()
-                    .map(
-                        item =>
-                            `• ${item.name}`
-                    )
-                    .join("\n");
-
-
-            return {
-
-                success: false,
-
-                error:
-                    `Invalid quiz subject.\n\nAvailable subjects:\n${subjects}`
-
-            };
-
-        }
-
-
-        const groupJid =
-
-            quizData.groupJid ||
-
-            quizData.targetGroupJid ||
-
-            "12036342497643845@g.us";
-
-
-        // -----------------------------------------
-        // Don't start another quiz in same group
-        // -----------------------------------------
-
-        if (
-            activeQuizzes.has(
-                groupJid
-            )
-        ) {
-
-            return {
-
-                success: false,
-
-                error:
-                    "A quiz is already active in this group."
-
-            };
-
-        }
-
-
-        // -----------------------------------------
-        // Get first question
-        // -----------------------------------------
-
-        const question =
-            await fetchQuiz(
-                resolved.slug
-            );
-
-
-        activeQuizzes.set(
-
-            groupJid,
-
-            {
-
-                subject:
-                    resolved.name,
-
-                subjectSlug:
-                    resolved.slug,
-
-                question:
-                    cleanHTML(
-                        question.question
-                    ),
-
-                option:
-                    question.option ||
-                    {},
-
-                answer:
-                    normalizeAnswer(
-                        question.answer
-                    ),
-
-                solution:
-                    cleanHTML(
-                        question.solution
-                    ),
-
-                startedAt:
-                    Date.now()
-
-            }
-
-        );
-
-
-        await sendQuestion(
-
-            sock,
-
-            groupJid,
-
-            activeQuizzes.get(
-                groupJid
-            ),
-
-            "🏁 *QUIZ STARTED*\n\n"
-
-        );
-
-
-        console.log(
-
-            `✅ Quiz started: ${resolved.name} (${resolved.slug}) → ${groupJid}`
-
-        );
-
-
-        return {
-
-            success: true,
-
-            subject:
-                resolved.name,
-
-            subjectSlug:
-                resolved.slug,
-
-            groupJid
-
-        };
-
-
-    } catch (err) {
-
-        console.log(
-
-            "❌ Quiz start error:",
-
-            err.message
-
-        );
-
-
-        return {
-
-            success: false,
-
-            error:
-                err.message
-
-        };
-
+async function fireQuiz(sock, quizData = {}) {
+    if (!sock) return { success: false, error: "WhatsApp socket inactive" };
+    const resolved = resolveSubject(quizData.subject);
+    if (!resolved) {
+        const subjects = getSubjects().map(item => `• ${item.name}`).join("\n");
+        return { success: false, error: `Invalid quiz subject.\n\nAvailable subjects:\n${subjects}` };
     }
-
+    const groupJid = quizData.groupJid || quizData.targetGroupJid || "12036342497643845@g.us";
+    if (activeQuizzes.has(groupJid)) return { success: false, error: "A quiz is already active in this group." };
+    // Poll-only quiz mode: the system records only aggregate poll votes for
+    // revealing the answer. It does not identify, rank, or score students.
+    return startPollQuiz(sock, groupJid, resolved);
 }
 
 
-// =====================================================
-// LIVE ANSWER MARKING
-// =====================================================
-
-async function handleLiveMarking(
-
-    sock,
-
-    jid,
-
-    sender,
-
-    incomingText,
-
-    msgObj
-
-) {
-
-    try {
-
-        const quiz =
-            activeQuizzes.get(
-                jid
-            );
-
-
-        // -----------------------------------------
-        // No quiz in this group
-        // -----------------------------------------
-
-        if (!quiz) {
-
-            return false;
-
-        }
-
-
-        // -----------------------------------------
-        // Check expiration
-        // -----------------------------------------
-
-        if (
-
-            quiz.startedAt &&
-
-            Date.now() -
-                quiz.startedAt >
-
-                QUIZ_DURATION_MS
-
-        ) {
-
-            activeQuizzes.delete(
-                jid
-            );
-
-
-            await sock.sendMessage(
-
-                jid,
-
-                {
-
-                    text:
-
-`⏰ *QUIZ SESSION EXPIRED*
-
-The 30-minute quiz session has ended.`
-
-                },
-
-                {
-
-                    quoted:
-                        msgObj
-
-                }
-
-            );
-
-
-            return true;
-
-        }
-
-
-        const answer =
-            normalizeAnswer(
-                incomingText
-            );
-
-
-        // -----------------------------------------
-        // Only A-D are quiz answers
-        // -----------------------------------------
-
-        if (
-
-            ![
-                "A",
-                "B",
-                "C",
-                "D"
-            ].includes(
-                answer
-            )
-
-        ) {
-
-            return false;
-
-        }
-
-
-        const user =
-            getUserKey(
-                sender
-            );
-
-
-        if (!user) {
-
-            return false;
-
-        }
-
-
-        const correctAnswer =
-            normalizeAnswer(
-                quiz.answer
-            );
-
-
-        // =================================================
-        // CORRECT ANSWER
-        // =================================================
-
-        if (
-            answer ===
-            correctAnswer
-        ) {
-
-            scores[user] =
-                (
-                    scores[user] ||
-                    0
-                ) + 1;
-
-
-            await saveScores();
-
-
-            await sock.sendMessage(
-
-                jid,
-
-                {
-
-                    text:
-
-`🎉 *@${getUserTag(
-    sender
-)}* CORRECT!
-
-🏆 +1 Point
-
-📊 Total Score:
-*${scores[user]}*`,
-
-                    mentions:
-                        [sender]
-
-                },
-
-                {
-
-                    quoted:
-                        msgObj
-
-                }
-
-            );
-
-        }
-
-
-        // =================================================
-        // WRONG ANSWER
-        // =================================================
-
-        else {
-
-            await sock.sendMessage(
-
-                jid,
-
-                {
-
-                    text:
-
-`❌ *@${getUserTag(
-    sender
-)}* INCORRECT
-
-👉 Your Answer:
-*${answer}*
-
-✅ Correct Answer:
-*${correctAnswer}*
-
-📖 Solution:
-${
-    quiz.solution ||
-    "No solution provided."
-}`,
-
-                    mentions:
-                        [sender]
-
-                },
-
-                {
-
-                    quoted:
-                        msgObj
-
-                }
-
-            );
-
-        }
-
-
-        // =================================================
-        // LOAD NEXT QUESTION
-        // =================================================
-
-        const subjectSlug =
-            quiz.subjectSlug;
-
-
-        try {
-
-            const next =
-                await fetchQuiz(
-                    subjectSlug
-                );
-
-
-            activeQuizzes.set(
-
-                jid,
-
-                {
-
-                    subject:
-                        quiz.subject,
-
-                    subjectSlug:
-                        quiz.subjectSlug,
-
-                    question:
-                        cleanHTML(
-                            next.question
-                        ),
-
-                    option:
-                        next.option ||
-                        {},
-
-                    answer:
-                        normalizeAnswer(
-                            next.answer
-                        ),
-
-                    solution:
-                        cleanHTML(
-                            next.solution
-                        ),
-
-                    // Keep original timer
-
-                    startedAt:
-                        quiz.startedAt
-
-                }
-
-            );
-
-
-            await sendQuestion(
-
-                sock,
-
-                jid,
-
-                activeQuizzes.get(
-                    jid
-                ),
-
-                "━━━━━━━━━━━━━━━\n\n" +
-                "📌 *NEXT QUESTION*\n\n"
-
-            );
-
-
-        } catch (err) {
-
-            activeQuizzes.delete(
-                jid
-            );
-
-
-            await sock.sendMessage(
-
-                jid,
-
-                {
-
-                    text:
-
-`⚠️ Your answer was recorded, but I couldn't load the next question.
-
-Please start the quiz again.`
-
-                },
-
-                {
-
-                    quoted:
-                        msgObj
-
-                }
-
-            );
-
-
-            console.log(
-
-                "❌ Next quiz question error:",
-
-                err.message
-
-            );
-
-        }
-
-
-        return true;
-
-
-    } catch (err) {
-
-        console.log(
-
-            "❌ Live Marking Error:",
-
-            err.message
-
-        );
-
-
-        return false;
-
-    }
-
+async function handleLiveMarking() {
+    // Individual text-answer scoring is intentionally disabled. Quiz answers
+    // are collected only as aggregate WhatsApp poll results.
+    return false;
 }
 
-
-// =====================================================
-// STOP QUIZ
-// =====================================================
 
 function stopQuiz(
     groupJid = null
 ) {
 
     if (groupJid) {
-
-        activeQuizzes.delete(
-            groupJid
-        );
+        const current = activeQuizzes.get(groupJid);
+        if (current?.pollTimer) clearTimeout(current.pollTimer);
+        activeQuizzes.delete(groupJid);
 
 
         console.log(
@@ -1291,7 +796,7 @@ function stopQuiz(
     }
 
     else {
-
+        for (const current of activeQuizzes.values()) if (current?.pollTimer) clearTimeout(current.pollTimer);
         activeQuizzes.clear();
 
 
@@ -1361,8 +866,11 @@ module.exports = {
 
     SUBJECTS,
 
-    scores,
 
-    saveScores
+    configurePollQuiz,
+    handlePollUpdates,
+    getPollCreationMessage,
+    closePollQuestion,
+    POLL_DURATION_MS
 
 };
