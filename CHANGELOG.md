@@ -51,3 +51,13 @@
 - Added FastAPI PDF generate/extract routes for mounting into the existing Piper Python service; Piper TTS remains intact.
 - Kept ALOC poll quiz orchestration and 30-second vote flow inside JARVIS.
 - Live Piper route deployment and WhatsApp/ALOC/Gemini/GitHub integrations still require staging credentials and end-to-end testing.
+
+## 3.1.0
+
+- Added `!quiz off` to stop the active poll quiz in the current group and cancel its timer.
+- Added WhatsApp push/profile-name resolution to the AI conversation context.
+- Added a built-in WhatsApp command registry with menu commands and aliases.
+- Connected approved safe Command Inventor templates to runnable `!custom_command` names.
+- Added Coding Agent modules for static website generation, validation, GitHub repository creation, GitHub Pages publishing and live URL verification.
+- Added command registry, coding-agent and WhatsApp identity tests.
+- Preserved the existing Piper TTS service and Baileys dependency.

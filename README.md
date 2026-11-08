@@ -1,4 +1,4 @@
-# JARVIS AI WhatsApp Bot — 2.8.0
+# JARVIS AI WhatsApp Bot — 3.1.0
 **Flexi edTech Digital Academy**
 
 JARVIS is the existing WhatsApp assistant extended with a structured AI tool registry, authorization checks, a persistent owner-approval queue, a sandboxed development shell, GitHub repository tools, and an ALOC-based native poll quiz. Existing moderation, payments, reminders, dashboard and rich-response modules are retained.
@@ -37,7 +37,7 @@ The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz
 - Each poll has four A-D options and a 30-second voting window.
 - After voting closes, JARVIS displays aggregate vote counts (not student score tables), the correct option, and an AI-generated explanation where the Gemini service is available.
 - JARVIS fetches and posts the next question automatically.
-- `!stopquiz` lets a group administrator or the bot owner stop the active quiz.
+- `!quiz off` stops the active quiz in the current group and cancels its timer. `!stopquiz` remains available as a legacy control.
 - Individual text-answer scoring and persistent student score storage are disabled.
 
 Poll-vote decryption depends on the installed Baileys fork emitting decrypted `pollUpdates` in `messages.update` and exporting `getAggregateVotesInPollMessage`. If the helper is unavailable, the quiz still closes, reveals the correct answer and advances, but reports that aggregate counts could not be decrypted. Test with a real staging WhatsApp group before production use.
@@ -54,11 +54,11 @@ Sensitive registered tools are queued rather than executed immediately. The conf
 
 Requests expire after 10 minutes by default. Approval records are stored under `data/approvals/` with restrictive file permissions. Approval is single-use. Approval-gated examples include changing a WhatsApp group name, GitHub file writes/deletions, and saving a generated command. GitHub writes additionally require the token to have repository write permission; file deletion requires repository administrator permission. These checks do not bypass provider-side permissions.
 
-The dynamic command builder only persists `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. New commands are admin-only and persisted under `data/commands/`. Creating one requires owner approval.
+The dynamic command builder only persists safe `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. Use `!command list` to view them or `!command create name | description | template` to request one. New commands are admin-only, persisted under `data/commands/`, and require owner approval. Once approved, they are available as WhatsApp commands (for example `!welcome_user`). The command registry also catalogs the built-in menu commands and aliases.
 
 ## Platform authentication and GitHub
 
-`GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
+`GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. The Coding Agent can generate a complete static website, create a public GitHub repository, upload the project, enable GitHub Pages and check the published URL. The `website_create_and_deploy` tool requires explicit owner approval. It currently targets static GitHub Pages websites; server-side applications need a separate hosting-provider adapter. JARVIS reports deployment as verified only after an HTTP check succeeds. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
 
 GitHub static security triage checks eligible text files for common secret patterns and tracked live `.env` files. It redacts detected values. It is not a complete SAST/DAST system, does not exploit systems, and does not prove that a repository is secure.
 
@@ -85,14 +85,14 @@ Security checks are intended only for repositories and systems the operator owns
 | `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate` and `/pdf/extract` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
 | `ALOC_TOKEN` | ALOC API access token |
-| `GITHUB_TOKEN` | Least-privilege GitHub token |
+| `GITHUB_TOKEN` | GitHub token with permission to create repositories, write repository contents and manage GitHub Pages for the selected account |
 | `GITHUB_OWNER` | Optional default GitHub owner/org |
 | `GITHUB_ALLOWED_REPOS` | Optional comma-separated repository allowlist |
 | `JARVIS_PLATFORM_ADAPTERS` | Optional JSON array of provider HTTPS identity adapters |
 | `DOCKER_BIN` | Optional Docker executable name/path for sandbox execution |
 | `JARVIS_SANDBOX_WORKSPACE` | Host directory mounted into `/workspace` in the isolated container |
 
-The existing project may also require Firebase and other settings used by its pre-existing features. Gemini credentials belong only in the Flexieduconsult AI Link environment; do not put Gemini provider keys in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
+Incoming WhatsApp push/profile names are passed to the AI conversation context. If WhatsApp does not provide a name, JARVIS uses a neutral fallback rather than guessing. The existing project may also require Firebase and other settings used by its pre-existing features. Gemini credentials belong only in the Flexieduconsult AI Link environment; do not put Gemini provider keys in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
 
 ## Render deployment
 
