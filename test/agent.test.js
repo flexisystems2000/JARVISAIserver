@@ -161,3 +161,30 @@ test('WhatsApp group-admin status does not grant global JARVIS system-admin perm
  await assert.rejects(()=>registry.execute('github_admin_action',{}, {actor:'3333333333@s.whatsapp.net',isAdmin:true}),/Permission denied/);
  assert.equal((await registry.execute('github_admin_action',{}, {actor:'2222222222@s.whatsapp.net'})).result,true);
 });
+
+test('agent brain discovers detailed schemas dynamically and executes a multi-step plan in order', async () => {
+ const registry=createToolRegistry();
+ const events=[];
+ registry.register({name:'lookup_first',description:'Find a record',parameters:{type:'object',properties:{query:{type:'string',maxLength:30}},required:['query'],additionalProperties:false},permissions:['user'],handler:async({query})=>{events.push(`lookup:${query}`);return {id:'record-7'};}});
+ registry.register({name:'summarize_second',description:'Summarize a record',parameters:{type:'object',properties:{recordId:{type:'string'}},required:['recordId'],additionalProperties:false},permissions:['user'],handler:async({recordId})=>{events.push(`summarize:${recordId}`);return {summary:'ready'};}});
+ let call=0;
+ const brain=createAgentBrain({registry,askModel:async(prompt,options={})=>{
+   assert.ok(prompt.length <= 40000, `planner prompt exceeded safe ceiling: ${prompt.length}`);
+   call++;
+   if(call===1) { assert.equal(options.responseFormat,'json'); return JSON.stringify({action:'discover',tools:['lookup_first','summarize_second'],confidence:0.95}); }
+   if(call===2) { assert.match(prompt,/SELECTED TOOL SCHEMAS/); return JSON.stringify({action:'plan',steps:[{tool:'lookup_first',arguments:{query:'academy'}},{tool:'summarize_second',arguments:{recordId:'record-7'}}],confidence:0.98}); }
+   return 'Both steps completed.';
+ }});
+ const result=await brain.handle({message:'Find the academy record and summarize it',actor:'123'});
+ assert.deepEqual(events,['lookup:academy','summarize:record-7']);
+ assert.equal(result.reply,'Both steps completed.');
+ assert.equal(result.outcomes.length,2);
+});
+
+test('planner prompt stays below configured 38k budget for long conversation history', async () => {
+ const { boundedPrompt }=require('../agent/brain');
+ const prompt=boundedPrompt({catalog:'TOOLS',history:'h'.repeat(60000),message:'Build a site'});
+ assert.ok(prompt.length <= 40000);
+ assert.match(prompt,/CURRENT USER REQUEST:/);
+ assert.match(prompt,/Build a site/);
+});
