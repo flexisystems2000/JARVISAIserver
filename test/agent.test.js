@@ -53,7 +53,7 @@ test('approval manager requires owner and executes approved action once', async 
  const approvals = new ApprovalManager({ directory: dir });
  await approvals.load();
  const pending = await approvals.request({ tool:'danger_tool', args:{x:1}, context:{actor:'admin'} });
- await assert.rejects(() => approvals.decide(pending.approvalId,{actor:'admin',isOwner:false,approve:true,execute:async()=>true}),/Only the configured JARVIS owner/);
+ await assert.rejects(() => approvals.decide(pending.approvalId,{actor:'admin',isOwner:false,approve:true,execute:async()=>true}),/Approval requires the JARVIS owner\/system admin/);
  let count=0;
  const result = await approvals.decide(pending.approvalId,{actor:'owner',isOwner:true,approve:true,execute:async item=>{count++;return item.args.x;}});
  assert.equal(result.result,1);
@@ -87,4 +87,39 @@ test('agent brain refuses low-confidence tool execution', async()=>{
  const brain=createAgentBrain({registry,askModel:async()=>JSON.stringify({action:'tool',tool:'safe_tool',arguments:{},confidence:0.4,response:'Please clarify.'})});
  const result=await brain.handle({message:'maybe do this',actor:'x'});
  assert.equal(result.reply,'Please clarify.'); assert.equal(ran,false);
+});
+
+const { detectWatchdogViolation } = require('../agent/watchdog');
+test('watchdog whole-word matching does not flag ordinary code/model text', () => {
+ assert.deepEqual(detectWatchdogViolation('I am writing code for the model'), {isBadWord:false,isLink:false});
+ assert.equal(detectWatchdogViolation('ode').isBadWord,true);
+ assert.equal(detectWatchdogViolation('that was stupid').isBadWord,true);
+});
+test('watchdog detects real links without treating a bare .com mention as a URL', () => {
+ assert.equal(detectWatchdogViolation('Visit https://example.com/page').isLink,true);
+ assert.equal(detectWatchdogViolation('example.com').isLink,true);
+ assert.equal(detectWatchdogViolation('the string .com appears here').isLink,false);
+});
+test('requesting WhatsApp group admins can approve only approvals from that same group', async () => {
+ const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(),'jarvis-group-approval-'));
+ const approvals = new ApprovalManager({ directory: dir });
+ await approvals.load();
+ const pending = await approvals.request({ tool:'group_tool', args:{}, context:{actor:'member@s.whatsapp.net',chatId:'123@g.us',isGroup:true} });
+ await assert.rejects(() => approvals.decide(pending.approvalId,{actor:'admin@s.whatsapp.net',isGroupAdmin:true,chatId:'999@g.us',approve:true,execute:async()=>true}),/administrator of the WhatsApp group/);
+ const result = await approvals.decide(pending.approvalId,{actor:'admin@s.whatsapp.net',isGroupAdmin:true,chatId:'123@g.us',approve:true,execute:async()=>({done:true})});
+ assert.equal(result.status,'executed');
+ await fs.promises.rm(dir,{recursive:true,force:true});
+});
+
+test('command inventor registers safe templates as callable tools', async () => {
+ const registry=createToolRegistry();
+ const dir=await fs.promises.mkdtemp(path.join(os.tmpdir(),'jarvis-command-'));
+ const builder=new DynamicCommandBuilder({directory:dir,registry});
+ const spec={name:'welcome_member',description:'Welcome member',parameters:{type:'object',properties:{name:{type:'string'},group:{type:'string'}},required:[],additionalProperties:false},implementation:{operation:'template',template:'Welcome {{name}} to {{group}}!'}};
+ await builder.create(spec,{approved:true});
+ const tool=registry.tools.get('welcome_member');
+ assert.equal(tool.dynamicCommand,true);
+ const result=await registry.execute('welcome_member',{name:'Ada',group:'Flexi'},{actor:'123@s.whatsapp.net',isAdmin:true});
+ assert.equal(result.result.text,'Welcome Ada to Flexi!');
+ await fs.promises.rm(dir,{recursive:true,force:true});
 });
