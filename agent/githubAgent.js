@@ -22,7 +22,10 @@ class GitHubAgent {
   async deleteFile(owner,repo,filePath,message,branch,approved=false) { if(!approved) throw new Error('Explicit approval required before deleting repository files'); await this.assertRepositoryPermission(owner,repo,'admin'); const c=this.client(),p=this.repo(owner,repo),safePath=this.safePath(filePath); const item=(await c.get(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{params:branch?{ref:branch}:undefined})).data; return (await c.delete(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{data:{message,sha:item.sha,branch}})).data; }
   async createAndDeployStaticWebsite(owner,repo,description,files,approved=false) {
     if (!approved) throw new Error('Explicit approval is required before creating or publishing a GitHub website.');
-    const p=this.repo(owner,repo);
+    // If no owner is supplied/configured, publish under the authenticated GitHub user.
+    const c=this.client();
+    const resolvedOwner=owner || this.owner || (await c.get('/user')).data.login;
+    const p=this.repo(resolvedOwner,repo);
     this.assertAllowedRepository(p.owner,p.repo);
     if (!Array.isArray(files) || files.length < 1 || files.length > 30) throw new Error('Provide between 1 and 30 website files.');
     const normalized=files.map(file=>{
@@ -31,7 +34,6 @@ class GitHubAgent {
       return {path:this.safePath(file.path),content:file.content};
     });
     if (!normalized.some(file=>file.path==='index.html')) throw new Error('A static website must include index.html at the repository root.');
-    const c=this.client();
     let repository;
     try {
       repository=(await c.get(`/repos/${p.owner}/${p.repo}`)).data;
