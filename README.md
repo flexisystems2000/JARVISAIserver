@@ -21,18 +21,6 @@ npm start
 
 Do not commit `.env`, `auth_info/`, audit logs, approval data, or the sandbox workspace.
 
-## AI planner and request limits (3.3.0)
-
-The planner now uses two AI-led stages: it first receives a compact, permission-filtered catalog and chooses which tools to inspect; JARVIS then sends only those selected tools' detailed schemas for planning. This is intent understanding and registry discovery—not command keyword matching. The model can return a validated sequence of up to five actions. JARVIS validates every step and nested argument before executing any step, and pauses a sequence if an approval is pending or an existing WhatsApp command handler has already replied.
-
-- `JARVIS_AGENT_PROMPT_MAX_CHARS` — planner prompt budget; clamped to 35,000–40,000 characters, default `38000`.
-- `JARVIS_AI_MAX_PROMPT_CHARS` — maximum prompt sent by the shared AI adapter; clamped to 35,000–40,000 characters, default `38000`.
-- The complete serialized `/ai` request is measured before transmission. JARVIS rejects a request above 12 MB before making the HTTP call.
-- The AI Link keeps its default 50,000-character prompt ceiling and returns structured 413 diagnostics. Set `AI_MAX_PROMPT_CHARS` only if a lower gateway ceiling is desired; the service never permits more than 50,000.
-- Each gateway call carries an `x-correlation-id`; logs include prompt characters, serialized request bytes, response format and model without logging API credentials.
-
-Existing WhatsApp command handlers remain the execution authority. The 68 catalogued command forms, aliases and subcommands continue to dispatch through the original message pipeline. System-admin permissions remain separate from live WhatsApp group-admin checks. Approval-gated operations are not bypassed by multi-step plans.
-
 ## AI gateway and Python document service
 
 JARVIS calls the Flexieduconsult AI Link through `AI_API_URL` and authenticates every `/ai` and `/image` request with `AI_API_KEY`. Set this value to exactly the same secret as `JARVIS_API_KEY` on the AI Link deployment. The agent planner requests JSON-mode model output; the tool registry still validates tool names, arguments, permissions and approvals before execution.
@@ -56,7 +44,7 @@ Poll-vote decryption depends on the installed Baileys fork emitting decrypted `p
 
 ## AI tools, commands and approvals
 
-The AI planner may call only registered tools. The registry validates declared arguments, applies per-actor rate limits, checks roles and writes success/failure audit events.
+The AI-led planner first discovers a compact tool catalog, then requests detailed schemas only for the tools it selects. It supports ordered multi-step plans (up to five tools), validates every argument against the registered schema before execution, applies a 38,000-character planning prompt budget (configurable within 35,000–40,000), applies per-actor rate limits, checks roles and writes success/failure audit events. No tool is executed from an invalid or low-confidence plan.
 
 Sensitive registered tools are queued rather than executed immediately. The configured bot owner and configured system admins can manage approvals globally. A current WhatsApp administrator can approve or reject requests originating in that same WhatsApp group:
 
@@ -68,9 +56,13 @@ Requests expire after 10 minutes by default. Approval records are stored under `
 
 The Command Inventor supports `!command list` and `!command create name | description | template`. It only persists safe `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. Ordinary members can propose a command, but a JARVIS owner/system admin or an administrator of the requesting WhatsApp group must approve it before persistence. Saved commands are stored under `data/commands/` and can be invoked as `!command_name` by authorised admins.
 
-## GitHub Pages website creation
+## AI website coding and GitHub Pages deployment
 
-The Agent exposes `website_create_and_deploy` for static HTML/CSS/JavaScript websites. JARVIS creates or updates the requested repository, publishes up to 30 text files (including a root `index.html`), enables GitHub Pages, and returns the Pages URL. The action requires an explicit approval and the configured GitHub token must have the required repository creation/admin and Pages permissions. The returned URL is the configured publication URL; the first deployment can take several minutes to become publicly reachable, so JARVIS does not claim it is live-verified until an actual HTTP check succeeds.
+The Agent exposes `website_create_and_deploy`. A user describes the website in natural language and supplies a repository name; JARVIS's CodingAgent generates the HTML/CSS/JavaScript files itself, validates file paths, sizes and likely secrets, then publishes them through the real `GitHubAgent.createAndDeployStaticWebsite` method. Users do not need to paste source code or ask the planner to return a large `files` array.
+
+The tool can be requested by configured JARVIS admins/owner and requires an explicit approval before code generation and publication. Approval is limited to the JARVIS owner/system admins or a WhatsApp administrator of the same requesting group; group-admin status does not grant global JARVIS tool access. The GitHub token must be able to create the repository (or administer an existing one), write its contents and enable GitHub Pages. The project must include a root `index.html`; up to 30 files are allowed, each no larger than 50 KB, with a 450 KB total project limit. `GITHUB_OWNER` may supply the default owner; `GITHUB_ALLOWED_REPOS` continues to constrain existing repository access.
+
+**Deployment scope:** this workflow deploys public static websites to GitHub Pages. It does not build/deploy Next.js, React build pipelines, server-side code, APIs, databases or other full-stack applications. GitHub Pages configuration is not proof that the site is already live; the response reports the URL as configured and explains that initial publication can take several minutes.
 
 ## Platform authentication and GitHub
 
@@ -97,6 +89,7 @@ Security checks are intended only for repositories and systems the operator owns
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
+| `JARVIS_AGENT_PROMPT_MAX_CHARS` | Planner prompt budget; clamped to 35,000–40,000 characters (default 38,000) |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python PDF routes |
 | `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate` and `/pdf/extract` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |

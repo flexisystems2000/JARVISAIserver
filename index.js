@@ -13,9 +13,9 @@ const pino = require('pino');
 const express = require('express');
 const mongoose = require('mongoose');
 const axios = require('axios');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
@@ -28,6 +28,7 @@ const { createAuditLogger } = require('./agent/audit');
 const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
+const { CodingAgent } = require('./agent/codingAgent');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { COMMANDS, registerWhatsAppCommandTools } = require('./agent/commandRegistry');
 const { PlatformAuth } = require('./agent/platformAuth');
@@ -312,13 +313,24 @@ agentTools.register({
     permissions: ['admin','owner'],
     handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
 });
+const codingAgent = new CodingAgent({
+    github: githubAgent,
+    askModel: async (prompt, options = {}) => askAI(prompt, null, { ...options, throwOnError: true })
+});
 agentTools.register({
     name: 'website_create_and_deploy',
-    description: 'Create a public static website repository, publish its HTML/CSS/JS files, enable GitHub Pages, and return the Pages URL. Requires GitHub repository creation/admin permission and explicit JARVIS approval.',
-    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, description: { type: 'string', maxLength: 350 }, files: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 50000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo','files'], additionalProperties: false },
-    permissions: ['admin'],
+    description: 'Plan, generate, validate, and publish a complete responsive STATIC website (HTML/CSS/JavaScript) to a new or existing authorized public GitHub repository using GitHub Pages. The AI coding agent creates the files; the user does not need to supply source code. Requires GitHub admin permission and explicit approval by the JARVIS owner/system admin or an administrator of the requesting WhatsApp group. Does not deploy backend, database, server-side, or full-stack applications.',
+    parameters: { type: 'object', properties: {
+        owner: { type: 'string', maxLength: 100 },
+        repo: { type: 'string', minLength: 1, maxLength: 100 },
+        description: { type: 'string', maxLength: 350 },
+        request: { type: 'string', minLength: 8, maxLength: 6000 }
+    }, required: ['repo','request'], additionalProperties: false },
+    permissions: ['admin','owner'],
     requiresApproval: true,
-    handler: async ({ owner, repo, description, files }) => githubAgent.createAndDeployStaticWebsite(owner, repo, description, files, true)
+    handler: async ({ owner, repo, description, request }) => codingAgent.createAndDeploy({
+        owner, repositoryName: repo, description, request, approved: true
+    })
 });
 agentTools.register({
     name: 'github_write_file',
@@ -1202,60 +1214,34 @@ if (MONGO_URI) {
 
 // --- AUTHENTICATED AI GATEWAY ---
 async function askAI(prompt, base64Media = null, options = {}) {
-    const correlationId = crypto.randomUUID();
-    const maxPromptChars = Math.max(35000, Math.min(Number(process.env.JARVIS_AI_MAX_PROMPT_CHARS) || 38000, 40000));
     try {
         if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
-        const promptText = String(prompt || '');
         const payload = {
-            prompt: promptText,
+            prompt: String(prompt || ''),
             botName: 'Jarvis',
             ...(base64Media ? { image: base64Media } : {}),
             ...(options.responseFormat ? { responseFormat: options.responseFormat } : {})
         };
-        const requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
-        const metrics = { correlationId, promptChars: promptText.length, requestBytes, responseFormat: options.responseFormat || 'text', model: process.env.GEMINI_MODEL || 'gateway-default' };
-        if (promptText.length > maxPromptChars) {
-            const error = new Error(`AI prompt budget exceeded before sending (${promptText.length}/${maxPromptChars} characters).`);
-            error.code = 'JARVIS_PROMPT_BUDGET_EXCEEDED';
-            error.metrics = metrics;
-            throw error;
-        }
-        if (requestBytes > 12 * 1024 * 1024) {
-            const error = new Error(`Serialized AI request exceeds JARVIS's 12 MB transport limit (${requestBytes} bytes).`);
-            error.code = 'JARVIS_REQUEST_BUDGET_EXCEEDED';
-            error.metrics = metrics;
-            throw error;
-        }
-        console.info('[AI GATEWAY] Request', metrics);
+        const correlationId = crypto.randomUUID();
         const res = await axios.post(`${AI_API_URL}/ai`, payload, {
             timeout: AI_TIMEOUT_MS,
             maxContentLength: 12 * 1024 * 1024,
             maxBodyLength: 12 * 1024 * 1024,
             headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY, 'x-correlation-id': correlationId }
         });
-        if (!res.data?.success) {
-            const error = new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
-            error.response = { status: res.status, data: res.data };
-            throw error;
-        }
-        console.info('[AI GATEWAY] Success', { ...metrics, gatewayCorrelationId: res.headers?.['x-correlation-id'] || res.data?.correlationId || correlationId });
+        if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
         return res.data?.result || '🤖 No response from AI';
     } catch (err) {
         const status = err.response?.status;
-        const responseData = err.response?.data || {};
-        const gatewayMessage = responseData.error || responseData.message || err.message;
-        const diagnostic = { correlationId, status: status || null, code: responseData.code || err.code || null, promptChars: err.metrics?.promptChars ?? String(prompt || '').length, requestBytes: err.metrics?.requestBytes ?? null, responseFormat: options.responseFormat || 'text', gatewayCorrelationId: responseData.correlationId || null };
-        console.error('[AI GATEWAY] Request failed', diagnostic);
+        const gatewayData = err.response?.data || {};
+        const gatewayMessage = gatewayData.error || gatewayData.message || err.message;
+        const gatewayCode = gatewayData.code || err.code || 'AI_GATEWAY_ERROR';
+        const correlationId = gatewayData.correlationId || err.response?.headers?.['x-correlation-id'] || null;
+        console.error('[AI GATEWAY] Request failed:', { status: status || null, code: gatewayCode, correlationId, promptChars: gatewayData.promptChars || String(prompt || '').length, requestBytes: gatewayData.requestBytes || null, message: String(gatewayMessage || 'Unknown gateway error').slice(0, 180) });
         if (options.throwOnError) {
             const detail = status ? `HTTP ${status}` : (err.code || 'request error');
-            const failure = new Error(`AI gateway request failed (${detail}${responseData.code ? `/${responseData.code}` : ''}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 220)}`);
-            failure.code = responseData.code || err.code || 'AI_GATEWAY_ERROR';
-            failure.status = status || null;
-            failure.correlationId = responseData.correlationId || correlationId;
-            throw failure;
+            throw new Error(`AI gateway request failed (${detail}; ${gatewayCode}${correlationId ? `; reference ${correlationId}` : ''}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 180)}`);
         }
-        if (err.code === 'JARVIS_PROMPT_BUDGET_EXCEEDED') return '⚠️ This request is too large for the AI prompt budget. Please shorten it and try again.';
         return '⚠️ AI service unavailable. Please try again shortly.';
     }
 }
