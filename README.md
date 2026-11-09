@@ -122,3 +122,15 @@ See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end 
 ## AI-first planner and external services
 
 Natural-language requests are interpreted by the AI planner and mapped to registered tools. The former local keyword/regex natural-language router has been removed. Tool plans require a confidence value of at least 0.75 and still pass argument, role, rate-limit and approval checks. Deterministic explicit commands remain available. See `INTEGRATION-DEPLOYMENT.md` for the paired AI Link and Piper/PDF deployment steps.
+
+## Command and Agent registries (3.1.1)
+
+- See [`COMMAND-REGISTRY.md`](COMMAND-REGISTRY.md) for the complete human-readable inventory.
+- `agent/commandRegistry.js` is the canonical inventory for the WhatsApp `!` commands, menu aliases, multi-word subcommands, and operational commands such as `!settimetable`.
+- The Agent receives this inventory as planning context and can query it through `command_registry_list` and `command_registry_get`.
+- `agent/toolRegistry.js` remains the execution registry: the planner may execute only a real registered tool. The command inventory does not turn an unsupported command into an executable tool.
+- Existing WhatsApp command handlers remain in place. Commands without a mapped Agent capability continue to work through their existing `!` command path.
+- Read-only GitHub repository inspection tools require a configured JARVIS system admin or owner. WhatsApp group-admin status alone does not grant access to GitHub account/repository inspection.
+- GitHub write/deploy actions remain approval-gated. Approval can be granted by the configured JARVIS owner, a configured JARVIS system admin, or (for a group-scoped request) an administrator of the same requesting WhatsApp group.
+- Piper TTS remains unchanged.
+

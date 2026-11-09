@@ -1,6 +1,6 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "JARVIS AI WhatsApp agent with AI-first intent routing, approval-gated tools, poll quizzes, PDF tools and Piper TTS",
   "main": "index.js",
   "scripts": {

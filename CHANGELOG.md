@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.1
+- Added canonical command inventory for all public menu commands, aliases, multi-word subcommands, and the `!settimetable` operational handler.
+- Exposed command inventory lookup to the AI Agent and included the inventory in its planning context.
+- Added `systemAdmin` as a distinct authorization role; read-only GitHub inspection is now available to configured JARVIS system admins and the owner, not WhatsApp group admins by default.
+- Kept GitHub writes/deployments approval-gated and preserved same-group WhatsApp admin approval for group-scoped requests.
+- Preserved existing WhatsApp command handlers and Piper TTS.
+
+# Changelog
+
 ## 3.0.0 - 2026-11-08
 - Removed the obsolete local keyword/regex natural-language router from the runtime and package; natural-language requests go through the AI planner and registered tool registry.
 - Added explicit AI tool-plan confidence validation; low-confidence plans are clarified instead of executed.

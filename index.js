@@ -28,6 +28,7 @@ const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
+const { listCommands, getCommand } = require('./agent/commandRegistry');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { detectWatchdogViolation } = require('./agent/watchdog');
@@ -293,21 +294,21 @@ agentTools.register({
     name: 'github_list_repositories',
     description: 'List repositories accessible to the configured GitHub token.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
     name: 'github_inspect_tree',
     description: 'List paths in a GitHub repository tree.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async args => githubAgent.getTree(args.owner, args.repo, args.branch)
 });
 agentTools.register({
     name: 'github_read_file',
     description: 'Read a file from a GitHub repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
 });
 agentTools.register({
@@ -338,42 +339,42 @@ agentTools.register({
     name: 'github_search_code',
     description: 'Search source code in repositories accessible to the configured GitHub account.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async ({ query }) => githubAgent.searchCode(query)
 });
 agentTools.register({
     name: 'github_issues',
     description: 'List issues for a repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async args => githubAgent.listIssues(args.owner,args.repo,args.state)
 });
 agentTools.register({
     name: 'github_pull_requests',
     description: 'List pull requests for a repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async args => githubAgent.listPullRequests(args.owner,args.repo,args.state)
 });
 agentTools.register({
     name: 'platform_list_connectors',
     description: 'List platform connectors supported by this JARVIS deployment. A connector is not considered connected until its provider verifies the credential.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async () => ({ available: platformAuth.list(), verified: platformAuth.list().map(name => platformAuth.getVerified(name)).filter(Boolean), credentialPolicy: 'Credentials must be configured in hosting environment variables; never paste passwords, private keys or one-time codes into WhatsApp.' })
 });
 agentTools.register({
     name: 'platform_verify_admin',
     description: 'Verify an administrator API credential against the named platform identity endpoint. Only reports the authenticated identity; it does not grant permissions beyond the provider token.',
     parameters: { type: 'object', properties: { platform: { type: 'string', maxLength: 48 } }, required: ['platform'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async ({ platform }) => platformAuth.verify(platform)
 });
 agentTools.register({
     name: 'github_verify_repository_admin',
     description: 'Verify that the authenticated GitHub account has administrator permission on a specific repository. Identity alone is not treated as repository administration.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async ({ owner, repo }) => {
         const identity = await platformAuth.verify('github');
         const repository = await githubAgent.assertRepositoryPermission(owner, repo, 'admin');
@@ -384,7 +385,7 @@ agentTools.register({
     name: 'github_security_audit',
     description: 'Perform a read-only static security review of a GitHub repository accessible to the configured GitHub token. Detects likely committed secrets and tracked environment files; does not exploit systems.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['systemAdmin','owner'],
     handler: async ({ owner, repo, branch }) => {
         // Verify the provider identity before using repository credentials.
         await platformAuth.verify('github');
@@ -414,10 +415,29 @@ agentTools.register({
         return dynamicCommands.create(spec, { approved: true });
     }
 });
+agentTools.register({
+    name: 'command_registry_list',
+    description: 'List the complete canonical WhatsApp command inventory, including aliases, subcommands and operational commands. This is the source of truth for JARVIS command discovery.',
+    parameters: { type: 'object', properties: { category: { type: 'string', maxLength: 80 } }, additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ category }) => listCommands({ category })
+});
+agentTools.register({
+    name: 'command_registry_get',
+    description: 'Look up the exact metadata and Agent capability mapping for a registered WhatsApp command.',
+    parameters: { type: 'object', properties: { command: { type: 'string', maxLength: 100 } }, required: ['command'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ command }) => {
+        const found = getCommand(command);
+        if (!found) throw new Error(`Command ${command} is not in the canonical registry.`);
+        return found;
+    }
+});
 const jarvisAgent = createAgentBrain({
     registry: agentTools,
     askModel: async (prompt, options = {}) => askAI(prompt, null, options),
-    permissions: agentPermissions
+    permissions: agentPermissions,
+    commandCatalog: () => listCommands()
 });
 
 quizEngine.configurePollQuiz({
@@ -2027,7 +2047,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 isGroupAdmin: isWhatsAppGroupAdmin,
                 chatId: jid,
                 approve: approved,
-                execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: isConfiguredOwner, isAdmin: isConfiguredOwner || isConfiguredSystemAdmin || isWhatsAppGroupAdmin, sock, approved: true })
+                execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: isConfiguredOwner, isSystemAdmin: isConfiguredSystemAdmin, isAdmin: isConfiguredSystemAdmin || isWhatsAppGroupAdmin, sock, approved: true })
             });
             await sock.sendMessage(jid, { text: approved ? `✅ Approval ${result.approvalId} executed for ${result.tool}.\n\n${JSON.stringify(result.result?.result ?? result.result).slice(0, 2500)}` : `🚫 Approval ${result.approvalId} rejected. The action was not executed.` }, { quoted: m });
         } catch (error) {
@@ -5370,6 +5390,7 @@ if (isAiCommand) {
                 chatId: jid,
                 isGroup: jid.endsWith('@g.us'),
                 isAdmin: !!isStaff,
+                isSystemAdmin: !!isConfiguredSystemAdmin,
                 sock,
                 isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER
             });
