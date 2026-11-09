@@ -28,7 +28,7 @@ const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
-const { listCommands, getCommand } = require('./agent/commandRegistry');
+const { COMMANDS, registerWhatsAppCommandTools } = require('./agent/commandRegistry');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { detectWatchdogViolation } = require('./agent/watchdog');
@@ -233,7 +233,7 @@ agentTools.register({
     description: 'Change the current WhatsApp group subject. Requires group administrator permission and approval by the JARVIS owner/system admin or an admin of this group.',
     requiresApproval: true,
     parameters: { type: 'object', properties: { subject: { type: 'string', maxLength: 100 } }, required: ['subject'], additionalProperties: false },
-    permissions: ['admin'],
+    permissions: ['user'],
     handler: async ({ subject }, context) => {
         if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
         const metadata = await context.sock.groupMetadata(context.chatId);
@@ -249,7 +249,7 @@ agentTools.register({
     name: 'group_mute',
     description: 'Lock the current WhatsApp group so only administrators can send messages. Requires current WhatsApp group administrator permission.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['admin'],
+    permissions: ['user'],
     handler: async (_args, context) => {
         if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
         const metadata = await context.sock.groupMetadata(context.chatId);
@@ -263,7 +263,7 @@ agentTools.register({
     name: 'group_unmute',
     description: 'Unlock the current WhatsApp group so all participants can send messages. Requires current WhatsApp group administrator permission.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['admin'],
+    permissions: ['user'],
     handler: async (_args, context) => {
         if (!context.isGroup || !context.sock) throw new Error('This tool is available only inside a WhatsApp group.');
         const metadata = await context.sock.groupMetadata(context.chatId);
@@ -294,21 +294,21 @@ agentTools.register({
     name: 'github_list_repositories',
     description: 'List repositories accessible to the configured GitHub token.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
     name: 'github_inspect_tree',
     description: 'List paths in a GitHub repository tree.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async args => githubAgent.getTree(args.owner, args.repo, args.branch)
 });
 agentTools.register({
     name: 'github_read_file',
     description: 'Read a file from a GitHub repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
 });
 agentTools.register({
@@ -339,42 +339,42 @@ agentTools.register({
     name: 'github_search_code',
     description: 'Search source code in repositories accessible to the configured GitHub account.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async ({ query }) => githubAgent.searchCode(query)
 });
 agentTools.register({
     name: 'github_issues',
     description: 'List issues for a repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async args => githubAgent.listIssues(args.owner,args.repo,args.state)
 });
 agentTools.register({
     name: 'github_pull_requests',
     description: 'List pull requests for a repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async args => githubAgent.listPullRequests(args.owner,args.repo,args.state)
 });
 agentTools.register({
     name: 'platform_list_connectors',
     description: 'List platform connectors supported by this JARVIS deployment. A connector is not considered connected until its provider verifies the credential.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async () => ({ available: platformAuth.list(), verified: platformAuth.list().map(name => platformAuth.getVerified(name)).filter(Boolean), credentialPolicy: 'Credentials must be configured in hosting environment variables; never paste passwords, private keys or one-time codes into WhatsApp.' })
 });
 agentTools.register({
     name: 'platform_verify_admin',
     description: 'Verify an administrator API credential against the named platform identity endpoint. Only reports the authenticated identity; it does not grant permissions beyond the provider token.',
     parameters: { type: 'object', properties: { platform: { type: 'string', maxLength: 48 } }, required: ['platform'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async ({ platform }) => platformAuth.verify(platform)
 });
 agentTools.register({
     name: 'github_verify_repository_admin',
     description: 'Verify that the authenticated GitHub account has administrator permission on a specific repository. Identity alone is not treated as repository administration.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async ({ owner, repo }) => {
         const identity = await platformAuth.verify('github');
         const repository = await githubAgent.assertRepositoryPermission(owner, repo, 'admin');
@@ -385,7 +385,7 @@ agentTools.register({
     name: 'github_security_audit',
     description: 'Perform a read-only static security review of a GitHub repository accessible to the configured GitHub token. Detects likely committed secrets and tracked environment files; does not exploit systems.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['systemAdmin','owner'],
+    permissions: ['admin','owner'],
     handler: async ({ owner, repo, branch }) => {
         // Verify the provider identity before using repository credentials.
         await platformAuth.verify('github');
@@ -415,29 +415,67 @@ agentTools.register({
         return dynamicCommands.create(spec, { approved: true });
     }
 });
+
+// Every catalogued WhatsApp command is exposed as an Agent tool. The tool
+// reuses the existing message handler rather than duplicating command logic.
+registerWhatsAppCommandTools(agentTools, async (entry, input, context) => {
+    const commandText = `${entry.command}${input ? ` ${input}` : ''}`.trim();
+    if (entry.id === 'ai') {
+        if (!String(input).trim()) throw new Error('Provide the question to ask JARVIS AI.');
+        return { answer: await askAIWithMemory(context.chatId, context.actor, String(input).trim()) };
+    }
+    if (!context.sock || typeof context.sock.jarvisProcessMessage !== 'function') {
+        throw new Error('WhatsApp command dispatcher is not ready yet. Try again after JARVIS reconnects.');
+    }
+    if (!context.chatId || !context.actor) throw new Error('The WhatsApp actor and chat context are required.');
+    const isGroup = String(context.chatId).endsWith('@g.us');
+    const mentionMatches = [...commandText.matchAll(/@([0-9]{7,15})/g)].map(match => `${match[1]}@s.whatsapp.net`);
+    const sourceMessage = context.sourceMessage?.message || {};
+    const sourceContextInfo = sourceMessage.extendedTextMessage?.contextInfo ||
+        sourceMessage.imageMessage?.contextInfo || sourceMessage.videoMessage?.contextInfo ||
+        sourceMessage.documentMessage?.contextInfo || sourceMessage.audioMessage?.contextInfo || {};
+    const mergedMentions = [...new Set([...(sourceContextInfo.mentionedJid || []), ...mentionMatches])];
+    const message = {
+        key: {
+            remoteJid: context.chatId,
+            participant: isGroup ? context.actor : undefined,
+            fromMe: false,
+            id: `JARVIS-AGENT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            jarvisAgentDispatch: true
+        },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+        pushName: 'JARVIS Agent',
+        message: (mergedMentions.length || sourceContextInfo.quotedMessage) ? {
+            extendedTextMessage: {
+                text: commandText,
+                contextInfo: { ...sourceContextInfo, mentionedJid: mergedMentions }
+            }
+        } : { conversation: commandText }
+    };
+    await context.sock.jarvisProcessMessage(message);
+    return { whatsappCommandDispatched: true, command: entry.command, chatId: context.chatId, note: 'The existing WhatsApp command handler processed this request and delivered its response in the chat.' };
+});
 agentTools.register({
     name: 'command_registry_list',
-    description: 'List the complete canonical WhatsApp command inventory, including aliases, subcommands and operational commands. This is the source of truth for JARVIS command discovery.',
-    parameters: { type: 'object', properties: { category: { type: 'string', maxLength: 80 } }, additionalProperties: false },
+    description: 'List every registered WhatsApp command form and its description.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
     permissions: ['user'],
-    handler: async ({ category }) => listCommands({ category })
+    handler: async () => COMMANDS.map(entry => ({ command: entry.command, description: entry.description, tool: `whatsapp_${entry.id}` }))
 });
 agentTools.register({
     name: 'command_registry_get',
-    description: 'Look up the exact metadata and Agent capability mapping for a registered WhatsApp command.',
-    parameters: { type: 'object', properties: { command: { type: 'string', maxLength: 100 } }, required: ['command'], additionalProperties: false },
+    description: 'Get the Agent tool mapping for a specific registered WhatsApp command.',
+    parameters: { type: 'object', properties: { command: { type: 'string', maxLength: 80 } }, required: ['command'], additionalProperties: false },
     permissions: ['user'],
     handler: async ({ command }) => {
-        const found = getCommand(command);
-        if (!found) throw new Error(`Command ${command} is not in the canonical registry.`);
-        return found;
+        const entry = COMMANDS.find(item => item.command.toLowerCase() === String(command).trim().toLowerCase());
+        return entry ? { ...entry, tool: `whatsapp_${entry.id}` } : { found: false, command };
     }
 });
 const jarvisAgent = createAgentBrain({
     registry: agentTools,
     askModel: async (prompt, options = {}) => askAI(prompt, null, options),
-    permissions: agentPermissions,
-    commandCatalog: () => listCommands()
+    permissions: agentPermissions
 });
 
 quizEngine.configurePollQuiz({
@@ -1980,8 +2018,7 @@ We wish you success ahead from *${groupName}* 🎓`,
         }
     }
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-    const m = messages[0];
+    const processJarvisMessage = async (m) => {
     if (!m?.message) return;
 
     const jid = m.key.remoteJid;
@@ -2047,7 +2084,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 isGroupAdmin: isWhatsAppGroupAdmin,
                 chatId: jid,
                 approve: approved,
-                execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: isConfiguredOwner, isSystemAdmin: isConfiguredSystemAdmin, isAdmin: isConfiguredSystemAdmin || isWhatsAppGroupAdmin, sock, approved: true })
+                execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: isConfiguredOwner, isAdmin: isConfiguredOwner || isConfiguredSystemAdmin || isWhatsAppGroupAdmin, sock, approved: true })
             });
             await sock.sendMessage(jid, { text: approved ? `✅ Approval ${result.approvalId} executed for ${result.tool}.\n\n${JSON.stringify(result.result?.result ?? result.result).slice(0, 2500)}` : `🚫 Approval ${result.approvalId} rejected. The action was not executed.` }, { quoted: m });
         } catch (error) {
@@ -3532,6 +3569,9 @@ if (hasReaction) {
 
     let command = text.split(/ +/)[0];
 const args = body.trim().split(/ +/).slice(1);
+if (/^!create(?:\s+document)?(?:\s|$)/i.test(body.trim()) || /^!generate(?:\s+pdf)?(?:\s|$)/i.test(body.trim())) {
+    command = '!createfile';
+}
 
 // ============================================================
 // 🤖 JARVIS TAG-TO-ENGAGE
@@ -3625,6 +3665,19 @@ for (const identity of botIdentities) {
 }
 aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 
+
+// `!quiz off` is a documented alias for the existing !stopquiz action.
+if (command === '!quiz' && String(args[0] || '').toLowerCase() === 'off') {
+    const isGroupAdmin = await isCurrentWhatsAppGroupAdmin(sock, jid, sender);
+    if (!isOwner && !isGroupAdmin) {
+        return sock.sendMessage(jid, { text: '❌ Only a group administrator or bot owner can stop the quiz.' }, { quoted: m });
+    }
+    if (!jid?.endsWith('@g.us')) return sock.sendMessage(jid, { text: '❌ Quiz controls are available only inside a WhatsApp group.' }, { quoted: m });
+    const active = quizEngine.getActiveQuiz(jid);
+    if (!active) return sock.sendMessage(jid, { text: 'There is no active quiz in this group.' }, { quoted: m });
+    quizEngine.stopQuiz(jid);
+    return sock.sendMessage(jid, { text: '🛑 The active quiz has been stopped.' }, { quoted: m });
+}
 
 // ============================================================
 // 🧠 JARVIS LIVE QUIZ COMMAND SYSTEM
@@ -3982,7 +4035,7 @@ if (jid.endsWith('@g.us')) {
     const watchdogSenderIsAdmin = jid.endsWith('@g.us')
         ? (isStaff || await isCurrentWhatsAppGroupAdmin(sock, jid, sender))
         : false;
-    if (jid.endsWith('@g.us') && !watchdogSenderIsAdmin) {
+    if (jid.endsWith('@g.us') && !watchdogSenderIsAdmin && !m.key.jarvisAgentDispatch) {
 
         // The watchdog now uses whole-word matching and URL patterns; "code" is not "ode".
         const { isBadWord, isLink } = detectWatchdogViolation(text);
@@ -5390,10 +5443,11 @@ if (isAiCommand) {
                 chatId: jid,
                 isGroup: jid.endsWith('@g.us'),
                 isAdmin: !!isStaff,
-                isSystemAdmin: !!isConfiguredSystemAdmin,
                 sock,
-                isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER
+                isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER,
+                sourceMessage: m
             });
+            if (result.commandDispatched) return;
             aiReply = result.reply;
             await saveConversationTurn(jid, sender, actualPrompt, aiReply);
         } catch (agentErr) {
@@ -6048,7 +6102,16 @@ if (command === "!reset") {
     }, { quoted: m });
 }
 }
-});
+};
+
+    // Agent tools dispatch through the same validated WhatsApp message pipeline,
+    // preserving existing handlers, group metadata checks and reply behaviour.
+    sock.jarvisProcessMessage = processJarvisMessage;
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        for (const incoming of (messages || [])) {
+            await processJarvisMessage(incoming);
+        }
+    });
 }
 
 // ============================================================

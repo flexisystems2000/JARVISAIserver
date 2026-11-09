@@ -123,14 +123,15 @@ See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end 
 
 Natural-language requests are interpreted by the AI planner and mapped to registered tools. The former local keyword/regex natural-language router has been removed. Tool plans require a confidence value of at least 0.75 and still pass argument, role, rate-limit and approval checks. Deterministic explicit commands remain available. See `INTEGRATION-DEPLOYMENT.md` for the paired AI Link and Piper/PDF deployment steps.
 
-## Command and Agent registries (3.1.1)
 
-- See [`COMMAND-REGISTRY.md`](COMMAND-REGISTRY.md) for the complete human-readable inventory.
-- `agent/commandRegistry.js` is the canonical inventory for the WhatsApp `!` commands, menu aliases, multi-word subcommands, and operational commands such as `!settimetable`.
-- The Agent receives this inventory as planning context and can query it through `command_registry_list` and `command_registry_get`.
-- `agent/toolRegistry.js` remains the execution registry: the planner may execute only a real registered tool. The command inventory does not turn an unsupported command into an executable tool.
-- Existing WhatsApp command handlers remain in place. Commands without a mapped Agent capability continue to work through their existing `!` command path.
-- Read-only GitHub repository inspection tools require a configured JARVIS system admin or owner. WhatsApp group-admin status alone does not grant access to GitHub account/repository inspection.
-- GitHub write/deploy actions remain approval-gated. Approval can be granted by the configured JARVIS owner, a configured JARVIS system admin, or (for a group-scoped request) an administrator of the same requesting WhatsApp group.
-- Piper TTS remains unchanged.
+## Agent Command Registry (3.2.0)
 
+JARVIS exposes 68 WhatsApp command forms (including aliases and subcommands) as individual `whatsapp_*` Agent tools. The catalog lives in `agent/commandRegistry.js`; the Agent can inspect it through `command_registry_list` and `command_registry_get`.
+
+Agent command tools dispatch through the existing WhatsApp message handler. This deliberately reuses existing command implementations and their group/owner permission checks rather than creating parallel implementations. Command responses are sent by the original handler, so the Agent suppresses a duplicate conversational reply after dispatch.
+
+The 68 entries represent command forms, not 68 independent business capabilities: aliases such as `!dictionary`/`!define` and `!getgroupids`/`!groupids` reuse the same underlying handler. `!create document` and `!generate pdf` route to the existing PDF/document creation handler.
+
+Configured JARVIS system admins and the owner can use read-only GitHub inspection tools. System-admin privileges are kept separate from WhatsApp group-admin status: group actions verify live WhatsApp metadata, and group admins do not gain global GitHub or system-admin privileges. GitHub write/deploy operations remain approval-gated. Existing Piper TTS settings and endpoints are unchanged.
+
+Run `npm run check` and `npm test` before deployment. Live WhatsApp, AI endpoint, GitHub API and Render integration still need to be tested in the deployed environment.
