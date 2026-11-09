@@ -7,15 +7,12 @@ class PermissionManager {
   role(actor, context = {}) {
     const number = String(actor || '').split('@')[0].replace(/\D/g,'');
     if (number && number === this.ownerNumber) return 'owner';
-    if ((number && this.adminNumbers.has(number)) || context.isSystemAdmin === true) return 'systemAdmin';
-    // WhatsApp group administrators receive group-scoped admin permissions,
-    // but are deliberately not promoted to JARVIS system administrators.
-    if (context.isAdmin === true) return 'admin';
+    if (number && this.adminNumbers.has(number)) return 'admin';
     return 'user';
   }
   async assert({ actor, required = ['user'], context = {}, tool }) {
     const role = this.role(actor, context);
-    const levels = { user: 1, admin: 2, systemAdmin: 3, owner: 4 };
+    const levels = { user: 1, admin: 2, owner: 3 };
     const allowed = required.includes('public') || required.some(r => levels[role] >= (levels[r] || 99));
     if (!allowed) throw new Error(`Permission denied for ${tool || 'operation'} (role: ${role}).`);
   }
