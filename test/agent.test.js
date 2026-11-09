@@ -123,3 +123,41 @@ test('command inventor registers safe templates as callable tools', async () => 
  assert.equal(result.result.text,'Welcome Ada to Flexi!');
  await fs.promises.rm(dir,{recursive:true,force:true});
 });
+
+test('system admins are authorized for admin-scoped tools alongside the owner', async () => {
+ const permissions=createPermissionManager({ownerNumber:'1111111111',adminNumbers:['2222222222']});
+ const registry=createToolRegistry({permissions});
+ registry.register({name:'admin_read_tool',description:'admin read',parameters:{type:'object',properties:{},additionalProperties:false},permissions:['admin','owner'],handler:async()=>({ok:true})});
+ assert.equal((await registry.execute('admin_read_tool',{}, {actor:'2222222222@s.whatsapp.net'})).result.ok,true);
+ assert.equal((await registry.execute('admin_read_tool',{}, {actor:'1111111111@s.whatsapp.net'})).result.ok,true);
+ await assert.rejects(()=>registry.execute('admin_read_tool',{}, {actor:'3333333333@s.whatsapp.net'}),/Permission denied/);
+});
+
+test('agent brain does not send a duplicate AI reply after a WhatsApp command handler replies', async () => {
+ const registry=createToolRegistry();
+ registry.register({name:'wa_command',description:'dispatch',parameters:{type:'object',properties:{},additionalProperties:false},handler:async()=>({whatsappCommandDispatched:true,command:'!status'})});
+ let calls=0;
+ const brain=createAgentBrain({registry,askModel:async()=>{calls++;return JSON.stringify({action:'tool',tool:'wa_command',arguments:{},confidence:0.99});}});
+ const result=await brain.handle({message:'check status',actor:'user'});
+ assert.equal(result.commandDispatched,true);
+ assert.equal(result.reply,'');
+ assert.equal(calls,1);
+});
+
+test('system admins can approve approval-gated actions', async () => {
+ const dir=await fs.promises.mkdtemp(path.join(os.tmpdir(),'jarvis-system-admin-'));
+ const approvals=new ApprovalManager({directory:dir});
+ await approvals.load();
+ const pending=await approvals.request({tool:'sensitive_tool',args:{},context:{actor:'member',chatId:'private-chat',isGroup:false}});
+ const result=await approvals.decide(pending.approvalId,{actor:'admin',isSystemAdmin:true,approve:true,execute:async()=>({completed:true})});
+ assert.equal(result.status,'executed');
+ await fs.promises.rm(dir,{recursive:true,force:true});
+});
+
+test('WhatsApp group-admin status does not grant global JARVIS system-admin permissions', async () => {
+ const permissions=createPermissionManager({ownerNumber:'1111111111',adminNumbers:['2222222222']});
+ const registry=createToolRegistry({permissions});
+ registry.register({name:'github_admin_action',description:'system admin action',parameters:{type:'object',properties:{},additionalProperties:false},permissions:['admin','owner'],handler:async()=>true});
+ await assert.rejects(()=>registry.execute('github_admin_action',{}, {actor:'3333333333@s.whatsapp.net',isAdmin:true}),/Permission denied/);
+ assert.equal((await registry.execute('github_admin_action',{}, {actor:'2222222222@s.whatsapp.net'})).result,true);
+});
