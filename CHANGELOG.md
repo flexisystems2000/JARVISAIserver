@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.3.0 — AI-led discovery, bounded prompts and multi-step execution
+
+- Replaced the planner's all-tools/all-schemas prompt with an AI-led discovery pass using a compact, permission-filtered tool catalog, followed by detailed schemas for only the selected tools.
+- Added validated multi-step plans (up to five actions); every step and nested argument is validated before the first side effect, and execution stops when approval is pending or a WhatsApp command has already replied.
+- Added one correction attempt for malformed or schema-invalid plans; invalid plans never execute.
+- Added a configurable 35,000–40,000 character planner prompt budget, prioritizing the current request and trimming older conversation context.
+- Added preflight measurement of serialized AI request bytes, correlation IDs and structured gateway error diagnostics.
+- Preserved all 68 WhatsApp command forms, existing dispatch handlers, permission checks, approval gates, group-admin separation, and Piper/TTS behavior.
+- Added planner discovery, multi-step, nested-schema, prompt-budget, and gateway diagnostic tests.
+
+
 ## 3.2.0 — Full WhatsApp command tool integration
 
 - Added a 68-entry Command Registry in `agent/commandRegistry.js`, including aliases and subcommands.

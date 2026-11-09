@@ -1,4 +1,4 @@
-# JARVIS 3.0.0 + AI Link 1.4.0 + Piper/PDF integration
+# JARVIS 3.3.0 + AI Link 1.5.0 + Piper/PDF integration
 
 ## Service responsibilities
 
@@ -9,11 +9,11 @@
 
 ## Deployment order
 
-1. Deploy **AI Link 1.4.0**. Set `JARVIS_API_KEY` and at least one `GEMINI_API_KEY_1`. Add optional key-rotation entries only if needed.
+1. Deploy **AI Link 1.5.0**. Set `JARVIS_API_KEY` and at least one `GEMINI_API_KEY_1`. Add optional key-rotation entries only if needed.
 2. Set JARVIS `AI_API_URL` to the AI Link base URL and `AI_API_KEY` to the exact same secret as AI Link `JARVIS_API_KEY`.
 3. Deploy the updated **Flexi-Jarvis-Piper-TTS** project. Its `app.py` mounts `piper_pdf_router.py` directly. The Dockerfile copies both files, and `requirements.txt` includes ReportLab and PyMuPDF. Keep the existing Piper voice/model and the other media integrations.
 4. Set the same `PIPER_API_KEY` on JARVIS and the Piper service. Set JARVIS `PIPER_DOCUMENT_API_URL` to the Piper service base URL.
-5. Deploy **JARVIS 3.0.0**. Keep existing production environment values; use `.env.example` as the reference for names.
+5. Deploy **JARVIS 3.3.0**. Keep existing production environment values; use `.env.example` as the reference for names.
 
 ## Required service settings
 
@@ -23,6 +23,10 @@
 | `AI_API_KEY` | JARVIS | Same secret as AI Link `JARVIS_API_KEY` |
 | `JARVIS_API_KEY` | AI Link | Shared secret for private service calls |
 | `GEMINI_API_KEY_1` | AI Link | Primary Gemini key |
+| `AI_MAX_PROMPT_CHARS` | AI Link | Optional lower prompt ceiling; default 50,000 chars |
+| `AI_MAX_REQUEST_BYTES` | AI Link | Optional serialized request cap; default 12 MB |
+| `JARVIS_AGENT_PROMPT_MAX_CHARS` | JARVIS | Planner prompt budget, clamped to 35,000–40,000; default 38,000 |
+| `JARVIS_AI_MAX_PROMPT_CHARS` | JARVIS | Shared AI adapter prompt cap, clamped to 35,000–40,000; default 38,000 |
 | `PIPER_API_KEY` | JARVIS and Piper | Shared secret for Piper and PDF calls |
 | `PIPER_DOCUMENT_API_URL` | JARVIS | Piper service base URL |
 | `OWNER_NUMBER` | JARVIS | WhatsApp owner number, digits only |
@@ -33,7 +37,9 @@ Optional integrations: `ALOC_TOKEN`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_ALL
 ## Smoke tests
 
 - `GET <AI_API_URL>/test` reports the AI Link online.
-- An authenticated `/ai` request with `responseFormat: "json"` returns a JSON object.
+- An authenticated `/ai` request with `responseFormat: "json"` returns a JSON object and an `x-correlation-id` header.
+- A prompt over JARVIS's configured prompt budget is rejected before the HTTP request; an AI Link prompt over its gateway ceiling returns structured HTTP 413 diagnostics.
+- Review logs by correlation ID to compare prompt characters, serialized request bytes, response format, model and error class.
 - JARVIS can answer an ordinary AI question and use a registered tool when the AI plan is sufficiently confident and the actor is authorised.
 - `POST <PIPER_DOCUMENT_API_URL>/pdf/generate` returns a valid PDF when called with `x-api-key`.
 - `POST <PIPER_DOCUMENT_API_URL>/pdf/extract` extracts text from a text-based PDF.
@@ -50,3 +56,9 @@ Optional integrations: `ALOC_TOKEN`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_ALL
 - The included tests are local unit/syntax tests; live WhatsApp, Gemini, ALOC, Piper and external-provider integration tests require deployment credentials and a controlled test account.
 
 Never paste credentials into WhatsApp or commit real secrets to source control. Configure secrets in the hosting provider's environment settings.
+
+## Planner behavior in 3.3.0
+
+The first model call receives a compact, role-filtered tool catalog without full schemas. The model selects up to eight candidate tools; the second call receives detailed schemas only for those candidates and returns a plan of up to five ordered steps. JARVIS validates the complete plan—including nested object and array arguments—before any side effect. It makes one correction attempt for invalid structured output. An approval-pending result pauses the remaining steps. Existing WhatsApp command dispatch, all 68 command forms, owner/system-admin checks, live group-admin checks and Piper voice routes remain in place.
+
+Run `npm test` and `npm run check` in both Node projects before deploying. Live WhatsApp, Gemini, ALOC and Piper smoke tests still require the production/staging credentials and a controlled test group.

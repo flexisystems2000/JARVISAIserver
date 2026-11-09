@@ -1,7 +1,7 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "3.2.1",
-  "description": "JARVIS WhatsApp AI agent with 68 command tools, resilient planner parsing and explicit AI gateway errors",
+  "version": "3.3.0",
+  "description": "JARVIS WhatsApp AI agent with AI-led tool discovery, bounded prompts and validated multi-step execution",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

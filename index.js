@@ -15,6 +15,7 @@ const mongoose = require('mongoose');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 require('dotenv').config();
 const quizEngine = require('./quizEngine');
@@ -1201,30 +1202,60 @@ if (MONGO_URI) {
 
 // --- AUTHENTICATED AI GATEWAY ---
 async function askAI(prompt, base64Media = null, options = {}) {
+    const correlationId = crypto.randomUUID();
+    const maxPromptChars = Math.max(35000, Math.min(Number(process.env.JARVIS_AI_MAX_PROMPT_CHARS) || 38000, 40000));
     try {
         if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
+        const promptText = String(prompt || '');
         const payload = {
-            prompt: String(prompt || ''),
+            prompt: promptText,
             botName: 'Jarvis',
             ...(base64Media ? { image: base64Media } : {}),
             ...(options.responseFormat ? { responseFormat: options.responseFormat } : {})
         };
+        const requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+        const metrics = { correlationId, promptChars: promptText.length, requestBytes, responseFormat: options.responseFormat || 'text', model: process.env.GEMINI_MODEL || 'gateway-default' };
+        if (promptText.length > maxPromptChars) {
+            const error = new Error(`AI prompt budget exceeded before sending (${promptText.length}/${maxPromptChars} characters).`);
+            error.code = 'JARVIS_PROMPT_BUDGET_EXCEEDED';
+            error.metrics = metrics;
+            throw error;
+        }
+        if (requestBytes > 12 * 1024 * 1024) {
+            const error = new Error(`Serialized AI request exceeds JARVIS's 12 MB transport limit (${requestBytes} bytes).`);
+            error.code = 'JARVIS_REQUEST_BUDGET_EXCEEDED';
+            error.metrics = metrics;
+            throw error;
+        }
+        console.info('[AI GATEWAY] Request', metrics);
         const res = await axios.post(`${AI_API_URL}/ai`, payload, {
             timeout: AI_TIMEOUT_MS,
             maxContentLength: 12 * 1024 * 1024,
             maxBodyLength: 12 * 1024 * 1024,
-            headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY }
+            headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY, 'x-correlation-id': correlationId }
         });
-        if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
+        if (!res.data?.success) {
+            const error = new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
+            error.response = { status: res.status, data: res.data };
+            throw error;
+        }
+        console.info('[AI GATEWAY] Success', { ...metrics, gatewayCorrelationId: res.headers?.['x-correlation-id'] || res.data?.correlationId || correlationId });
         return res.data?.result || '🤖 No response from AI';
     } catch (err) {
         const status = err.response?.status;
-        const gatewayMessage = err.response?.data?.error || err.response?.data?.message || err.message;
-        console.error('[AI GATEWAY] Request failed:', status || err.code || gatewayMessage);
+        const responseData = err.response?.data || {};
+        const gatewayMessage = responseData.error || responseData.message || err.message;
+        const diagnostic = { correlationId, status: status || null, code: responseData.code || err.code || null, promptChars: err.metrics?.promptChars ?? String(prompt || '').length, requestBytes: err.metrics?.requestBytes ?? null, responseFormat: options.responseFormat || 'text', gatewayCorrelationId: responseData.correlationId || null };
+        console.error('[AI GATEWAY] Request failed', diagnostic);
         if (options.throwOnError) {
             const detail = status ? `HTTP ${status}` : (err.code || 'request error');
-            throw new Error(`AI gateway request failed (${detail}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 220)}`);
+            const failure = new Error(`AI gateway request failed (${detail}${responseData.code ? `/${responseData.code}` : ''}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 220)}`);
+            failure.code = responseData.code || err.code || 'AI_GATEWAY_ERROR';
+            failure.status = status || null;
+            failure.correlationId = responseData.correlationId || correlationId;
+            throw failure;
         }
+        if (err.code === 'JARVIS_PROMPT_BUDGET_EXCEEDED') return '⚠️ This request is too large for the AI prompt budget. Please shorten it and try again.';
         return '⚠️ AI service unavailable. Please try again shortly.';
     }
 }
