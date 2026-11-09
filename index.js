@@ -474,7 +474,7 @@ agentTools.register({
 });
 const jarvisAgent = createAgentBrain({
     registry: agentTools,
-    askModel: async (prompt, options = {}) => askAI(prompt, null, options),
+    askModel: async (prompt, options = {}) => askAI(prompt, null, { ...options, throwOnError: true }),
     permissions: agentPermissions
 });
 
@@ -1218,7 +1218,13 @@ async function askAI(prompt, base64Media = null, options = {}) {
         if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
         return res.data?.result || '🤖 No response from AI';
     } catch (err) {
-        console.error('[AI GATEWAY] Request failed:', err.response?.status || err.code || err.message);
+        const status = err.response?.status;
+        const gatewayMessage = err.response?.data?.error || err.response?.data?.message || err.message;
+        console.error('[AI GATEWAY] Request failed:', status || err.code || gatewayMessage);
+        if (options.throwOnError) {
+            const detail = status ? `HTTP ${status}` : (err.code || 'request error');
+            throw new Error(`AI gateway request failed (${detail}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 220)}`);
+        }
         return '⚠️ AI service unavailable. Please try again shortly.';
     }
 }

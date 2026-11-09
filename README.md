@@ -135,3 +135,6 @@ The 68 entries represent command forms, not 68 independent business capabilities
 Configured JARVIS system admins and the owner can use read-only GitHub inspection tools. System-admin privileges are kept separate from WhatsApp group-admin status: group actions verify live WhatsApp metadata, and group admins do not gain global GitHub or system-admin privileges. GitHub write/deploy operations remain approval-gated. Existing Piper TTS settings and endpoints are unchanged.
 
 Run `npm run check` and `npm test` before deployment. Live WhatsApp, AI endpoint, GitHub API and Render integration still need to be tested in the deployed environment.
+
+### AI planner troubleshooting (3.2.1)
+The planner accepts valid JSON objects, fenced JSON, and a JSON object embedded in a model response. If the first response is malformed, it requests one corrected JSON response; it never executes a tool until the plan validates. AI gateway HTTP/network errors are surfaced separately, so check the JARVIS logs for `[AI GATEWAY] Request failed` and verify `AI_API_URL`, `AI_API_KEY`, and the AI Link JSON-mode response if a planner request still fails.

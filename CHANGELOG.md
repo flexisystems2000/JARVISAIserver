@@ -15,3 +15,9 @@
 ## 3.1.0
 
 - Existing JARVIS AI WhatsApp agent, command handlers, GitHub tools, Command Inventor, poll quiz, PDF service and Piper TTS functionality.
+
+## 3.2.1
+- Hardened AI planner parsing for JSON objects, fenced JSON and JSON embedded in model text.
+- Added one safe planner-format repair attempt; no tool runs until the repaired plan validates.
+- Propagated AI gateway failures to the Agent instead of disguising them as malformed JSON.
+- Added tests for malformed output recovery and gateway/network failures.
