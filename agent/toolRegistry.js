@@ -1,40 +1,82 @@
 'use strict';
+function validateSchemaValue(schema, value, path) {
+  const type = schema?.type;
+  const invalid = expected => { throw new Error(`${path} must be ${expected}`); };
+  if (type === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('an object');
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) if (!schema.properties?.[key]) throw new Error(`Unexpected argument: ${path === 'arguments' ? key : `${path}.${key}`}`);
+    }
+    for (const key of schema.required || []) if (!(key in value)) throw new Error(`Missing required argument: ${path === 'arguments' ? key : `${path}.${key}`}`);
+    for (const [key, child] of Object.entries(value)) {
+      const rule = schema.properties?.[key];
+      if (rule) validateSchemaValue(rule, child, `${path}.${key}`);
+    }
+  } else if (type === 'array') {
+    if (!Array.isArray(value)) invalid('an array');
+    if (schema.minItems !== undefined && value.length < schema.minItems) throw new Error(`${path} has too few items`);
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) throw new Error(`${path} has too many items`);
+    if (schema.items) value.forEach((item, index) => validateSchemaValue(schema.items, item, `${path}[${index}]`));
+  } else if (type === 'string') {
+    if (typeof value !== 'string') invalid('a string');
+    if (schema.minLength !== undefined && value.length < schema.minLength) throw new Error(`${path} is too short`);
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) throw new Error(`${path} is too long`);
+    if (schema.pattern && !(new RegExp(schema.pattern).test(value))) throw new Error(`${path} has an invalid format`);
+  } else if (type === 'integer') {
+    if (!Number.isInteger(value)) invalid('an integer');
+  } else if (type === 'number') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) invalid('a finite number');
+  } else if (type === 'boolean') {
+    if (typeof value !== 'boolean') invalid('a boolean');
+  } else if (type && type !== 'null') {
+    throw new Error(`Unsupported schema type ${type} at ${path}`);
+  }
+  if (schema.enum && !schema.enum.includes(value)) throw new Error(`${path} has an unsupported value`);
+  if (schema.minimum !== undefined && typeof value === 'number' && value < schema.minimum) throw new Error(`${path} is below its minimum`);
+  if (schema.maximum !== undefined && typeof value === 'number' && value > schema.maximum) throw new Error(`${path} exceeds its maximum`);
+}
 class ToolRegistry {
-  constructor({ permissions, audit, approvals } = {}) { this.tools = new Map(); this.permissions = permissions; this.audit = audit; this.approvals = approvals; }
+  constructor({ permissions, audit, approvals } = {}) {
+    this.tools = new Map(); this.permissions = permissions; this.audit = audit; this.approvals = approvals;
+  }
   register(tool) {
     if (!tool || !/^[a-z][a-z0-9_]{1,63}$/.test(tool.name || '') || typeof tool.handler !== 'function') throw new Error('Invalid tool registration');
     if (!tool.description || !tool.parameters || typeof tool.parameters !== 'object') throw new Error(`Tool ${tool.name} needs a description and parameter schema`);
-    this.tools.set(tool.name, Object.freeze({ ...tool }));
-    return this;
+    this.tools.set(tool.name, Object.freeze({ ...tool })); return this;
   }
   unregister(name) { return this.tools.delete(name); }
-  describe() { return [...this.tools.values()].map(({ name, description, parameters, permissions, requiresApproval }) => ({ name, description, parameters, permissions: permissions || ['user'], requiresApproval: !!requiresApproval })); }
+  canActorUse(tool, actor) {
+    const required = tool.permissions || ['user'];
+    if (required.includes('public') || !this.permissions) return true;
+    const role = this.permissions.role(actor);
+    const levels = { user: 1, admin: 2, owner: 3 };
+    return required.some(r => levels[role] >= (levels[r] || 99));
+  }
+  catalog({ actor, maxTools = 180, descriptionLimit = 150 } = {}) {
+    return [...this.tools.values()]
+      .filter(tool => this.canActorUse(tool, actor))
+      .slice(0, Math.max(1, Math.min(Number(maxTools) || 180, 250)))
+      .map(({ name, description, permissions, requiresApproval, dynamicCommand }) => ({
+        name,
+        description: String(description).replace(/\s+/g, ' ').slice(0, descriptionLimit),
+        ...(requiresApproval ? { approval: true } : {}),
+        ...(dynamicCommand ? { dynamic: true } : {})
+      }));
+  }
+  describe(names) {
+    const selected = names == null ? [...this.tools.values()] : names.map(name => this.tools.get(name)).filter(Boolean);
+    return selected.map(({ name, description, parameters, permissions, requiresApproval }) => ({
+      name, description, parameters, permissions: permissions || ['user'], requiresApproval: !!requiresApproval
+    }));
+  }
   validateArguments(schema, args) {
-    if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be an object');
-    if (schema.additionalProperties === false) for (const key of Object.keys(args)) if (!schema.properties?.[key]) throw new Error(`Unexpected argument: ${key}`);
-    for (const key of schema.required || []) if (!(key in args)) throw new Error(`Missing required argument: ${key}`);
-    for (const [key, value] of Object.entries(args)) {
-      const rule = schema.properties?.[key]; if (!rule) continue;
-      if (rule.type === 'string' && typeof value !== 'string') throw new Error(`${key} must be a string`);
-      if (rule.type === 'integer' && !Number.isInteger(value)) throw new Error(`${key} must be an integer`);
-      if (rule.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`${key} must be a finite number`);
-      if (rule.type === 'boolean' && typeof value !== 'boolean') throw new Error(`${key} must be a boolean`);
-      if (rule.type === 'array' && !Array.isArray(value)) throw new Error(`${key} must be an array`);
-      if (rule.enum && !rule.enum.includes(value)) throw new Error(`${key} has an unsupported value`);
-      if (rule.minimum !== undefined && typeof value === 'number' && value < rule.minimum) throw new Error(`${key} is below its minimum`);
-      if (rule.maximum !== undefined && typeof value === 'number' && value > rule.maximum) throw new Error(`${key} exceeds its maximum`);
-      if (rule.minLength !== undefined && typeof value === 'string' && value.length < rule.minLength) throw new Error(`${key} is too short`);
-      if (rule.maxLength !== undefined && typeof value === 'string' && value.length > rule.maxLength) throw new Error(`${key} is too long`);
-      if (rule.minItems !== undefined && Array.isArray(value) && value.length < rule.minItems) throw new Error(`${key} has too few items`);
-      if (rule.maxItems !== undefined && Array.isArray(value) && value.length > rule.maxItems) throw new Error(`${key} has too many items`);
-    }
+    validateSchemaValue(schema, args, 'arguments');
   }
   async execute(name, args, context = {}) {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
     this.validateArguments(tool.parameters, args || {});
-    const actor = String(context.actor || 'anonymous');
-    const now = Date.now();
+    const actor = String(context.actor || 'anonymous'), now = Date.now();
     this.rateLimits ||= new Map();
     const recent = (this.rateLimits.get(actor) || []).filter(t => now - t < 60000);
     if (recent.length >= 12) throw new Error('Tool rate limit exceeded. Try again in one minute.');
