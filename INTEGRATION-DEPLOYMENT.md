@@ -35,10 +35,6 @@ Optional integrations: `ALOC_TOKEN`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_ALL
 - `GET <AI_API_URL>/test` reports the AI Link online.
 - An authenticated `/ai` request with `responseFormat: "json"` returns a JSON object.
 - JARVIS can answer an ordinary AI question and use a registered tool when the AI plan is sufficiently confident and the actor is authorised.
-- `!quiz off` stops only the active quiz in the current group.
-- JARVIS uses the WhatsApp push/profile name when available and does not invent a name when unavailable.
-- `!command list` and `!command create name | description | template` exercise the approval-gated Command Inventor.
-- Ask JARVIS to create a static website; approve the pending GitHub deployment, then verify the returned GitHub Pages URL.
 - `POST <PIPER_DOCUMENT_API_URL>/pdf/generate` returns a valid PDF when called with `x-api-key`.
 - `POST <PIPER_DOCUMENT_API_URL>/pdf/extract` extracts text from a text-based PDF.
 - Piper `/tts` continues to generate the same voice output as before.
@@ -49,7 +45,6 @@ Optional integrations: `ALOC_TOKEN`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_ALL
 
 - The generic platform-auth mechanism verifies configured provider tokens; it does not magically integrate every website. Each platform needs a real provider adapter and resource-level permission checks.
 - Dynamic command builder currently persists safe text-template commands only; it does not generate arbitrary executable programs.
-- The Coding Agent currently creates static GitHub Pages websites only. Dynamic backend deployment needs an explicit provider adapter and deployment workflow.
 - PDF extraction handles text-based PDFs. OCR for scanned/image-only PDFs is not included.
 - The existing Render instance with 0.5 CPU / 512 MB RAM should not be assumed to support heavier workloads. Piper's current hosting/runtime constraints are unchanged by this package.
 - The included tests are local unit/syntax tests; live WhatsApp, Gemini, ALOC, Piper and external-provider integration tests require deployment credentials and a controlled test account.
