@@ -107,7 +107,7 @@ function createAgentBrain({ registry, askModel }) {
   return {
     async handle({ message, history = '', actor, chatId, isGroup = false, isOwner = false, isAdmin = false, sock, sourceMessage } = {}) {
       const context = { actor, chatId, isGroup, isOwner, isAdmin, sock, sourceMessage };
-      const catalog = registry.catalog({ actor, maxTools: 180, descriptionLimit: 145 });
+      const catalog = registry.catalog({ actor, context: { isGroup, isAdmin }, maxTools: 180, descriptionLimit: 145 });
       const catalogText = `DISCOVERABLE TOOL CATALOG (names and concise capabilities only; request detailed schemas for selected tools):\n${JSON.stringify(catalog)}`;
       const firstPrompt = boundedPrompt({ catalog: catalogText, history, message });
       const first = await askWithOneRepair(askModel, firstPrompt, plan => {

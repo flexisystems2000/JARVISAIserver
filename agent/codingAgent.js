@@ -24,6 +24,7 @@ class CodingAgent {
     if (!approved) throw new Error('Owner/system-admin approval is required before creating a public repository or deploying a website.');
     const brief = String(request || '').trim();
     if (brief.length < 8 || brief.length > 6000) throw new Error('Website request must contain between 8 and 6,000 characters.');
+    if (!this.github.token) throw new Error('GitHub is not connected. Configure GITHUB_TOKEN in the JARVIS hosting environment before creating a website.');
 
     const generated = await this.generator.generate({ request: brief, projectName: repositoryName });
     const files = validateProjectFiles(generated.files, { maxFiles: 30, maxFileBytes: 50000, maxTotalBytes: 450000 });

@@ -46,16 +46,20 @@ class ToolRegistry {
     this.tools.set(tool.name, Object.freeze({ ...tool })); return this;
   }
   unregister(name) { return this.tools.delete(name); }
-  canActorUse(tool, actor) {
+  canActorUse(tool, actor, context = {}) {
     const required = tool.permissions || ['user'];
     if (required.includes('public') || !this.permissions) return true;
     const role = this.permissions.role(actor);
     const levels = { user: 1, admin: 2, owner: 3 };
-    return required.some(r => levels[role] >= (levels[r] || 99));
+    const globallyAllowed = required.some(r => levels[role] >= (levels[r] || 99));
+    // Only explicitly opted-in tools may be surfaced to a WhatsApp group admin.
+    // The approval manager still requires approval in the same requesting group.
+    const groupAdminAllowed = tool.groupAdminAllowed === true && context.isGroup === true && context.isAdmin === true;
+    return globallyAllowed || groupAdminAllowed;
   }
-  catalog({ actor, maxTools = 180, descriptionLimit = 150 } = {}) {
+  catalog({ actor, context = {}, maxTools = 180, descriptionLimit = 150 } = {}) {
     return [...this.tools.values()]
-      .filter(tool => this.canActorUse(tool, actor))
+      .filter(tool => this.canActorUse(tool, actor, context))
       .slice(0, Math.max(1, Math.min(Number(maxTools) || 180, 250)))
       .map(({ name, description, permissions, requiresApproval, dynamicCommand }) => ({
         name,
@@ -82,7 +86,9 @@ class ToolRegistry {
     const recent = (this.rateLimits.get(actor) || []).filter(t => now - t < 60000);
     if (recent.length >= 12) throw new Error('Tool rate limit exceeded. Try again in one minute.');
     recent.push(now); this.rateLimits.set(actor, recent);
-    if (this.permissions) await this.permissions.assert({ actor: context.actor, required: tool.permissions || ['user'], context, tool: name });
+    if (this.permissions && !(tool.groupAdminAllowed === true && context.isGroup === true && context.isAdmin === true)) {
+      await this.permissions.assert({ actor: context.actor, required: tool.permissions || ['user'], context, tool: name });
+    }
     if (tool.requiresApproval && context.approved !== true) {
       if (!this.approvals) throw new Error(`Approval is required for ${name}, but the approval manager is unavailable.`);
       return { success: false, tool: name, result: await this.approvals.request({ tool: name, args: args || {}, context }) };
