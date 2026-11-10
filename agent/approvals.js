@@ -40,16 +40,17 @@ class ApprovalManager {
     this.pending.set(id, item);
     await this.persist(item);
     await this.audit?.write({ type: 'approval.requested', approvalId: id, actor: item.requester, tool });
-    return { approvalRequired: true, approvalId: id, expiresAt: new Date(item.expiresAt).toISOString(), message: `Approval ${id} is pending. An owner must use !approve ${id} or !reject ${id}.` };
+    return { approvalRequired: true, approvalId: id, expiresAt: new Date(item.expiresAt).toISOString(), message: `Approval ${id} is pending. The JARVIS owner/system admin or an administrator of the requesting WhatsApp group can use !approve ${id} or !reject ${id}.` };
   }
-  async decide(id, { actor, isOwner = false, approve = false, execute }) {
+  async decide(id, { actor, isOwner = false, isSystemAdmin = false, isGroupAdmin = false, chatId = '', approve = false, execute }) {
     const key = String(id || '').toUpperCase();
     const item = this.pending.get(key);
     if (!item || item.expiresAt <= Date.now()) {
       if (item) this.pending.delete(key);
       throw new Error('Approval not found or expired.');
     }
-    if (!isOwner) throw new Error('Only the configured JARVIS owner can approve or reject pending actions.');
+    const sameRequestingGroup = !!item.isGroup && !!item.chatId && String(chatId) === String(item.chatId);
+    if (!isOwner && !isSystemAdmin && !(isGroupAdmin && sameRequestingGroup)) throw new Error('Approval requires the JARVIS owner/system admin or an administrator of the WhatsApp group where the action was requested.');
     if (typeof execute !== 'function' && approve) throw new Error('Approval executor unavailable.');
     this.pending.delete(key);
     item.status = approve ? 'approved' : 'rejected';
@@ -72,6 +73,6 @@ class ApprovalManager {
       throw error;
     }
   }
-  list() { return [...this.pending.values()].map(x => ({ id: x.id, tool: x.tool, requester: x.requester, expiresAt: new Date(x.expiresAt).toISOString() })); }
+  list({ chatId, includeAll = false } = {}) { return [...this.pending.values()].filter(x => includeAll || (chatId && x.isGroup && x.chatId === chatId)).map(x => ({ id: x.id, tool: x.tool, requester: x.requester, chatId: x.chatId, isGroup: x.isGroup, expiresAt: new Date(x.expiresAt).toISOString() })); }
 }
 module.exports = { ApprovalManager };
