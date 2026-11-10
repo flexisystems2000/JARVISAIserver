@@ -195,3 +195,24 @@ test('tool registry rejects duplicate registrations instead of silently replacin
   registry.register({ name: 'single_tool', description: 'A valid tool.', parameters: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => 'first' });
   assert.throws(() => registry.register({ name: 'single_tool', description: 'A valid tool.', parameters: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => 'second' }), /Duplicate tool registration/);
 });
+
+test('group admins can discover and request approval for explicitly group-scoped GitHub website creation', async () => {
+ const permissions=createPermissionManager({ownerNumber:'1111111111'});
+ const approvals={request:async item=>({approvalRequired:true,approvalId:'ABCD1234',tool:item.tool})};
+ const registry=createToolRegistry({permissions,approvals});
+ registry.register({name:'website_create_and_deploy',description:'Create a static website and publish it with GitHub Pages.',parameters:{type:'object',properties:{repo:{type:'string'},request:{type:'string'}},required:['repo','request'],additionalProperties:false},permissions:['admin','owner'],groupAdminAllowed:true,requiresApproval:true,handler:async()=>({published:true})});
+ const groupContext={isGroup:true,isAdmin:true};
+ assert.equal(registry.catalog({actor:'3333333333@s.whatsapp.net',context:groupContext}).some(t=>t.name==='website_create_and_deploy'),true);
+ assert.equal(registry.catalog({actor:'3333333333@s.whatsapp.net',context:{isGroup:true,isAdmin:false}}).some(t=>t.name==='website_create_and_deploy'),false);
+ assert.equal(registry.catalog({actor:'3333333333@s.whatsapp.net',context:{isGroup:false,isAdmin:true}}).some(t=>t.name==='website_create_and_deploy'),false);
+ const pending=await registry.execute('website_create_and_deploy',{repo:'school-site',request:'Build a school website'},{actor:'3333333333@s.whatsapp.net',...groupContext});
+ assert.equal(pending.result.approvalRequired,true);
+});
+
+test('group-admin exception is limited to tools explicitly marked groupAdminAllowed', async () => {
+ const permissions=createPermissionManager({ownerNumber:'1111111111'});
+ const registry=createToolRegistry({permissions});
+ registry.register({name:'global_admin_action',description:'Global action',parameters:{type:'object',properties:{},additionalProperties:false},permissions:['admin','owner'],handler:async()=>true});
+ assert.equal(registry.catalog({actor:'3333333333@s.whatsapp.net',context:{isGroup:true,isAdmin:true}}).some(t=>t.name==='global_admin_action'),false);
+ await assert.rejects(()=>registry.execute('global_admin_action',{}, {actor:'3333333333@s.whatsapp.net',isGroup:true,isAdmin:true}),/Permission denied/);
+});

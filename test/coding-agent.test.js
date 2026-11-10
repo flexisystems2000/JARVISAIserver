@@ -28,6 +28,7 @@ test('coding agent uses the actual GitHub static publisher after approval', asyn
   let published = null;
   let saved = null;
   const github = {
+    token: 'test-token',
     createAndDeployStaticWebsite: async (owner, repo, description, files, approved) => {
       published = { owner, repo, description, files, approved };
       return { repository: 'academy/sample-site', pagesUrl: 'https://academy.github.io/sample-site/', pagesConfigured: true, liveVerified: false, filesPublished: ['index.html'], note: 'Awaiting Pages propagation.' };
@@ -46,4 +47,12 @@ test('coding agent uses the actual GitHub static publisher after approval', asyn
   assert.equal(saved.repository, 'academy/sample-site');
   assert.equal(result.liveUrl, 'https://academy.github.io/sample-site/');
   assert.equal(result.deploymentVerified, false, 'configured URL must not be reported as live-verified');
+});
+
+
+test('coding agent reports missing GitHub connection before spending an AI generation call', async () => {
+ let generated=false;
+ const agent=new CodingAgent({github:{token:'',createAndDeployStaticWebsite:async()=>({})},askModel:async()=>{generated=true;return '{}';}});
+ await assert.rejects(()=>agent.createAndDeploy({request:'Create a school website',repositoryName:'school',approved:true}),/Configure GITHUB_TOKEN/);
+ assert.equal(generated,false);
 });
