@@ -52,12 +52,20 @@
 - Kept ALOC poll quiz orchestration and 30-second vote flow inside JARVIS.
 - Live Piper route deployment and WhatsApp/ALOC/Gemini/GitHub integrations still require staging credentials and end-to-end testing.
 
-## 3.1.0
 
-- Added `!quiz off` to stop the active poll quiz in the current group and cancel its timer.
-- Added WhatsApp push/profile-name resolution to the AI conversation context.
-- Added a built-in WhatsApp command registry with menu commands and aliases.
-- Connected approved safe Command Inventor templates to runnable `!custom_command` names.
-- Added Coding Agent modules for static website generation, validation, GitHub repository creation, GitHub Pages publishing and live URL verification.
-- Added command registry, coding-agent and WhatsApp identity tests.
-- Preserved the existing Piper TTS service and Baileys dependency.
+## 3.1.0 — 2026-11-09
+- Fixed Watchdog false positives by matching blocked terms as whole words; ordinary words such as `code` no longer match the blocked token `ode`.
+- Added a fresh WhatsApp group-admin verification path with participant ID, phone-number and LID matching; verified group admins are excluded from Watchdog moderation.
+- Enabled WhatsApp group admins to approve/reject actions requested in their own group; JARVIS owner and configured system admins retain global approval authority.
+- Scoped group-admin approval lists to the requesting group and recorded the actual approver in the audit trail.
+- Restored direct `!command list` and `!command create name | description | template` flows. Custom commands remain restricted to safe templates, require approval before persistence, and can be invoked as `!command_name` by authorised admins.
+- Added Agent tools for image generation through the existing authenticated AI Link `/image` endpoint and for locking/unlocking groups through the existing Baileys group-setting API.
+- Added an approval-gated GitHub Pages static-site creation/deployment tool that returns the configured Pages URL after publishing site files.
+- Removed the free-form AI fallback after Agent execution errors so JARVIS does not imply an action succeeded when its tool execution failed.
+- Preserved `@innovatorssoft/baileys`, existing Piper TTS, AI Link authentication, existing bot integrations and quiz behavior.
+- Added regression tests for Watchdog matching, group-scoped approvals and dynamic command execution.
+
+## 3.1.0 validation
+- `npm run check`: passed.
+- `npm test`: 19 tests passed.
+- Live WhatsApp moderation/admin checks, GitHub repository creation/Pages publishing, AI Link image generation, MongoDB and Render deployment were not executed in this environment.
