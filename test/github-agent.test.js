@@ -30,3 +30,9 @@ test('GitHub agent enforces optional repository allowlist', () => {
     else process.env.GITHUB_ALLOWED_REPOS = old;
   }
 });
+
+test('GitHub Pages deployment requires approval and a root index.html', async () => {
+ const agent=new GitHubAgent({token:'test-token',owner:'flexisystems2000'});
+ await assert.rejects(()=>agent.createAndDeployStaticWebsite(undefined,'demo','Demo',[],false),/Explicit approval/);
+ await assert.rejects(()=>agent.createAndDeployStaticWebsite(undefined,'demo','Demo',[{path:'about.html',content:'hello'}],true),/index.html/);
+});
