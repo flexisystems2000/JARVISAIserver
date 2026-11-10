@@ -92,12 +92,12 @@ test('catalog entries remain compact and omit full schemas', () => {
   assert.equal(Object.hasOwn(catalog[0],'parameters'),false);
 });
 
-test('bounded prompt stays within the configured 35k minimum budget', () => {
+test('bounded prompt stays within the configured 32k maximum budget', () => {
   const old=process.env.JARVIS_AGENT_PROMPT_MAX_CHARS;
   process.env.JARVIS_AGENT_PROMPT_MAX_CHARS='35000';
   try {
     const prompt=boundedPrompt({catalog:'catalog',history:'h'.repeat(50000),message:'user request'});
-    assert.ok(prompt.length<=35000); assert.match(prompt,/CURRENT USER REQUEST/);
+    assert.ok(prompt.length<=32000); assert.match(prompt,/CURRENT USER REQUEST/);
   } finally { if(old===undefined) delete process.env.JARVIS_AGENT_PROMPT_MAX_CHARS; else process.env.JARVIS_AGENT_PROMPT_MAX_CHARS=old; }
 });
 
@@ -106,7 +106,7 @@ test('bounded prompt preserves the tail of an oversized current user request', (
   process.env.JARVIS_AGENT_PROMPT_MAX_CHARS='35000';
   try {
     const prompt=boundedPrompt({message:'x'.repeat(50000)+'FINAL-REQUEST-DETAIL'});
-    assert.ok(prompt.length<=35000); assert.ok(prompt.includes('FINAL-REQUEST-DETAIL'));
+    assert.ok(prompt.length<=32000); assert.ok(prompt.includes('FINAL-REQUEST-DETAIL'));
   } finally { if(old===undefined) delete process.env.JARVIS_AGENT_PROMPT_MAX_CHARS; else process.env.JARVIS_AGENT_PROMPT_MAX_CHARS=old; }
 });
 
@@ -146,4 +146,23 @@ test('nested array/object arguments are validated recursively', async () => {
   registry.register({name:'nested_schema_tool',description:'nested',permissions:['user'],parameters:{type:'object',properties:{files:{type:'array',items:{type:'object',properties:{path:{type:'string',maxLength:20},content:{type:'string',maxLength:100}},required:['path','content'],additionalProperties:false}}},required:['files'],additionalProperties:false},handler:async()=>true});
   await assert.rejects(()=>registry.execute('nested_schema_tool',{files:[{path:'index.html',content:'ok',extra:'blocked'}]},{actor:'user'}),/Unexpected argument/);
   await assert.rejects(()=>registry.execute('nested_schema_tool',{files:[{path:'x'.repeat(21),content:'ok'}]},{actor:'user'}),/too long/);
+});
+
+test('duplicate tool steps are rejected before any side effect', async () => {
+  const registry=createToolRegistry(); let ran=0; register(registry,'one_action',async()=>{ran++;return true});
+  const duplicate=JSON.stringify({action:'plan',steps:[{tool:'one_action',arguments:{}},{tool:'one_action',arguments:{}}],confidence:0.99});
+  const brain=createAgentBrain({registry,askModel:async()=>duplicate});
+  await assert.rejects(()=>brain.handle({message:'do this twice',actor:'user'}),/duplicate command execution/i);
+  assert.equal(ran,0);
+});
+
+test('HTTP 413 prompt compaction keeps the leading policy and latest request with one bounded retry payload', () => {
+  const { compactPromptAfter413 } = require('../agent/promptBudget');
+  const input = 'SYSTEM'.padEnd(6000, 's') + 'H'.repeat(20000) + 'LATEST REQUEST';
+  const compacted = compactPromptAfter413(input);
+  assert.ok(compacted.length < input.length);
+  assert.ok(compacted.startsWith('SYSTEM'));
+  assert.ok(compacted.endsWith('LATEST REQUEST'));
+  assert.match(compacted, /compacted after HTTP 413/);
+  assert.equal(compactPromptAfter413('short prompt'), null);
 });

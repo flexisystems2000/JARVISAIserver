@@ -105,6 +105,7 @@ test('requesting WhatsApp group admins can approve only approvals from that same
  const approvals = new ApprovalManager({ directory: dir });
  await approvals.load();
  const pending = await approvals.request({ tool:'group_tool', args:{}, context:{actor:'member@s.whatsapp.net',chatId:'123@g.us',isGroup:true} });
+ await assert.rejects(() => approvals.decide(pending.approvalId,{actor:'ordinary@s.whatsapp.net',isGroupAdmin:false,chatId:'123@g.us',approve:true,execute:async()=>true}),/Approval requires the JARVIS owner\/system admin or an administrator of the WhatsApp group/);
  await assert.rejects(() => approvals.decide(pending.approvalId,{actor:'admin@s.whatsapp.net',isGroupAdmin:true,chatId:'999@g.us',approve:true,execute:async()=>true}),/administrator of the WhatsApp group/);
  const result = await approvals.decide(pending.approvalId,{actor:'admin@s.whatsapp.net',isGroupAdmin:true,chatId:'123@g.us',approve:true,execute:async()=>({done:true})});
  assert.equal(result.status,'executed');
@@ -187,4 +188,10 @@ test('planner prompt stays below configured 38k budget for long conversation his
  assert.ok(prompt.length <= 40000);
  assert.match(prompt,/CURRENT USER REQUEST:/);
  assert.match(prompt,/Build a site/);
+});
+
+test('tool registry rejects duplicate registrations instead of silently replacing tools', () => {
+  const registry = createToolRegistry();
+  registry.register({ name: 'single_tool', description: 'A valid tool.', parameters: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => 'first' });
+  assert.throws(() => registry.register({ name: 'single_tool', description: 'A valid tool.', parameters: { type: 'object', properties: {}, additionalProperties: false }, handler: async () => 'second' }), /Duplicate tool registration/);
 });
