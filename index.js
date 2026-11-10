@@ -332,6 +332,7 @@ agentTools.register({
         request: { type: 'string', minLength: 8, maxLength: 6000 }
     }, required: ['repo','request'], additionalProperties: false },
     permissions: ['admin','owner'],
+    groupAdminAllowed: true,
     requiresApproval: true,
     handler: async ({ owner, repo, description, request }) => codingAgent.createAndDeploy({
         owner, repositoryName: repo, description, request, approved: true
