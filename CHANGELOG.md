@@ -1,24 +1,63 @@
 # Changelog
 
-## 3.3.1 — 2026-11-10
-- Reduced the Agent-visible command catalog to exactly 57; removed `!define` and `!dictionary` from the menu and Agent registry.
-- Kept all nine group-management commands available through WhatsApp handlers while excluding them from Agent tool discovery.
-- Added general-purpose AI file creation for PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON with authenticated Python rendering and WhatsApp document delivery.
-- Preserved the legacy PDF generation and extraction routes and the existing Piper router/service integration.
-- Added idempotent MongoDB turn persistence keyed by the source WhatsApp message ID, preserving chat/user isolation and the 200-record history cap.
-- Rejected duplicate tool registrations and duplicate identical steps in a single Agent plan.
-- Reduced the Agent prompt budget and added one bounded HTTP 413 compaction retry.
-- Added command, planner, conversation-memory, file-generation, security and PDF regression tests.
+## 3.0.0 - 2026-11-08
+- Removed the obsolete local keyword/regex natural-language router from the runtime and package; natural-language requests go through the AI planner and registered tool registry.
+- Added explicit AI tool-plan confidence validation; low-confidence plans are clarified instead of executed.
+- Expanded registered-tool argument validation for numbers, booleans, arrays, and string/item length constraints.
+- Preserved the existing approval, role, audit, GitHub and sandbox components.
+- Made native WhatsApp polls the only quiz mode; disabled legacy A-D text-answer scoring and removed persisted student score storage.
+- Integrated authenticated ReportLab/PyMuPDF PDF generation and extraction routes directly into the existing Piper FastAPI service without changing Piper TTS.
+- Kept existing YouTube, NovaStack and Magic Hour integrations.
+- Updated package checks and documentation.
+
+# Changelog
+
+## 2.7.0 — 2026-11-07
+- Added a platform connector registry with provider-side identity verification.
+- Added built-in GitHub account verification and configurable HTTPS REST identity adapters.
+- Added a read-only GitHub repository security triage tool for likely committed secrets and tracked live environment files.
+- Kept platform credentials in hosting environment variables; no chat-based password or OTP collection.
+- Removed Grammar Watchdog from runtime imports and files.
+- Preserved the existing ALOC subject mapping and reply-based quiz implementation.
+- Documented that native WhatsApp poll voting/30-second progression is not enabled pending verification of the bundled Baileys fork's poll-update contract.
+- Kept repository writes/deletes out of the AI tool registry; destructive actions are not silently executed.
+
+## Validation
+- `npm run check`: passed (JavaScript syntax checks).
+- `npm test`: six unit tests; results recorded in delivery notes.
+- Runtime integration with WhatsApp, Gemini, MongoDB, GitHub, Docker and Render was not executed in this environment. Install dependencies and test with staging credentials before production deployment.
+
+## 2.8.0 — 2026-11-07
+- Added native ALOC WhatsApp poll quizzes with a 30-second voting period, aggregate tally support, AI explanations and automatic next-question progression.
+- Added `!stopquiz`; quiz mode is now poll-only with no individual student score storage.
+- Added a persistent, expiring, single-use owner approval queue with `!approvals`, `!approve <ID>` and `!reject <ID>`.
+- Added approval-gated GitHub file write/delete tools with provider-side repository permission checks.
+- Added AI tools to list and create safe text-template commands; command persistence requires owner approval.
+- Added repository-admin verification and optional GitHub repository allowlisting.
+- Switched the socket runtime to the already-used `@innovatorssoft/baileys` package and removed `@musteqeem/baileys` from dependencies after a third-party security report flagged version 1.0.7 for injecting undisclosed newsletter attribution into outgoing media. This is a risk-reduction change, not a full dependency audit.
+- Expanded README and environment documentation; retained existing bot features and removed Grammar Watchdog.
+
+## 2.8.0 validation
+- `npm run check`: passed.
+- `npm test`: 13 tests passed.
+- Live WhatsApp, ALOC, Gemini, GitHub, MongoDB, Docker and Render integration tests were not run in this environment.
 
 
-## 3.3.0 — 2026-11-09
-- Replaced the single-shot planner with bounded AI-led tool discovery and detailed schema retrieval for selected tools.
-- Added validated multi-step orchestration (up to five ordered tool calls), low-confidence refusal, approval-aware stopping and a bounded prompt budget.
-- Connected the CodingAgent to the actual WhatsApp Agent registry and GitHub static website publisher. Natural-language website requests now generate files internally instead of requiring the planner to return a large source-code array.
-- Aligned website validation with GitHub's 50 KB per-file and 450 KB total limits; kept root `index.html`, safe path and likely-secret checks.
-- Added authenticated-user owner fallback for GitHub publishing when `GITHUB_OWNER` and the request owner are omitted.
-- Added correlation IDs and structured AI gateway failure diagnostics in JARVIS.
-- Preserved the command handlers and role boundaries, existing handlers, role boundaries, group-admin approval scope, Piper document/TTS integrations and existing features.
+## 2.9.0 integration update
+- Routed JARVIS model requests through configurable `AI_API_URL` with shared-key authentication and request timeouts.
+- Enabled JSON-mode AI responses for the JARVIS agent planner; tool registry authorization and validation remain authoritative.
+- Removed JARVIS dependence on the retired AI Link `/pdf` route; PDF text extraction now calls the Python document service.
+- Routed study PDF creation through Python/ReportLab and return the generated PDF to WhatsApp.
+- Added FastAPI PDF generate/extract routes for mounting into the existing Piper Python service; Piper TTS remains intact.
+- Kept ALOC poll quiz orchestration and 30-second vote flow inside JARVIS.
+- Live Piper route deployment and WhatsApp/ALOC/Gemini/GitHub integrations still require staging credentials and end-to-end testing.
 
-## 3.2.1
-- Previous stable source baseline; see repository history for earlier changes.
+## 3.1.0
+
+- Added `!quiz off` to stop the active poll quiz in the current group and cancel its timer.
+- Added WhatsApp push/profile-name resolution to the AI conversation context.
+- Added a built-in WhatsApp command registry with menu commands and aliases.
+- Connected approved safe Command Inventor templates to runnable `!custom_command` names.
+- Added Coding Agent modules for static website generation, validation, GitHub repository creation, GitHub Pages publishing and live URL verification.
+- Added command registry, coding-agent and WhatsApp identity tests.
+- Preserved the existing Piper TTS service and Baileys dependency.

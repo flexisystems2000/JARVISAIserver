@@ -1,33 +1,57 @@
-# JARVIS 3.3.1 integration and deployment notes
+# JARVIS 3.0.0 + AI Link 1.4.0 + Piper/PDF integration
 
-## Release contents
-This release retains the existing JARVIS WhatsApp application and adds a 57-command Agent catalog, safer bounded AI planning, idempotent MongoDB conversation-turn persistence, and general-purpose nine-format file generation. The nine group-management commands remain WhatsApp-only. The existing Piper TTS integration and legacy PDF routes are preserved.
+## Service responsibilities
 
-## Deploy JARVIS
-1. Back up the current JARVIS service, WhatsApp auth/session data, MongoDB and environment variables.
-2. Replace the JARVIS source with the complete `JARVISAIserver-3.3.1.zip` project contents.
-3. Use Node.js 20 or newer; run `npm install`, `npm run check`, and `npm test`.
-4. Deploy with the existing environment variables. `AI_API_URL` must point to the deployed AI Link; `AI_API_KEY` must match the AI Link's `JARVIS_API_KEY`.
-5. Keep `OWNER_NUMBER`, `ADMIN_NUMBERS`, `MONGO_URI`, Piper settings, ALOC settings and all existing provider credentials unchanged. Firebase browser configuration remains embedded in the frontend as it was in the original project; no `FIREBASE_WEB_API_KEY` environment variable is required.
-6. Confirm JARVIS reconnects to WhatsApp, then test the command menu, Agent discovery and restricted approvals in a staging group.
+- **JARVIS (Node/WhatsApp):** conversation memory, AI-first intent planning, registered tools, permissions, approvals, audit logs, GitHub administration, ALOC quizzes and WhatsApp polls.
+- **Flexieduconsult AI Link 1.4.0:** authenticated Gemini gateway for reasoning, image understanding, grammar and image generation. JSON-mode requests are checked for valid JSON-object output.
+- **Piper Python service:** keeps the existing Piper voice and `/tts` behavior, YouTube routes, NovaStack and Magic Hour integrations. It now also mounts authenticated PDF generation and extraction routes.
+- **PDF:** ReportLab generates PDFs; PyMuPDF extracts text from text-based PDFs.
 
-Firebase Web API keys are intended to be present in browser configuration. Restrict the key to the Firebase-related APIs this app needs, and rely on Firebase Authentication plus Firestore/Storage security rules for access control; the key itself must not be treated as authorization.
+## Deployment order
 
-## Nine-format file generation
-`!createfile` accepts PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON requests. It infers the format from the user's wording or filename, defaults to PDF when no format is supplied, and sends the generated file as a WhatsApp document.
+1. Deploy **AI Link 1.4.0**. Set `JARVIS_API_KEY` and at least one `GEMINI_API_KEY_1`. Add optional key-rotation entries only if needed.
+2. Set JARVIS `AI_API_URL` to the AI Link base URL and `AI_API_KEY` to the exact same secret as AI Link `JARVIS_API_KEY`.
+3. Deploy the updated **Flexi-Jarvis-Piper-TTS** project. Its `app.py` mounts `piper_pdf_router.py` directly. The Dockerfile copies both files, and `requirements.txt` includes ReportLab and PyMuPDF. Keep the existing Piper voice/model and the other media integrations.
+4. Set the same `PIPER_API_KEY` on JARVIS and the Piper service. Set JARVIS `PIPER_DOCUMENT_API_URL` to the Piper service base URL.
+5. Deploy **JARVIS 3.0.0**. Keep existing production environment values; use `.env.example` as the reference for names.
 
-The configured `PIPER_DOCUMENT_API_URL` service must expose the authenticated routes `/pdf/generate`, `/pdf/generate-file` and `/pdf/extract`. Install the updated `python_services/requirements.txt` in that document service (or merge the requirements into the existing Piper service environment) before deploying. Keep `PIPER_API_KEY` identical on JARVIS and the document service. If the existing Piper deployment hosts the router, retain its current app and mount the existing `piper_pdf_router` as documented in `python_services/README.md`; do not replace the Piper speech engine or voice endpoints.
+## Required service settings
 
-The legacy PDF generation and extraction routes remain supported. HTML is sanitized, filenames are reduced to safe basenames, and spreadsheet formula-like text is escaped before writing CSV/XLSX cells.
+| Variable | Where | Purpose |
+|---|---|---|
+| `AI_API_URL` | JARVIS | AI Link base URL |
+| `AI_API_KEY` | JARVIS | Same secret as AI Link `JARVIS_API_KEY` |
+| `JARVIS_API_KEY` | AI Link | Shared secret for private service calls |
+| `GEMINI_API_KEY_1` | AI Link | Primary Gemini key |
+| `PIPER_API_KEY` | JARVIS and Piper | Shared secret for Piper and PDF calls |
+| `PIPER_DOCUMENT_API_URL` | JARVIS | Piper service base URL |
+| `OWNER_NUMBER` | JARVIS | WhatsApp owner number, digits only |
+| `MONGO_URI` | JARVIS | MongoDB connection string, if using persistence |
 
-## AI gateway
-The Agent prompt budget defaults to 30,000 characters and is clamped to 24,000–32,000 characters. If the gateway rejects a long request with HTTP 413, JARVIS makes one compacted retry. Planner structured output receives one repair attempt; invalid plans are not executed. The AI gateway's own request limits remain authoritative.
+Optional integrations: `ALOC_TOKEN`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_ALLOWED_REPOS`, `NOVASTACK_KEY`, `MAGIC_HOUR_API_KEY`/`MAGIC_HOUR_API_KEYS`, and platform-specific tokens. Do not configure integrations you do not use.
 
-## Approvals and permissions
-The bot owner and configured system administrators can approve globally. A current WhatsApp group administrator can approve a request originating in that same group. An ordinary group member cannot approve restricted operations, and group-admin status does not grant global JARVIS system-admin privileges.
+## Smoke tests
 
-## Live deployment checks
-Local automated tests do not prove live WhatsApp delivery, AI-provider availability, MongoDB connectivity, Piper voice playback, or provider-side deployment permissions. Verify those in the target deployment using its existing credentials and a staging chat.
+- `GET <AI_API_URL>/test` reports the AI Link online.
+- An authenticated `/ai` request with `responseFormat: "json"` returns a JSON object.
+- JARVIS can answer an ordinary AI question and use a registered tool when the AI plan is sufficiently confident and the actor is authorised.
+- `!quiz off` stops only the active quiz in the current group.
+- JARVIS uses the WhatsApp push/profile name when available and does not invent a name when unavailable.
+- `!command list` and `!command create name | description | template` exercise the approval-gated Command Inventor.
+- Ask JARVIS to create a static website; approve the pending GitHub deployment, then verify the returned GitHub Pages URL.
+- `POST <PIPER_DOCUMENT_API_URL>/pdf/generate` returns a valid PDF when called with `x-api-key`.
+- `POST <PIPER_DOCUMENT_API_URL>/pdf/extract` extracts text from a text-based PDF.
+- Piper `/tts` continues to generate the same voice output as before.
+- YouTube, NovaStack and Magic Hour endpoints remain available.
+- `!quiz Mathematics` fetches from ALOC, publishes a 30-second poll, explains the answer, advances automatically and does not update student scores.
 
-## Rollback
-If a service fails its health check, restore its previous source archive and corresponding environment configuration. Do not delete or replace WhatsApp auth/session data or persistent `data/` approval/audit files during rollback.
+## Important limitations
+
+- The generic platform-auth mechanism verifies configured provider tokens; it does not magically integrate every website. Each platform needs a real provider adapter and resource-level permission checks.
+- Dynamic command builder currently persists safe text-template commands only; it does not generate arbitrary executable programs.
+- The Coding Agent currently creates static GitHub Pages websites only. Dynamic backend deployment needs an explicit provider adapter and deployment workflow.
+- PDF extraction handles text-based PDFs. OCR for scanned/image-only PDFs is not included.
+- The existing Render instance with 0.5 CPU / 512 MB RAM should not be assumed to support heavier workloads. Piper's current hosting/runtime constraints are unchanged by this package.
+- The included tests are local unit/syntax tests; live WhatsApp, Gemini, ALOC, Piper and external-provider integration tests require deployment credentials and a controlled test account.
+
+Never paste credentials into WhatsApp or commit real secrets to source control. Configure secrets in the hosting provider's environment settings.

@@ -1,7 +1,7 @@
-# JARVIS AI WhatsApp Bot — 3.3.1
+# JARVIS AI WhatsApp Bot — 3.1.0
 **Flexi edTech Digital Academy**
 
-JARVIS is the existing WhatsApp assistant extended with a structured AI tool registry, authorization checks, a persistent, group-admin-aware approval queue, a sandboxed development shell, GitHub repository tools, and an ALOC-based native poll quiz. Existing moderation, payments, reminders, dashboard and rich-response modules are retained.
+JARVIS is the existing WhatsApp assistant extended with a structured AI tool registry, authorization checks, a persistent owner-approval queue, a sandboxed development shell, GitHub repository tools, and an ALOC-based native poll quiz. Existing moderation, payments, reminders, dashboard and rich-response modules are retained.
 
 ## Requirements and installation
 
@@ -25,7 +25,7 @@ Do not commit `.env`, `auth_info/`, audit logs, approval data, or the sandbox wo
 
 JARVIS calls the Flexieduconsult AI Link through `AI_API_URL` and authenticates every `/ai` and `/image` request with `AI_API_KEY`. Set this value to exactly the same secret as `JARVIS_API_KEY` on the AI Link deployment. The agent planner requests JSON-mode model output; the tool registry still validates tool names, arguments, permissions and approvals before execution.
 
-File generation and PDF text extraction are performed by the Python document router, not by the AI Link. `!createfile` can generate PDF, Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), CSV, plain text, Markdown, HTML and JSON files. The Python service exposes `/pdf/generate-file` for the general-purpose formats while retaining the existing `/pdf/generate` and `/pdf/extract` routes for compatibility. Deploy the updated `python_services` router/dependencies to the same Python service that already exposes the PDF routes, or mount the router into the existing Piper FastAPI app as described in `python_services/README.md`. All document routes use the existing `PIPER_API_KEY`. Piper TTS and its existing voice/media endpoints are unchanged. If the router is hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
+PDF creation and PDF text extraction are performed by the Python/ReportLab service, not by the AI Link. The JARVIS package includes `python_services/piper_pdf_router.py`; mount its FastAPI router into the existing Piper app as described in `python_services/README.md`. The routes use the existing `PIPER_API_KEY` and expose `/pdf/generate` and `/pdf/extract`. Piper remains responsible for TTS/voice and its existing media services. If the router is hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
 
 The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz retrieval, WhatsApp poll voting, the 30-second timer, answer explanation and next-question progression.
 
@@ -37,16 +37,16 @@ The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz
 - Each poll has four A-D options and a 30-second voting window.
 - After voting closes, JARVIS displays aggregate vote counts (not student score tables), the correct option, and an AI-generated explanation where the Gemini service is available.
 - JARVIS fetches and posts the next question automatically.
-- `!stopquiz` lets a group administrator or the bot owner stop the active quiz.
+- `!quiz off` stops the active quiz in the current group and cancels its timer. `!stopquiz` remains available as a legacy control.
 - Individual text-answer scoring and persistent student score storage are disabled.
 
 Poll-vote decryption depends on the installed Baileys fork emitting decrypted `pollUpdates` in `messages.update` and exporting `getAggregateVotesInPollMessage`. If the helper is unavailable, the quiz still closes, reveals the correct answer and advances, but reports that aggregate counts could not be decrypted. Test with a real staging WhatsApp group before production use.
 
 ## AI tools, commands and approvals
 
-The AI-led planner first discovers a compact tool catalog, then requests detailed schemas only for the tools it selects. It supports ordered multi-step plans (up to five tools), validates every argument against the registered schema before execution, applies a 30,000-character planning prompt budget (configurable within 24,000–32,000) and performs one bounded compaction retry after HTTP 413, applies per-actor rate limits, checks roles and writes success/failure audit events. No tool is executed from an invalid or low-confidence plan.
+The AI planner may call only registered tools. The registry validates declared arguments, applies per-actor rate limits, checks roles and writes success/failure audit events.
 
-Sensitive registered tools are queued rather than executed immediately. The configured bot owner and configured system admins can manage approvals globally. A current WhatsApp administrator can approve or reject requests originating in that same WhatsApp group:
+Sensitive registered tools are queued rather than executed immediately. The configured bot owner can use:
 
 - `!approvals` — list pending requests
 - `!approve <ID>` — approve and execute one pending action
@@ -54,19 +54,11 @@ Sensitive registered tools are queued rather than executed immediately. The conf
 
 Requests expire after 10 minutes by default. Approval records are stored under `data/approvals/` with restrictive file permissions. Approval is single-use. Approval-gated examples include changing a WhatsApp group name, GitHub file writes/deletions, and saving a generated command. GitHub writes additionally require the token to have repository write permission; file deletion requires repository administrator permission. These checks do not bypass provider-side permissions.
 
-The Command Inventor supports `!command list` and `!command create name | description | template`. It only persists safe `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. Ordinary members can propose a command, but a JARVIS owner/system admin or an administrator of the requesting WhatsApp group must approve it before persistence. Saved commands are stored under `data/commands/` and can be invoked as `!command_name` by authorised admins.
-
-## AI website coding and GitHub Pages deployment
-
-The Agent exposes `website_create_and_deploy`. A user describes the website in natural language and supplies a repository name; JARVIS's CodingAgent generates the HTML/CSS/JavaScript files itself, validates file paths, sizes and likely secrets, then publishes them through the real `GitHubAgent.createAndDeployStaticWebsite` method. Users do not need to paste source code or ask the planner to return a large `files` array.
-
-The tool can be requested by the configured JARVIS owner/system admins in private chats, or by a WhatsApp administrator in the requesting group. A group administrator can see and request this website-publishing tool only inside the group they administer; this does not grant global JARVIS system-admin access. Every request requires explicit approval by the JARVIS owner/system admin or an administrator of that same requesting WhatsApp group before code generation and publication. The GitHub token must be able to create the repository (or administer an existing one), write its contents and enable GitHub Pages. The project must include a root `index.html`; up to 30 files are allowed, each no larger than 50 KB, with a 450 KB total project limit. `GITHUB_OWNER` may supply the default owner; `GITHUB_ALLOWED_REPOS` continues to constrain existing repository access.
-
-**Deployment scope:** this workflow deploys public static websites to GitHub Pages. It does not build/deploy Next.js, React build pipelines, server-side code, APIs, databases or other full-stack applications. GitHub Pages configuration is not proof that the site is already live; the response reports the URL as configured and explains that initial publication can take several minutes.
+The dynamic command builder only persists safe `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. Use `!command list` to view them or `!command create name | description | template` to request one. New commands are admin-only, persisted under `data/commands/`, and require owner approval. Once approved, they are available as WhatsApp commands (for example `!welcome_user`). The command registry also catalogs the built-in menu commands and aliases.
 
 ## Platform authentication and GitHub
 
-`GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
+`GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. The Coding Agent can generate a complete static website, create a public GitHub repository, upload the project, enable GitHub Pages and check the published URL. The `website_create_and_deploy` tool requires explicit owner approval. It currently targets static GitHub Pages websites; server-side applications need a separate hosting-provider adapter. JARVIS reports deployment as verified only after an HTTP check succeeds. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
 
 GitHub static security triage checks eligible text files for common secret patterns and tracked live `.env` files. It redacts detected values. It is not a complete SAST/DAST system, does not exploit systems, and does not prove that a repository is secure.
 
@@ -80,31 +72,27 @@ Security checks are intended only for repositories and systems the operator owns
 
 ## Environment variables
 
-The Firebase browser configuration (including its public Web API key) remains embedded in the frontend configuration, as in the original project. Firebase Web API keys are client identifiers, not authorization secrets; restrict the key to the required Google APIs and configure Firebase Authentication and database/storage security rules.
-
-
 | Variable | Purpose |
 |---|---|
 | `PORT` | HTTP service port (default 3000) |
 | `OWNER_NUMBER` | Bot owner number in international digits, no `+` |
-| `ADMIN_NUMBERS` | Optional comma-separated JARVIS system-admin numbers; WhatsApp group admins are detected from live group metadata |
+| `ADMIN_NUMBERS` | Optional comma-separated administrator numbers |
 | `MONGO_URI` | MongoDB connection string |
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
-| `JARVIS_AGENT_PROMPT_MAX_CHARS` | Planner prompt budget; clamped to 24,000–32,000 characters (default 30,000) |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python PDF routes |
-| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate`, `/pdf/generate-file` and `/pdf/extract` |
+| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate` and `/pdf/extract` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
 | `ALOC_TOKEN` | ALOC API access token |
-| `GITHUB_TOKEN` | Least-privilege GitHub token |
+| `GITHUB_TOKEN` | GitHub token with permission to create repositories, write repository contents and manage GitHub Pages for the selected account |
 | `GITHUB_OWNER` | Optional default GitHub owner/org |
 | `GITHUB_ALLOWED_REPOS` | Optional comma-separated repository allowlist |
 | `JARVIS_PLATFORM_ADAPTERS` | Optional JSON array of provider HTTPS identity adapters |
 | `DOCKER_BIN` | Optional Docker executable name/path for sandbox execution |
 | `JARVIS_SANDBOX_WORKSPACE` | Host directory mounted into `/workspace` in the isolated container |
 
-The existing project may also require Firebase and other settings used by its pre-existing features. Gemini credentials belong only in the Flexieduconsult AI Link environment; do not put Gemini provider keys in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
+Incoming WhatsApp push/profile names are passed to the AI conversation context. If WhatsApp does not provide a name, JARVIS uses a neutral fallback rather than guessing. The existing project may also require Firebase and other settings used by its pre-existing features. Gemini credentials belong only in the Flexieduconsult AI Link environment; do not put Gemini provider keys in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
 
 ## Render deployment
 
@@ -116,13 +104,13 @@ The existing project may also require Firebase and other settings used by its pr
 6. Test `!quiz Mathematics`, voting, 30-second close, explanation, next-question progression, `!stopquiz`, and approval request/reject/approve in a private staging group.
 7. Test GitHub identity and repository permissions with a token limited to the repositories JARVIS should access.
 8. Deploy the authenticated AI Link with the matching `JARVIS_API_KEY`; set `AI_API_URL` and `AI_API_KEY` in JARVIS.
-9. Deploy the updated `python_services/piper_pdf_router.py` and its requirements to the existing Python document/Piper service with the same `PIPER_API_KEY`; then test PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON generation, plus PDF upload analysis. Piper TTS itself remains unchanged.
+9. Mount `python_services/piper_pdf_router.py` into the existing Piper FastAPI app, deploy it with `PIPER_API_KEY`, then test `generate pdf ...` and PDF upload analysis in a private chat.
 
 ## Verification and limitations
 
 The included automated suite covers tool validation, role checks, approval lifecycle, command-template validation, shell-command rejection, platform identity adapter validation, and the poll quiz flow using mocked ALOC/WhatsApp responses. It does not constitute a live WhatsApp, ALOC, Gemini, GitHub, MongoDB, Docker or Render integration test. Those require the operator's own credentials and staging environment.
 
-The group Watchdog remains enabled for configured blocked terms and links. It now uses whole-word matching to avoid substring false positives, and current WhatsApp group admins are excluded from moderation. Group admins are verified from live WhatsApp group metadata rather than relying only on environment variables. Universal OAuth and platform management for every service are not claimed as complete; each platform must be integrated and tested individually.
+Grammar Watchdog has been removed from the runtime and project files. The original application modules are retained. Universal OAuth and platform management for every service are not claimed as complete; each platform must be integrated and tested individually.
 
 See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end AI Link, Piper and PDF setup.
 
@@ -130,24 +118,3 @@ See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end 
 ## AI-first planner and external services
 
 Natural-language requests are interpreted by the AI planner and mapped to registered tools. The former local keyword/regex natural-language router has been removed. Tool plans require a confidence value of at least 0.75 and still pass argument, role, rate-limit and approval checks. Deterministic explicit commands remain available. See `INTEGRATION-DEPLOYMENT.md` for the paired AI Link and Piper/PDF deployment steps.
-
-
-## Agent Command Registry (3.3.1)
-
-JARVIS exposes exactly 57 WhatsApp command forms (including aliases and subcommands) as individual `whatsapp_*` Agent tools. Nine group-management commands remain available only through the existing WhatsApp handler, and `!define` / `!dictionary` have been removed from the command menu and Agent registry. The catalog lives in `agent/commandRegistry.js`; the Agent can inspect it through `command_registry_list` and `command_registry_get`.
-
-Agent command tools dispatch through the existing WhatsApp message handler. This deliberately reuses existing command implementations and their group/owner permission checks rather than creating parallel implementations. Command responses are sent by the original handler, so the Agent suppresses a duplicate conversational reply after dispatch.
-
-The 57 entries represent Agent-visible command forms, not 57 independent business capabilities; aliases reuse the same underlying handler. `!create document` and `!generate pdf` remain backward-compatible aliases handled by the same generator; PDF remains the default when no format is specified.
-
-Configured JARVIS system admins and the owner can use read-only GitHub inspection tools. System-admin privileges are kept separate from WhatsApp group-admin status: group actions verify live WhatsApp metadata, and group admins do not gain global GitHub or system-admin privileges. GitHub write/deploy operations remain approval-gated. Existing Piper TTS settings and endpoints are unchanged.
-
-Run `npm run check` and `npm test` before deployment. Live WhatsApp, AI endpoint, GitHub API and Render integration still need to be tested in the deployed environment.
-
-### AI planner troubleshooting (3.2.1)
-The planner accepts valid JSON objects, fenced JSON, and a JSON object embedded in a model response. If the first response is malformed, it requests one corrected JSON response; it never executes a tool until the plan validates. AI gateway HTTP/network errors are surfaced separately, so check the JARVIS logs for `[AI GATEWAY] Request failed` and verify `AI_API_URL`, `AI_API_KEY`, and the AI Link JSON-mode response if a planner request still fails.
-
-
-## General-purpose file creation
-
-`!createfile` infers PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML or JSON from the request or filename and delivers a real generated document through WhatsApp. PDF remains the default when no format is specified. The existing authenticated PDF generation and extraction routes remain available.

@@ -1,7 +1,7 @@
 {
   "name": "jarvis-ai-bot",
-  "version": "3.3.1",
-  "description": "JARVIS WhatsApp AI agent with 57 Agent command tools, persistent conversation memory, bounded AI planner, nine-format file generation, and integrated GitHub Pages website coding",
+  "version": "3.1.0",
+  "description": "JARVIS AI WhatsApp agent with command registry, AI-first coding agent, GitHub Pages deployment, poll quizzes, PDF tools and Piper TTS",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
