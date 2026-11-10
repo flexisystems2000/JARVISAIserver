@@ -7,7 +7,7 @@ class PermissionManager {
   role(actor, context = {}) {
     const number = String(actor || '').split('@')[0].replace(/\D/g,'');
     if (number && number === this.ownerNumber) return 'owner';
-    if (number && this.adminNumbers.has(number)) return 'admin';
+    if (this.adminNumbers.has(number) || context.isAdmin) return 'admin';
     return 'user';
   }
   async assert({ actor, required = ['user'], context = {}, tool }) {

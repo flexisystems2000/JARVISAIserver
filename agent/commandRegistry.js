@@ -1,91 +1,77 @@
 'use strict';
 
-// This registry describes user-facing WhatsApp command forms. Aliases and
-// subcommands are separate entries so the Agent can select the exact route.
-const COMMANDS = [
-  ['ai','!ai','Answer a question using JARVIS AI.'],
-  ['quiz','!quiz','Start a group quiz for a subject.'],
-  ['quiz_off','!quiz off','Stop the active quiz.'],
-  ['stopquiz','!stopquiz','Stop the active quiz.'],
-  ['command','!command','Show Command Inventor usage.'],
-  ['command_list','!command list','List saved custom commands.'],
-  ['command_create','!command create','Propose a safe custom command for approval.'],
-  ['timetable','!timetable','Retrieve a department timetable.'],
-  ['image','!image','Generate an image from a prompt.'],
-  ['vv','!vv','Retrieve view-once media from a quoted message.'],
-  ['createfile','!createfile','Generate a document or study file.'],
-  ['create_document','!create document','Alias for document creation.'],
-  ['generate_pdf','!generate pdf','Alias for PDF creation.'],
-  ['create','!create','Document-creation command alias; provide a document request.'],
-  ['generate','!generate','Document-generation command alias; provide a document request.'],
-  ['crawl','!crawl','Inspect a public website and capture a screenshot.'],
-  ['sitecheck','!sitecheck','Check whether a public website is reachable.'],
-  ['translate','!translate','Translate text between languages.'],
-  ['yt_search','!yt search','Search YouTube.'],
-  ['yt_video','!yt video','Find and send a YouTube video.'],
-  ['yt_audio','!yt audio','Find and send YouTube audio.'],
-  ['yt_download','!yt download','Download a YouTube video by ID.'],
-  ['video','!video','Generate a video from a prompt.'],
-  ['video_status','!video status','Check the latest video generation status.'],
-  ['remind','!remind','Create a reminder with a duration and message.'],
-  ['reminders','!reminders','List pending reminders in this chat.'],
-  ['cancelreminder','!cancelreminder','Cancel a reminder by its ID.'],
-  ['tts','!tts','Check the voice-reply setting.'],
-  ['tts_enable','!tts enable','Enable voice replies.'],
-  ['tts_disable','!tts disable','Disable voice replies.'],
-  ['tts_on','!tts on','Enable voice replies.'],
-  ['tts_off','!tts off','Disable voice replies.'],
-  ['tts_status','!tts status','Check voice-reply status.'],
-  ['quiet','!quiet','Pause conversational AI replies.'],
-  ['unquiet','!unquiet','Resume conversational AI replies.'],
-  ['status','!status','Get JARVIS health and status.'],
-  ['healthgraph','!healthgraph','Send the JARVIS health graph.'],
-  ['ginfo','!ginfo','Get current WhatsApp group information.'],
-  ['listadmins','!listadmins','List current WhatsApp group admins.'],
-  ['listonline','!listonline','List recently active members.'],
-  ['getjid','!getjid','Get the current chat JID.'],
-  ['groupids','!groupids','List available group IDs.'],
-  ['getgroupids','!getgroupids','Alias for listing group IDs.'],
-  ['groupname','!groupname','Rename a WhatsApp group by its group ID.'],
-  ['approvals','!approvals','List approvals visible to this requester.'],
-  ['approve','!approve','Approve and execute a pending action by approval ID.'],
-  ['reject','!reject','Reject a pending action by approval ID.'],
-  ['pay','!pay','Open the tutorial payment flow.'],
-  ['pay_month','!pay month','Open the monthly payment flow.'],
-  ['pay_week','!pay week','Open the weekly payment flow.'],
-  ['name','!name','Register or update the learner profile name.'],
-  ['addxxjarvis','!addxxjarvis','Manage the supported JARVIS group integration.'],
-  ['addxxjarvis_meta','!addxxjarvis meta','Link the supported group integration.'],
-  ['menu','!menu','Show the WhatsApp command menu.'],
-  ['help','!help','Alias for the command menu.'],
-  ['settimetable','!settimetable','Set a department timetable URL.'],
-  ['time','!time','Get the current time.']
-].map(([id, command, description]) => Object.freeze({ id, command, description }));
+const BUILT_IN_COMMANDS = [
+  ['!ai','AI & Learning','!ai [question]','Ask JARVIS a question'],
+  ['!define','AI & Learning','!define [word]','Define a word',['!dictionary']],
+  ['!quiz','AI & Learning','!quiz [subject]','Start a subject quiz; use !quiz off to stop'],
+  ['!quiz off','AI & Learning','!quiz off','Stop the active quiz in the current group'],
+  ['!timetable','AI & Learning','!timetable','Show the tutorial timetable'],
+  ['!image','AI & Learning','!image [prompt]','Generate an image'],
+  ['!vv','AI & Learning','!vv','Retrieve view-once media'],
+  ['!createfile','AI & Learning','!createfile','Create a study document or PDF',['!create document','!generate pdf']],
+  ['!crawl','Web & Media','!crawl [URL]','Inspect a public website'],
+  ['!sitecheck','Web & Media','!sitecheck [URL]','Check website availability'],
+  ['!translate','Web & Media','!translate [source] [target] [text]','Translate text'],
+  ['!yt','Web & Media','!yt [search|video|audio|download]','Search or retrieve YouTube media'],
+  ['!video','Web & Media','!video [prompt|status]','Generate or check a video'],
+  ['!remind','Reminders','!remind [duration] [message]','Create a reminder'],
+  ['!reminders','Reminders','!reminders','List reminders'],
+  ['!cancelreminder','Reminders','!cancelreminder [ID]','Cancel a reminder'],
+  ['!tts','Voice','!tts [on|off|status]','Control voice replies'],
+  ['!status','Bot & Group Info','!status','Show bot status'],
+  ['!healthgraph','Bot & Group Info','!healthgraph','Show health graph'],
+  ['!ginfo','Bot & Group Info','!ginfo','Show group information'],
+  ['!listadmins','Bot & Group Info','!listadmins','List group admins'],
+  ['!listonline','Bot & Group Info','!listonline','List recently active members'],
+  ['!getjid','Bot & Group Info','!getjid','Show current chat JID'],
+  ['!groupids','Bot & Group Info','!groupids','List group IDs',['!getgroupids']],
+  ['!groupname','Group Management','!groupname [GROUP_ID] [name]','Rename a group'],
+  ['!add','Group Management','!add [phone number]','Add a group participant'],
+  ['!kick','Group Management','!kick @user','Remove a participant'],
+  ['!remove','Group Management','!remove all','Remove all eligible participants',['!remove all']],
+  ['!ban','Group Management','!ban @user','Ban a participant'],
+  ['!unban','Group Management','!unban @user','Unban a participant'],
+  ['!promote','Group Management','!promote @user','Promote a participant'],
+  ['!mute','Group Management','!mute [duration]','Mute the group'],
+  ['!unmute','Group Management','!unmute [duration]','Unmute the group'],
+  ['!reset','Group Management','!reset @user','Reset a participant setting'],
+  ['!pay','Payments','!pay [month|week]','Payment information'],
+  ['!name','Profile','!name [your name]','Set profile name'],
+  ['!addxxjarvis','Integrations','!addxxjarvis meta [GROUP_ID]','Connect Meta AI group integration'],
+  ['!quiet','Group Management','!quiet','Temporarily enable quiet mode'],
+  ['!unquiet','Group Management','!unquiet','Disable quiet mode'],
+  ['!stopquiz','AI & Learning','!stopquiz','Stop the current quiz using the legacy quiz control'],
+  ['!command','Command Inventor','!command [list|create]','List or create safe custom commands'],
+  ['!menu','Help','!menu','Show command menu',['!help']]
+].map(([name, category, usage, descriptionOrAliases, maybeAliases]) => {
+  const description = Array.isArray(descriptionOrAliases) ? '' : descriptionOrAliases;
+  const aliases = Array.isArray(descriptionOrAliases) ? descriptionOrAliases : (maybeAliases || []);
+  return { name, category, usage, description, aliases, execution: 'legacy-handler' };
+});
 
-if (COMMANDS.length !== 57) throw new Error(`Expected 57 Agent command entries, found ${COMMANDS.length}`);
-
-const WHATSAPP_ONLY_COMMANDS = Object.freeze(['!add', '!kick', '!remove all', '!ban', '!unban', '!promote', '!mute', '!unmute', '!reset']);
-const REMOVED_COMMANDS = Object.freeze(['!define', '!dictionary']);
-
-function registerWhatsAppCommandTools(registry, dispatch) {
-  if (!registry || typeof registry.register !== 'function' || typeof dispatch !== 'function') {
-    throw new Error('Command tool registration requires a tool registry and dispatcher.');
+class CommandRegistry {
+  constructor(commands = BUILT_IN_COMMANDS) {
+    this.commands = new Map();
+    for (const command of commands) this.register(command);
   }
-  for (const entry of COMMANDS) {
-    registry.register({
-      name: `whatsapp_${entry.id}`,
-      description: `${entry.description} Invoke the existing WhatsApp command ${entry.command}. Put command-specific arguments in input. Existing WhatsApp permission checks remain authoritative.`,
-      parameters: {
-        type: 'object',
-        properties: { input: { type: 'string', maxLength: 4000, description: 'Arguments after the command, without repeating the command itself.' } },
-        required: [],
-        additionalProperties: false
-      },
-      permissions: ['user'],
-      handler: async ({ input = '' }, context) => dispatch(entry, input, context)
-    });
+  register(command) {
+    if (!command || typeof command.name !== 'string' || !/^![a-z][a-z0-9_ ]{0,40}$/i.test(command.name) ||
+        typeof command.usage !== 'string' || typeof command.description !== 'string') {
+      throw new Error('Invalid command registry entry.');
+    }
+    const normalized = { ...command, aliases: [...new Set(command.aliases || [])] };
+    this.commands.set(normalized.name.toLowerCase(), normalized);
+    return normalized;
   }
-  return registry;
+  resolve(name) {
+    const key = String(name || '').trim().toLowerCase();
+    for (const command of this.commands.values()) {
+      if (command.name.toLowerCase() === key || command.aliases.some(alias => alias.toLowerCase() === key)) return command;
+    }
+    return null;
+  }
+  list(category) {
+    return [...this.commands.values()].filter(command => !category || command.category.toLowerCase() === String(category).toLowerCase());
+  }
 }
-
-module.exports = { COMMANDS, WHATSAPP_ONLY_COMMANDS, REMOVED_COMMANDS, registerWhatsAppCommandTools };
+module.exports = { CommandRegistry, BUILT_IN_COMMANDS };
