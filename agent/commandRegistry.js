@@ -4,8 +4,6 @@
 // subcommands are separate entries so the Agent can select the exact route.
 const COMMANDS = [
   ['ai','!ai','Answer a question using JARVIS AI.'],
-  ['define','!define','Look up a word definition.'],
-  ['dictionary','!dictionary','Alias for word definition lookup.'],
   ['quiz','!quiz','Start a group quiz for a subject.'],
   ['quiz_off','!quiz off','Stop the active quiz.'],
   ['stopquiz','!stopquiz','Stop the active quiz.'],
@@ -49,15 +47,6 @@ const COMMANDS = [
   ['groupids','!groupids','List available group IDs.'],
   ['getgroupids','!getgroupids','Alias for listing group IDs.'],
   ['groupname','!groupname','Rename a WhatsApp group by its group ID.'],
-  ['add','!add','Add a participant to the current WhatsApp group.'],
-  ['kick','!kick','Remove a participant from the current WhatsApp group.'],
-  ['remove_all','!remove all','Remove all eligible non-admin members.'],
-  ['ban','!ban','Ban a participant from the current WhatsApp group.'],
-  ['unban','!unban','Remove a participant ban from the current WhatsApp group.'],
-  ['promote','!promote','Promote a participant to group admin.'],
-  ['mute','!mute','Lock the current WhatsApp group.'],
-  ['unmute','!unmute','Unlock the current WhatsApp group.'],
-  ['reset','!reset','Reset a participant warning count.'],
   ['approvals','!approvals','List approvals visible to this requester.'],
   ['approve','!approve','Approve and execute a pending action by approval ID.'],
   ['reject','!reject','Reject a pending action by approval ID.'],
@@ -73,7 +62,10 @@ const COMMANDS = [
   ['time','!time','Get the current time.']
 ].map(([id, command, description]) => Object.freeze({ id, command, description }));
 
-if (COMMANDS.length !== 68) throw new Error(`Expected 68 command entries, found ${COMMANDS.length}`);
+if (COMMANDS.length !== 57) throw new Error(`Expected 57 Agent command entries, found ${COMMANDS.length}`);
+
+const WHATSAPP_ONLY_COMMANDS = Object.freeze(['!add', '!kick', '!remove all', '!ban', '!unban', '!promote', '!mute', '!unmute', '!reset']);
+const REMOVED_COMMANDS = Object.freeze(['!define', '!dictionary']);
 
 function registerWhatsAppCommandTools(registry, dispatch) {
   if (!registry || typeof registry.register !== 'function' || typeof dispatch !== 'function') {
@@ -96,4 +88,4 @@ function registerWhatsAppCommandTools(registry, dispatch) {
   return registry;
 }
 
-module.exports = { COMMANDS, registerWhatsAppCommandTools };
+module.exports = { COMMANDS, WHATSAPP_ONLY_COMMANDS, REMOVED_COMMANDS, registerWhatsAppCommandTools };

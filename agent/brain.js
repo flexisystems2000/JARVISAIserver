@@ -13,10 +13,10 @@ For a normal answer use {"action":"answer","response":"..."}.
 For clarification use {"action":"clarify","response":"..."}.
 For multi-step work, include at most 5 steps in the correct execution order. Include every argument required by each schema. Do not include dependent actions if their inputs are not known yet.`;
 
-const DEFAULT_PROMPT_BUDGET = 38000;
+const DEFAULT_PROMPT_BUDGET = 30000;
 function promptBudget() {
   const configured = Number(process.env.JARVIS_AGENT_PROMPT_MAX_CHARS || 38000);
-  return Math.max(35000, Math.min(Number.isFinite(configured) ? configured : DEFAULT_PROMPT_BUDGET, 40000));
+  return Math.max(24000, Math.min(Number.isFinite(configured) ? configured : DEFAULT_PROMPT_BUDGET, 32000));
 }
 function boundedPrompt({ system = SYSTEM, catalog = '', schemas = '', history = '', message = '', extra = '' } = {}) {
   const max = promptBudget();
@@ -75,9 +75,13 @@ function validatePlan(plan, tools, registry) {
     if (!Array.isArray(normalized.steps) || !normalized.steps.length || normalized.steps.length > 5) throw new Error('AI planner returned an invalid step list.');
     if (typeof plan.confidence !== 'number' || !Number.isFinite(plan.confidence) || plan.confidence < 0 || plan.confidence > 1) throw new Error('AI planner returned an invalid confidence score.');
     const available = new Set(tools.map(tool => tool.name));
+    const seenSteps = new Set();
     for (const step of normalized.steps) {
       if (!step || typeof step.tool !== 'string' || !available.has(step.tool)) throw new Error('AI planner selected a tool that was not discovered.');
       if (!step.arguments || typeof step.arguments !== 'object' || Array.isArray(step.arguments)) throw new Error('AI planner returned invalid tool arguments.');
+      const fingerprint = `${step.tool}:${JSON.stringify(step.arguments)}`;
+      if (seenSteps.has(fingerprint)) throw new Error('AI planner returned a duplicate command execution step.');
+      seenSteps.add(fingerprint);
       const schema = tools.find(tool => tool.name === step.tool);
       if (registry) registry.validateArguments(schema.parameters, step.arguments);
     }

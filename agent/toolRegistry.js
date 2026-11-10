@@ -42,6 +42,7 @@ class ToolRegistry {
   register(tool) {
     if (!tool || !/^[a-z][a-z0-9_]{1,63}$/.test(tool.name || '') || typeof tool.handler !== 'function') throw new Error('Invalid tool registration');
     if (!tool.description || !tool.parameters || typeof tool.parameters !== 'object') throw new Error(`Tool ${tool.name} needs a description and parameter schema`);
+    if (this.tools.has(tool.name)) throw new Error(`Duplicate tool registration: ${tool.name}`);
     this.tools.set(tool.name, Object.freeze({ ...tool })); return this;
   }
   unregister(name) { return this.tools.delete(name); }
