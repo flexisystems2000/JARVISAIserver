@@ -1,97 +1,94 @@
 # JARVIS WhatsApp Command Registry
 
-**Total registered command entries: 68**
+**Agent-visible command entries: 57**
 
-This inventory includes the public `!menu`, aliases, multi-word subcommands, and operational handlers. The Agent can inspect it using `command_registry_list` and `command_registry_get`. Existing WhatsApp command handlers remain the execution source for commands without a mapped Agent tool.
+The Agent registry is derived from the existing WhatsApp command inventory and routes each entry through the existing WhatsApp message handler. Group-management commands remain available to WhatsApp users through their existing handlers but are intentionally excluded from Agent discovery and execution tools.
 
-## AI & learning
+## Agent-visible commands
 
-- `!ai`: Ask JARVIS a question — WhatsApp handler
-- `!define` `word`: Look up a word meaning — WhatsApp handler
-- `!dictionary` `word`: Alias for !define — WhatsApp handler
-- `!quiz` `subject?`: Start a quiz — WhatsApp handler
-- `!quiz off`: Stop the active quiz; group-admin scoped — WhatsApp handler
-- `!stopquiz`: Stop the active quiz — WhatsApp handler
-- `!command`: Command Inventor root; use list or create subcommands — WhatsApp handler
-- `!command list`: List saved custom commands — Agent tool: `command_builder_list`
-- `!command create` `name`, `description`, `template`: Propose a safe custom command — Agent tool: `command_builder_create`
-- `!timetable`: Show the tutorial timetable — WhatsApp handler
-- `!image` `prompt`: Generate an image — Agent tool: `image_generate`
-- `!vv`: Retrieve view-once media by replying to it — WhatsApp handler
-- `!createfile` `prompt`: Create a study file — WhatsApp handler
-- `!create document` `prompt`: Create a study document — WhatsApp handler
-- `!generate pdf` `prompt`: Generate a PDF — WhatsApp handler
-- `!create`: Create a study document (subcommand alias) — WhatsApp handler
-- `!generate`: Generate a PDF (subcommand alias) — WhatsApp handler
+| ID | Command | Description |
+|---|---|---|
+| `ai` | `!ai` | Answer a question using JARVIS AI. |
+| `quiz` | `!quiz` | Start a group quiz for a subject. |
+| `quiz_off` | `!quiz off` | Stop the active quiz. |
+| `stopquiz` | `!stopquiz` | Stop the active quiz. |
+| `command` | `!command` | Show Command Inventor usage. |
+| `command_list` | `!command list` | List saved custom commands. |
+| `command_create` | `!command create` | Propose a safe custom command for approval. |
+| `timetable` | `!timetable` | Retrieve a department timetable. |
+| `image` | `!image` | Generate an image from a prompt. |
+| `vv` | `!vv` | Retrieve view-once media from a quoted message. |
+| `createfile` | `!createfile` | Generate a document or study file. |
+| `create_document` | `!create document` | Alias for document creation. |
+| `generate_pdf` | `!generate pdf` | Alias for PDF creation. |
+| `create` | `!create` | Document-creation command alias; provide a document request. |
+| `generate` | `!generate` | Document-generation command alias; provide a document request. |
+| `crawl` | `!crawl` | Inspect a public website and capture a screenshot. |
+| `sitecheck` | `!sitecheck` | Check whether a public website is reachable. |
+| `translate` | `!translate` | Translate text between languages. |
+| `yt_search` | `!yt search` | Search YouTube. |
+| `yt_video` | `!yt video` | Find and send a YouTube video. |
+| `yt_audio` | `!yt audio` | Find and send YouTube audio. |
+| `yt_download` | `!yt download` | Download a YouTube video by ID. |
+| `video` | `!video` | Generate a video from a prompt. |
+| `video_status` | `!video status` | Check the latest video generation status. |
+| `remind` | `!remind` | Create a reminder with a duration and message. |
+| `reminders` | `!reminders` | List pending reminders in this chat. |
+| `cancelreminder` | `!cancelreminder` | Cancel a reminder by its ID. |
+| `tts` | `!tts` | Check the voice-reply setting. |
+| `tts_enable` | `!tts enable` | Enable voice replies. |
+| `tts_disable` | `!tts disable` | Disable voice replies. |
+| `tts_on` | `!tts on` | Enable voice replies. |
+| `tts_off` | `!tts off` | Disable voice replies. |
+| `tts_status` | `!tts status` | Check voice-reply status. |
+| `quiet` | `!quiet` | Pause conversational AI replies. |
+| `unquiet` | `!unquiet` | Resume conversational AI replies. |
+| `status` | `!status` | Get JARVIS health and status. |
+| `healthgraph` | `!healthgraph` | Send the JARVIS health graph. |
+| `ginfo` | `!ginfo` | Get current WhatsApp group information. |
+| `listadmins` | `!listadmins` | List current WhatsApp group admins. |
+| `listonline` | `!listonline` | List recently active members. |
+| `getjid` | `!getjid` | Get the current chat JID. |
+| `groupids` | `!groupids` | List available group IDs. |
+| `getgroupids` | `!getgroupids` | Alias for listing group IDs. |
+| `groupname` | `!groupname` | Rename a WhatsApp group by its group ID. |
+| `approvals` | `!approvals` | List approvals visible to this requester. |
+| `approve` | `!approve` | Approve and execute a pending action by approval ID. |
+| `reject` | `!reject` | Reject a pending action by approval ID. |
+| `pay` | `!pay` | Open the tutorial payment flow. |
+| `pay_month` | `!pay month` | Open the monthly payment flow. |
+| `pay_week` | `!pay week` | Open the weekly payment flow. |
+| `name` | `!name` | Register or update the learner profile name. |
+| `addxxjarvis` | `!addxxjarvis` | Manage the supported JARVIS group integration. |
+| `addxxjarvis_meta` | `!addxxjarvis meta` | Link the supported group integration. |
+| `menu` | `!menu` | Show the WhatsApp command menu. |
+| `help` | `!help` | Alias for the command menu. |
+| `settimetable` | `!settimetable` | Set a department timetable URL. |
+| `time` | `!time` | Get the current time. |
 
-## Web, translation & media
+## WhatsApp-only group-management commands
 
-- `!crawl` `url`: Inspect a website and capture a screenshot — WhatsApp handler
-- `!sitecheck` `url`: Check whether a website is reachable — Agent tool: `website_check`
-- `!translate` `source`, `target`, `text`: Translate text — WhatsApp handler
-- `!yt search` `query`: Search YouTube — WhatsApp handler
-- `!yt video` `query_or_id`: Find/send a YouTube video — WhatsApp handler
-- `!yt audio` `query_or_id`: Find/send YouTube audio — WhatsApp handler
-- `!yt download` `video_id`: Download/send a YouTube video by ID — WhatsApp handler
-- `!video` `prompt_or_status`: Generate a video or check status — WhatsApp handler
-- `!video status`: Check latest video status — WhatsApp handler
+These commands remain implemented by the existing WhatsApp handler and are not Agent tools:
 
-## Reminders & voice
+- `!add`
+- `!kick`
+- `!remove all`
+- `!ban`
+- `!unban`
+- `!promote`
+- `!mute`
+- `!unmute`
+- `!reset`
 
-- `!remind` `delay`, `message`: Create a reminder — WhatsApp handler
-- `!reminders`: List pending reminders — WhatsApp handler
-- `!cancelreminder` `id`: Cancel a reminder — WhatsApp handler
-- `!tts`: Control Piper text-to-speech replies — WhatsApp handler
-- `!tts enable`: Alias for enabling Piper voice replies — WhatsApp handler
-- `!tts disable`: Alias for disabling Piper voice replies — WhatsApp handler
-- `!tts on`: Enable Piper voice replies — WhatsApp handler
-- `!tts off`: Disable voice replies — WhatsApp handler
-- `!tts status`: Check voice reply setting — WhatsApp handler
-- `!quiet`: Pause AI replies — WhatsApp handler
-- `!unquiet`: Resume AI replies — WhatsApp handler
+## Removed from the command menu and Agent registry
 
-## Bot & group info
+- `!define`
+- `!dictionary`
 
-- `!status`: Show JARVIS health/status — WhatsApp handler
-- `!healthgraph`: Send health graph — WhatsApp handler
-- `!ginfo`: Show current group information — Agent tool: `group_information`
-- `!listadmins`: List current group administrators — Agent tool: `list_group_admins`
-- `!listonline`: List recently active members — WhatsApp handler
-- `!getjid`: Show current chat JID — WhatsApp handler
-- `!groupids`: List group IDs — WhatsApp handler
-- `!getgroupids`: Alias for !groupids — WhatsApp handler
-- `!groupname` `group_id`, `name`: Rename a group — WhatsApp handler
+## Registration guarantees
 
-## Group management
-
-- `!add` `phone_number`: Add a participant — WhatsApp handler
-- `!kick` `mentioned_user`: Remove a participant — WhatsApp handler
-- `!remove all`: Remove all non-admin members — WhatsApp handler
-- `!ban` `mentioned_user`: Ban a member from this group — WhatsApp handler
-- `!unban` `mentioned_user`: Remove a group ban — WhatsApp handler
-- `!promote` `mentioned_user`: Promote a member to group admin — WhatsApp handler
-- `!mute`: Close group messaging — Agent tool: `group_mute`
-- `!unmute`: Reopen group messaging — Agent tool: `group_unmute`
-- `!reset` `mentioned_user`: Reset member warnings — WhatsApp handler
-- `!approvals`: List pending approvals — WhatsApp handler
-- `!approve` `approval_id`: Approve a pending action — WhatsApp handler
-- `!reject` `approval_id`: Reject a pending action — WhatsApp handler
-- `!remove`: Remove group participants; supports all subcommand — WhatsApp handler
-
-## Flexi / account
-
-- `!pay`: Open the tutorial payment portal — WhatsApp handler
-- `!pay month`: Open monthly tutorial payment flow — WhatsApp handler
-- `!pay week`: Open weekly tutorial payment flow — WhatsApp handler
-- `!name` `name`: Register/update learner profile — WhatsApp handler
-- `!addxxjarvis`: Manage supported group integration — WhatsApp handler
-- `!addxxjarvis meta` `group_id`: Link supported group integration — WhatsApp handler
-
-## Other
-
-- `!menu`: Show the complete command menu — WhatsApp handler
-- `!help`: Alias for !menu — WhatsApp handler
-
-## Operational
-
-- `!settimetable` `timetable_data`: Set/update the tutorial timetable — WhatsApp handler
+- The Agent registry contains exactly **57** unique command entries.
+- The nine WhatsApp-only group-management commands are not exposed through `command_registry_list`, `command_registry_get`, or Agent tool discovery.
+- `!define` and `!dictionary` are absent from the Agent registry and `!menu`.
+- Duplicate tool registration is rejected.
+- Commands are dispatched through the existing WhatsApp handler so its existing permission checks and reply behaviour remain authoritative.

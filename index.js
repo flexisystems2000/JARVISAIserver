@@ -34,6 +34,9 @@ const { COMMANDS, registerWhatsAppCommandTools } = require('./agent/commandRegis
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { detectWatchdogViolation } = require('./agent/watchdog');
+const { CREATE_FILE_FORMATS, validateCreateFileRequest, inferCreateFileFormat, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt } = require('./fileGenerator');
+const conversationMemory = require('./agent/conversationMemory');
+const { compactPromptAfter413 } = require('./agent/promptBudget');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -105,10 +108,12 @@ const MemoryMessageSchema = new mongoose.Schema({
     userJid: { type: String, required: true, index: true },
     chatJid: { type: String, required: true, index: true },
     role: { type: String, enum: ['user', 'assistant'], required: true },
+    interactionId: { type: String, default: undefined },
     content: { type: String, required: true },
     createdAt: { type: Date, default: Date.now, index: true }
 });
 MemoryMessageSchema.index({ conversationKey: 1, createdAt: -1 });
+MemoryMessageSchema.index({ conversationKey: 1, interactionId: 1, role: 1 }, { unique: true, partialFilterExpression: { interactionId: { $type: 'string' } } });
 const MemoryMessage = mongoose.models.JarvisMemoryMessage ||
     mongoose.model('JarvisMemoryMessage', MemoryMessageSchema);
 
@@ -435,7 +440,7 @@ registerWhatsAppCommandTools(agentTools, async (entry, input, context) => {
     const commandText = `${entry.command}${input ? ` ${input}` : ''}`.trim();
     if (entry.id === 'ai') {
         if (!String(input).trim()) throw new Error('Provide the question to ask JARVIS AI.');
-        return { answer: await askAIWithMemory(context.chatId, context.actor, String(input).trim()) };
+        return { answer: await askAI(String(input).trim()) };
     }
     if (!context.sock || typeof context.sock.jarvisProcessMessage !== 'function') {
         throw new Error('WhatsApp command dispatcher is not ready yet. Try again after JARVIS reconnects.');
@@ -453,7 +458,7 @@ registerWhatsAppCommandTools(agentTools, async (entry, input, context) => {
             remoteJid: context.chatId,
             participant: isGroup ? context.actor : undefined,
             fromMe: false,
-            id: `JARVIS-AGENT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: context.sourceMessage?.key?.id || `JARVIS-AGENT-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             jarvisAgentDispatch: true
         },
         messageTimestamp: Math.floor(Date.now() / 1000),
@@ -465,8 +470,8 @@ registerWhatsAppCommandTools(agentTools, async (entry, input, context) => {
             }
         } : { conversation: commandText }
     };
-    await context.sock.jarvisProcessMessage(message);
-    return { whatsappCommandDispatched: true, command: entry.command, chatId: context.chatId, note: 'The existing WhatsApp command handler processed this request and delivered its response in the chat.' };
+    const handlerResult = await context.sock.jarvisProcessMessage(message);
+    return { whatsappCommandDispatched: true, handlerConfirmed: handlerResult !== undefined && handlerResult !== null, command: entry.command, chatId: context.chatId, note: handlerResult !== undefined && handlerResult !== null ? 'The existing WhatsApp handler returned a response.' : 'The command was dispatched, but the handler did not return an explicit confirmation.' };
 });
 agentTools.register({
     name: 'command_registry_list',
@@ -1214,21 +1219,38 @@ if (MONGO_URI) {
 
 // --- AUTHENTICATED AI GATEWAY ---
 async function askAI(prompt, base64Media = null, options = {}) {
+    const originalPrompt = String(prompt || '');
+    let requestPrompt = originalPrompt;
+    let retry413 = false;
     try {
         if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
-        const payload = {
-            prompt: String(prompt || ''),
+        const correlationId = crypto.randomUUID();
+        const sendRequest = currentPrompt => axios.post(`${AI_API_URL}/ai`, {
+            prompt: currentPrompt,
             botName: 'Jarvis',
             ...(base64Media ? { image: base64Media } : {}),
             ...(options.responseFormat ? { responseFormat: options.responseFormat } : {})
-        };
-        const correlationId = crypto.randomUUID();
-        const res = await axios.post(`${AI_API_URL}/ai`, payload, {
+        }, {
             timeout: AI_TIMEOUT_MS,
             maxContentLength: 12 * 1024 * 1024,
             maxBodyLength: 12 * 1024 * 1024,
             headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY, 'x-correlation-id': correlationId }
         });
+        let res;
+        try {
+            res = await sendRequest(requestPrompt);
+        } catch (firstError) {
+            // A 413 is deterministic for the rejected payload. Make one bounded
+            // compact retry, retaining the tool/system preamble and latest request.
+            const compactedPrompt = firstError.response?.status === 413 ? compactPromptAfter413(originalPrompt) : null;
+            if (compactedPrompt) {
+                retry413 = true;
+                requestPrompt = compactedPrompt;
+                res = await sendRequest(requestPrompt);
+            } else {
+                throw firstError;
+            }
+        }
         if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
         return res.data?.result || '🤖 No response from AI';
     } catch (err) {
@@ -1237,7 +1259,7 @@ async function askAI(prompt, base64Media = null, options = {}) {
         const gatewayMessage = gatewayData.error || gatewayData.message || err.message;
         const gatewayCode = gatewayData.code || err.code || 'AI_GATEWAY_ERROR';
         const correlationId = gatewayData.correlationId || err.response?.headers?.['x-correlation-id'] || null;
-        console.error('[AI GATEWAY] Request failed:', { status: status || null, code: gatewayCode, correlationId, promptChars: gatewayData.promptChars || String(prompt || '').length, requestBytes: gatewayData.requestBytes || null, message: String(gatewayMessage || 'Unknown gateway error').slice(0, 180) });
+        console.error('[AI GATEWAY] Request failed:', { status: status || null, code: gatewayCode, correlationId, promptChars: gatewayData.promptChars || requestPrompt.length, requestBytes: gatewayData.requestBytes || null, compactRetry: retry413, message: String(gatewayMessage || 'Unknown gateway error').slice(0, 180) });
         if (options.throwOnError) {
             const detail = status ? `HTTP ${status}` : (err.code || 'request error');
             throw new Error(`AI gateway request failed (${detail}; ${gatewayCode}${correlationId ? `; reference ${correlationId}` : ''}): ${String(gatewayMessage || 'Unknown gateway error').slice(0, 180)}`);
@@ -1252,8 +1274,8 @@ async function callPythonDocumentApi(route, payload) {
     const url = `${PIPER_DOCUMENT_API_URL}/pdf/${route}`;
     const response = await axios.post(url, payload, {
         timeout: PIPER_DOCUMENT_TIMEOUT_MS,
-        maxContentLength: 20 * 1024 * 1024,
-        maxBodyLength: 20 * 1024 * 1024,
+        maxContentLength: 22 * 1024 * 1024,
+        maxBodyLength: 22 * 1024 * 1024,
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
     });
     if (!response.data?.success) throw new Error(response.data?.error || 'Python document service failed.');
@@ -1272,54 +1294,44 @@ async function generatePdfBuffer({ title, content, filename }) {
     if (!result.pdfBase64) throw new Error('Python document service returned no PDF file.');
     return Buffer.from(result.pdfBase64, 'base64');
 }
+async function generateFileForWhatsApp({ format, title, content, filename }) {
+    if (format === 'pdf') {
+        return { buffer: await generatePdfBuffer({ title, content, filename }), mimeType: CREATE_FILE_FORMATS.pdf, filename };
+    }
+    const result = await callPythonDocumentApi('generate-file', { format, title, content, filename });
+    if (!result.fileBase64) throw new Error('Python document service returned no generated file.');
+    return {
+        buffer: Buffer.from(result.fileBase64, 'base64'),
+        mimeType: result.mimeType || CREATE_FILE_FORMATS[format],
+        filename: result.filename || filename
+    };
+}
 
 // Build a stable memory boundary: each person's DM is separate, and
 // group history is separate per participant within that specific group.
 function getMemoryConversationKey(chatJid, userJid) {
-    return `${String(chatJid || 'unknown-chat')}::${String(userJid || 'unknown-user')}`;
+    return conversationMemory.getConversationKey(chatJid, userJid);
 }
 
 async function getConversationContext(chatJid, userJid, limit = 12) {
     try {
         if (mongoose.connection.readyState !== 1 || !chatJid || !userJid) return '';
-        const conversationKey = getMemoryConversationKey(chatJid, userJid);
-        const messages = await MemoryMessage.find({ conversationKey })
-            .sort({ createdAt: -1 })
-            .limit(Math.max(2, Math.min(Number(limit) || 12, 20)))
-            .lean();
-        if (!messages.length) return '';
-        return messages.reverse().map(item =>
-            `${item.role === 'assistant' ? 'JARVIS' : 'USER'}: ${item.content}`
-        ).join('\n');
+        return await conversationMemory.getConversationContext(MemoryMessage, chatJid, userJid, limit);
     } catch (err) {
         console.log('⚠️ Memory read error:', err.message);
         return '';
     }
 }
 
-async function saveConversationTurn(chatJid, userJid, userText, assistantText) {
+async function saveConversationTurn(chatJid, userJid, userText, assistantText, interactionId = null) {
     try {
-        if (mongoose.connection.readyState !== 1 || !chatJid || !userJid) return;
-        const conversationKey = getMemoryConversationKey(chatJid, userJid);
-        const records = [];
-        if (typeof userText === 'string' && userText.trim()) {
-            records.push({ conversationKey, userJid, chatJid, role: 'user', content: userText.trim().slice(0, 12000) });
-        }
-        if (typeof assistantText === 'string' && assistantText.trim()) {
-            records.push({ conversationKey, userJid, chatJid, role: 'assistant', content: assistantText.trim().slice(0, 12000) });
-        }
-        if (records.length) await MemoryMessage.insertMany(records, { ordered: true });
-        // Keep memory bounded per conversation (recent 200 records only).
-        const oldRecords = await MemoryMessage.find({ conversationKey })
-            .sort({ createdAt: -1 })
-            .skip(200)
-            .select('_id')
-            .lean();
-        if (oldRecords.length) {
-            await MemoryMessage.deleteMany({ _id: { $in: oldRecords.map(item => item._id) } });
-        }
+        if (mongoose.connection.readyState !== 1 || !chatJid || !userJid) return false;
+        return await conversationMemory.saveConversationTurn(MemoryMessage, {
+            chatJid, userJid, userText, assistantText, interactionId
+        });
     } catch (err) {
         console.log('⚠️ Memory save error:', err.message);
+        return false;
     }
 }
 
@@ -1384,7 +1396,7 @@ function removeJarvisBrandingPrefix(value) {
         .trim();
 }
 
-async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null) {
+async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null, interactionId = null) {
     const sessionKey = String(chatJid || 'unknown-chat');
     const now = Date.now();
     const lastActivity = aiSessionActivity.get(sessionKey);
@@ -1404,7 +1416,7 @@ async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null)
 
     const rawReply = await askAI(promptWithContext, base64Media);
     const reply = removeJarvisBrandingPrefix(rawReply);
-    await saveConversationTurn(chatJid, userJid, userPrompt, reply);
+    await saveConversationTurn(chatJid, userJid, userPrompt, reply, interactionId);
     aiSessionActivity.set(sessionKey, Date.now());
     return reply;
 }
@@ -4844,25 +4856,31 @@ if (natural === "define") {
 // Available in DMs and groups; PDF rendering is not handled by the AI Link.
 // =========================
 if (command === "__createfile__" || command === "!createfile") {
-    const request = String(body || text || '').trim();
+    const originalRequest = String(body || text || '').trim();
+    const request = originalRequest.replace(/^\s*!(?:createfile|create(?:\s+document)?|generate(?:\s+pdf)?)\s*/i, '').trim() || originalRequest;
+    validateCreateFileRequest(originalRequest);
+    const format = inferCreateFileFormat(originalRequest);
+    const explicitFilename = extractCreateFileName(originalRequest);
+    const title = deriveCreateFileTitle(request, explicitFilename);
+    const cleanName = (explicitFilename ? path.basename(explicitFilename, path.extname(explicitFilename)) : title)
+        .normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_Document';
+    const filename = `${cleanName}.${format}`;
     await sock.sendMessage(jid, { react: { key: m.key, text: '📝' } });
     await sock.sendPresenceUpdate('composing', jid);
     try {
-        const contentPrompt = `Prepare a clear, accurate, well-structured educational document for this request. Use a useful title, section headings, concise explanations and examples where appropriate. Return document content only; do not claim a PDF has already been created.\n\nREQUEST: ${request}`;
-        const content = await askAIWithMemory(jid, sender, contentPrompt);
+        const contentPrompt = buildCreateFilePrompt(request, format, title);
+        const content = await askAIWithMemory(jid, sender, contentPrompt, null, m.key?.id);
         if (!content || content.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
-        const title = request.replace(/^.*?\b(?:pdf|document|file|note)\b\s*/i, '').trim().slice(0, 100) || 'JARVIS Study Notes';
-        const cleanName = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_Study_Notes';
-        const pdfBuffer = await generatePdfBuffer({ title, content, filename: `${cleanName}.pdf` });
+        const generated = await generateFileForWhatsApp({ format, title, content, filename });
         return sock.sendMessage(jid, {
-            document: pdfBuffer,
-            mimetype: 'application/pdf',
-            fileName: `${cleanName}.pdf`,
-            caption: '✅ *JARVIS PDF Generator*\n\nContent generated by the AI Link and PDF rendered by the Python document service.'
+            document: generated.buffer,
+            mimetype: generated.mimeType,
+            fileName: generated.filename,
+            caption: `✅ *JARVIS File Generator*\n\nCreated your ${format.toUpperCase()} file successfully.`
         }, { quoted: m });
     } catch (err) {
-        console.error('[PDF GENERATOR] Failed:', err.message);
-        return sock.sendMessage(jid, { text: `⚠️ I couldn't create the PDF. ${err.message}` }, { quoted: m });
+        console.error('[FILE GENERATOR] Failed:', err.message);
+        return sock.sendMessage(jid, { text: `⚠️ I couldn't create the ${format.toUpperCase()} file. ${err.message}` }, { quoted: m });
     }
 }
 
@@ -5164,15 +5182,16 @@ if (command === "!menu" || command === "!help") {
 ━━━━━━━━━━━━━━━━━━
 🧠 *AI & LEARNING*
 🔹 !ai [question] — Ask Jarvis anything (or tag Jarvis)
-🔹 !define [word] / !dictionary [word] — Word meanings
 🔹 !quiz [subject] — Start a subject quiz
 🔹 !quiz off / !stopquiz — Stop the active quiz (group admins)
+🔹 !command — Command Inventor help
 🔹 !command list — List saved custom commands
 🔹 !command create name | description | template — Propose a safe custom command
 🔹 !timetable — Get the tutorial timetable
 🔹 !image [prompt] — Generate an image
 🔹 !vv — Retrieve view-once media (reply to it)
-🔹 !createfile / !create document / !generate pdf — Create study notes/files
+🔹 !createfile / !create document / !generate pdf — Generate PDF, Word, Excel, PowerPoint, CSV, TXT, Markdown, HTML or JSON files
+🔹 !create / !generate — Backward-compatible file-generation aliases
 
 🌐 *WEB, TRANSLATION & MEDIA*
 🔹 !crawl [URL] — Inspect a website and capture a screenshot
@@ -5189,6 +5208,8 @@ if (command === "!menu" || command === "!help") {
 🔹 !remind [30m] [message] — Create a reminder
 🔹 !reminders — List pending reminders
 🔹 !cancelreminder [ID] — Cancel a reminder
+🔹 !tts — Show voice-reply settings
+🔹 !tts enable / !tts disable — Enable/disable voice replies
 🔹 !tts on / !tts off — Enable/disable voice replies
 🔹 !tts status — Check voice-reply setting
 🔹 !quiet / !unquiet — Pause/resume AI replies
@@ -5216,9 +5237,13 @@ if (command === "!menu" || command === "!help") {
 🔸 !approvals / !approve ID / !reject ID — Review and decide pending actions
 
 🎓 *FLEXI / ACCOUNT*
+🔹 !pay — Open tutorial payment portal
 🔹 !pay month / !pay week — Open tutorial payment flow
 🔹 !name [your name] — Register/update your learner profile
+🔹 !addxxjarvis — Manage supported JARVIS group integration
 🔹 !addxxjarvis meta [GROUP_ID] — Link supported group integration (owner)
+🔹 !settimetable [department] [URL] — Set a department timetable URL
+🔹 !time — Get the current time
 
 ℹ️ *OTHER*
 🔹 !menu / !help — Show this menu
@@ -5455,7 +5480,7 @@ if (isAiCommand) {
     const actualPrompt = prompt || "Analyze this image clearly.";
     let aiReply;
     if (base64Image) {
-        aiReply = await askAIWithMemory(jid, sender, actualPrompt, base64Image);
+        aiReply = await askAIWithMemory(jid, sender, actualPrompt, base64Image, m.key?.id);
     } else {
         try {
             const history = await getConversationContext(jid, sender);
@@ -5470,12 +5495,20 @@ if (isAiCommand) {
                 isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER,
                 sourceMessage: m
             });
-            if (result.commandDispatched) return;
+            if (result.commandDispatched) {
+                const dispatched = result.outcome?.result || result.outcome || {};
+                const historyNote = dispatched.handlerConfirmed
+                    ? `JARVIS dispatched ${dispatched.command || result.tool || 'the requested command'} to the existing WhatsApp handler, which returned a response.`
+                    : `JARVIS dispatched ${dispatched.command || result.tool || 'the requested command'} to the existing WhatsApp handler. Completion could not be independently confirmed.`;
+                await saveConversationTurn(jid, sender, actualPrompt, historyNote, m.key?.id);
+                return;
+            }
             aiReply = result.reply;
-            await saveConversationTurn(jid, sender, actualPrompt, aiReply);
+            await saveConversationTurn(jid, sender, actualPrompt, aiReply, m.key?.id);
         } catch (agentErr) {
             console.error('[AGENT] Request failed:', agentErr.message);
             aiReply = `⚠️ I couldn't complete that request through the Agent: ${String(agentErr.message || 'Agent error').slice(0, 240)}. No action is being reported as completed. Please try again.`;
+            await saveConversationTurn(jid, sender, actualPrompt, aiReply, m.key?.id);
         }
     }
 

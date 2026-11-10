@@ -1,4 +1,4 @@
-# JARVIS AI WhatsApp Bot — 3.3.0
+# JARVIS AI WhatsApp Bot — 3.3.1
 **Flexi edTech Digital Academy**
 
 JARVIS is the existing WhatsApp assistant extended with a structured AI tool registry, authorization checks, a persistent, group-admin-aware approval queue, a sandboxed development shell, GitHub repository tools, and an ALOC-based native poll quiz. Existing moderation, payments, reminders, dashboard and rich-response modules are retained.
@@ -25,7 +25,7 @@ Do not commit `.env`, `auth_info/`, audit logs, approval data, or the sandbox wo
 
 JARVIS calls the Flexieduconsult AI Link through `AI_API_URL` and authenticates every `/ai` and `/image` request with `AI_API_KEY`. Set this value to exactly the same secret as `JARVIS_API_KEY` on the AI Link deployment. The agent planner requests JSON-mode model output; the tool registry still validates tool names, arguments, permissions and approvals before execution.
 
-PDF creation and PDF text extraction are performed by the Python/ReportLab service, not by the AI Link. The JARVIS package includes `python_services/piper_pdf_router.py`; mount its FastAPI router into the existing Piper app as described in `python_services/README.md`. The routes use the existing `PIPER_API_KEY` and expose `/pdf/generate` and `/pdf/extract`. Piper remains responsible for TTS/voice and its existing media services. If the router is hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
+File generation and PDF text extraction are performed by the Python document router, not by the AI Link. `!createfile` can generate PDF, Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`), CSV, plain text, Markdown, HTML and JSON files. The Python service exposes `/pdf/generate-file` for the general-purpose formats while retaining the existing `/pdf/generate` and `/pdf/extract` routes for compatibility. Deploy the updated `python_services` router/dependencies to the same Python service that already exposes the PDF routes, or mount the router into the existing Piper FastAPI app as described in `python_services/README.md`. All document routes use the existing `PIPER_API_KEY`. Piper TTS and its existing voice/media endpoints are unchanged. If the router is hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
 
 The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz retrieval, WhatsApp poll voting, the 30-second timer, answer explanation and next-question progression.
 
@@ -44,7 +44,7 @@ Poll-vote decryption depends on the installed Baileys fork emitting decrypted `p
 
 ## AI tools, commands and approvals
 
-The AI-led planner first discovers a compact tool catalog, then requests detailed schemas only for the tools it selects. It supports ordered multi-step plans (up to five tools), validates every argument against the registered schema before execution, applies a 38,000-character planning prompt budget (configurable within 35,000–40,000), applies per-actor rate limits, checks roles and writes success/failure audit events. No tool is executed from an invalid or low-confidence plan.
+The AI-led planner first discovers a compact tool catalog, then requests detailed schemas only for the tools it selects. It supports ordered multi-step plans (up to five tools), validates every argument against the registered schema before execution, applies a 30,000-character planning prompt budget (configurable within 24,000–32,000) and performs one bounded compaction retry after HTTP 413, applies per-actor rate limits, checks roles and writes success/failure audit events. No tool is executed from an invalid or low-confidence plan.
 
 Sensitive registered tools are queued rather than executed immediately. The configured bot owner and configured system admins can manage approvals globally. A current WhatsApp administrator can approve or reject requests originating in that same WhatsApp group:
 
@@ -80,6 +80,9 @@ Security checks are intended only for repositories and systems the operator owns
 
 ## Environment variables
 
+The Firebase browser configuration (including its public Web API key) remains embedded in the frontend configuration, as in the original project. Firebase Web API keys are client identifiers, not authorization secrets; restrict the key to the required Google APIs and configure Firebase Authentication and database/storage security rules.
+
+
 | Variable | Purpose |
 |---|---|
 | `PORT` | HTTP service port (default 3000) |
@@ -89,9 +92,9 @@ Security checks are intended only for repositories and systems the operator owns
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
-| `JARVIS_AGENT_PROMPT_MAX_CHARS` | Planner prompt budget; clamped to 35,000–40,000 characters (default 38,000) |
+| `JARVIS_AGENT_PROMPT_MAX_CHARS` | Planner prompt budget; clamped to 24,000–32,000 characters (default 30,000) |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python PDF routes |
-| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate` and `/pdf/extract` |
+| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate`, `/pdf/generate-file` and `/pdf/extract` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
 | `ALOC_TOKEN` | ALOC API access token |
 | `GITHUB_TOKEN` | Least-privilege GitHub token |
@@ -113,7 +116,7 @@ The existing project may also require Firebase and other settings used by its pr
 6. Test `!quiz Mathematics`, voting, 30-second close, explanation, next-question progression, `!stopquiz`, and approval request/reject/approve in a private staging group.
 7. Test GitHub identity and repository permissions with a token limited to the repositories JARVIS should access.
 8. Deploy the authenticated AI Link with the matching `JARVIS_API_KEY`; set `AI_API_URL` and `AI_API_KEY` in JARVIS.
-9. Mount `python_services/piper_pdf_router.py` into the existing Piper FastAPI app, deploy it with `PIPER_API_KEY`, then test `generate pdf ...` and PDF upload analysis in a private chat.
+9. Deploy the updated `python_services/piper_pdf_router.py` and its requirements to the existing Python document/Piper service with the same `PIPER_API_KEY`; then test PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON generation, plus PDF upload analysis. Piper TTS itself remains unchanged.
 
 ## Verification and limitations
 
@@ -129,13 +132,13 @@ See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end 
 Natural-language requests are interpreted by the AI planner and mapped to registered tools. The former local keyword/regex natural-language router has been removed. Tool plans require a confidence value of at least 0.75 and still pass argument, role, rate-limit and approval checks. Deterministic explicit commands remain available. See `INTEGRATION-DEPLOYMENT.md` for the paired AI Link and Piper/PDF deployment steps.
 
 
-## Agent Command Registry (3.2.0)
+## Agent Command Registry (3.3.1)
 
-JARVIS exposes 68 WhatsApp command forms (including aliases and subcommands) as individual `whatsapp_*` Agent tools. The catalog lives in `agent/commandRegistry.js`; the Agent can inspect it through `command_registry_list` and `command_registry_get`.
+JARVIS exposes exactly 57 WhatsApp command forms (including aliases and subcommands) as individual `whatsapp_*` Agent tools. Nine group-management commands remain available only through the existing WhatsApp handler, and `!define` / `!dictionary` have been removed from the command menu and Agent registry. The catalog lives in `agent/commandRegistry.js`; the Agent can inspect it through `command_registry_list` and `command_registry_get`.
 
 Agent command tools dispatch through the existing WhatsApp message handler. This deliberately reuses existing command implementations and their group/owner permission checks rather than creating parallel implementations. Command responses are sent by the original handler, so the Agent suppresses a duplicate conversational reply after dispatch.
 
-The 68 entries represent command forms, not 68 independent business capabilities: aliases such as `!dictionary`/`!define` and `!getgroupids`/`!groupids` reuse the same underlying handler. `!create document` and `!generate pdf` route to the existing PDF/document creation handler.
+The 57 entries represent Agent-visible command forms, not 57 independent business capabilities; aliases reuse the same underlying handler. `!create document` and `!generate pdf` remain backward-compatible aliases handled by the same generator; PDF remains the default when no format is specified.
 
 Configured JARVIS system admins and the owner can use read-only GitHub inspection tools. System-admin privileges are kept separate from WhatsApp group-admin status: group actions verify live WhatsApp metadata, and group admins do not gain global GitHub or system-admin privileges. GitHub write/deploy operations remain approval-gated. Existing Piper TTS settings and endpoints are unchanged.
 
@@ -143,3 +146,8 @@ Run `npm run check` and `npm test` before deployment. Live WhatsApp, AI endpoint
 
 ### AI planner troubleshooting (3.2.1)
 The planner accepts valid JSON objects, fenced JSON, and a JSON object embedded in a model response. If the first response is malformed, it requests one corrected JSON response; it never executes a tool until the plan validates. AI gateway HTTP/network errors are surfaced separately, so check the JARVIS logs for `[AI GATEWAY] Request failed` and verify `AI_API_URL`, `AI_API_KEY`, and the AI Link JSON-mode response if a planner request still fails.
+
+
+## General-purpose file creation
+
+`!createfile` infers PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML or JSON from the request or filename and delivers a real generated document through WhatsApp. PDF remains the default when no format is specified. The existing authenticated PDF generation and extraction routes remain available.
