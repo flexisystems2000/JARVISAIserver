@@ -1,3 +1,12 @@
+## 3.2.0 — 2026-11-11
+- Replaced the GitHub Pages publisher with approval-gated Vercel production deployment and verified `.vercel.app` links.
+- Added repository-to-Vercel import with path and secret checks; expanded GitHub read access to authorised group admins.
+- Added authenticated multi-format file generation for office documents, data, source-code formats, SVG, RTF and ZIP.
+- Expanded existing AI Agent tools for education, reminders, voice, YouTube/video, website inspection, profile/payment, status and group administration.
+- Removed `!define`, `!dictionary` and `!translate`; kept `!ai` on its existing entry point.
+- Added clean human-readable deployment replies, compact tool discovery, schema validation, bounded multi-step planning and duplicate-action protection.
+- Automated validation: 57 Node tests and 7 Python file/PDF tests pass. Live external deployments still require the operator's credentials and service updates.
+
 # Changelog
 
 ## 3.0.0 - 2026-11-08
@@ -60,7 +69,7 @@
 - Scoped group-admin approval lists to the requesting group and recorded the actual approver in the audit trail.
 - Restored direct `!command list` and `!command create name | description | template` flows. Custom commands remain restricted to safe templates, require approval before persistence, and can be invoked as `!command_name` by authorised admins.
 - Added Agent tools for image generation through the existing authenticated AI Link `/image` endpoint and for locking/unlocking groups through the existing Baileys group-setting API.
-- Added an approval-gated GitHub Pages static-site creation/deployment tool that returns the configured Pages URL after publishing site files.
+- Added an approval-gated Vercel production deployment tool that returns a verified .vercel.app URL after publishing project files.
 - Removed the free-form AI fallback after Agent execution errors so JARVIS does not imply an action succeeded when its tool execution failed.
 - Preserved `@innovatorssoft/baileys`, existing Piper TTS, AI Link authentication, existing bot integrations and quiz behavior.
 - Added regression tests for Watchdog matching, group-scoped approvals and dynamic command execution.

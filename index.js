@@ -27,10 +27,13 @@ const { createAuditLogger } = require('./agent/audit');
 const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
+const { VercelAgent } = require('./agent/vercelAgent');
+const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { detectWatchdogViolation } = require('./agent/watchdog');
+const { validateProjectFiles } = require('./agent/codeValidator');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -189,7 +192,293 @@ agentTools.register({
     permissions: ['public'],
     handler: async ({ url }) => checkWebsite(url, true)
 });
+agentTools.register({
+    name: 'timetable_get', description: 'Send the configured timetable for Science, Commercial or Art to the current WhatsApp chat.',
+    parameters: { type: 'object', properties: { department: { type: 'string', enum: ['science','commercial','art'] } }, required: ['department'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ department }, context) => {
+        if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
+        const saved = await Config.findOne({ keyName: `timetable:${department}` }).lean();
+        if (!saved?.keyValue) throw new Error(`No ${department} timetable has been configured yet.`);
+        const labels = { science: '🔬 SCIENCE DEPARTMENT', commercial: '💼 COMMERCIAL DEPARTMENT', art: '📖 ART DEPARTMENT' };
+        await context.sock.sendMessage(context.chatId, { text: `🗓️ *${labels[department]} TIMETABLE*\\n\\n${saved.keyValue}` });
+        return { sent: true, department };
+    }
+});
+agentTools.register({
+    name: 'quiz_start', description: 'Start a JARVIS subject quiz in the current WhatsApp group.',
+    parameters: { type: 'object', properties: { subject: { type: 'string', minLength: 2, maxLength: 80 } }, required: ['subject'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ subject }, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('Quizzes can only be started inside a WhatsApp group.');
+        const resolved = quizEngine.resolveSubject(subject);
+        if (!resolved) throw new Error(`Unknown subject. Available subjects: ${quizEngine.getAvailableSubjects().map(x => x.name).join(', ')}`);
+        const result = await quizEngine.fireQuiz(context.sock, { subject: resolved.slug, groupJid: context.chatId });
+        if (!result || result.error) throw new Error(result?.error || 'The quiz could not be started.');
+        return { started: true, subject: resolved.name };
+    }
+});
+agentTools.register({
+    name: 'quiz_stop', description: 'Stop the active JARVIS quiz in the current WhatsApp group.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        if (!context.isGroup) throw new Error('There is no group quiz to stop in a private chat.');
+        const active = quizEngine.getActiveQuiz(context.chatId);
+        if (!active) return { stopped: false, message: 'There is no active quiz in this group.' };
+        quizEngine.stopQuiz(context.chatId);
+        return { stopped: true };
+    }
+});
+agentTools.register({
+    name: 'reminder_create', description: 'Create a reminder in the current WhatsApp chat. Duration examples: 30m, 2h, 1d.',
+    parameters: { type: 'object', properties: { duration: { type: 'string', maxLength: 30 }, message: { type: 'string', minLength: 1, maxLength: 1000 } }, required: ['duration','message'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ duration, message }, context) => {
+        if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected, so reminders cannot be saved.');
+        const delay = parseReminderDelay(duration); if (!delay) throw new Error('Use a duration such as 30m, 2h or 1d.');
+        const dueAt = new Date(Date.now() + delay);
+        const reminder = await Reminder.create({ chatJid: context.chatId, requesterJid: context.actor || '', text: message, dueAt });
+        startReminderWorker();
+        return { created: true, id: String(reminder._id), message, dueAt: dueAt.toISOString() };
+    }
+});
+agentTools.register({
+    name: 'reminder_list', description: 'List pending reminders for the current WhatsApp chat.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected.');
+        return Reminder.find({ chatJid: context.chatId, status: 'pending' }).sort({ dueAt: 1 }).limit(20).lean();
+    }
+});
+agentTools.register({
+    name: 'reminder_cancel', description: 'Cancel a pending reminder in the current WhatsApp chat by its ID.',
+    parameters: { type: 'object', properties: { id: { type: 'string', minLength: 24, maxLength: 24 } }, required: ['id'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ id }, context) => {
+        if (mongoose.connection.readyState !== 1) throw new Error('MongoDB is not connected.');
+        const result = await Reminder.updateOne({ _id: id, chatJid: context.chatId, status: 'pending' }, { $set: { status: 'cancelled' } });
+        return { cancelled: result.modifiedCount > 0 };
+    }
+});
+agentTools.register({
+    name: 'tts_control', description: 'Enable or disable JARVIS voice replies for the current WhatsApp chat.',
+    parameters: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ enabled }, context) => { await setTTSMode(context.chatId, enabled); return { enabled }; }
+});
+agentTools.register({
+    name: 'youtube_search', description: 'Search YouTube and return matching video results.',
+    parameters: { type: 'object', properties: { query: { type: 'string', minLength: 2, maxLength: 200 } }, required: ['query'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ query }) => searchYouTube(query, 5)
+});
+agentTools.register({
+    name: 'website_crawl', description: 'Inspect a public website and return its title, description and page headings.',
+    parameters: { type: 'object', properties: { url: { type: 'string', minLength: 8, maxLength: 2000 } }, required: ['url'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ url }) => checkWebsite(url, true)
+});
+agentTools.register({
+    name: 'chat_status', description: 'Return JARVIS runtime, memory and database status.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async () => ({ uptimeSeconds: Math.floor(process.uptime()), database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected', memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024), node: process.version })
+});
+agentTools.register({
+    name: 'current_chat_id', description: 'Return the JID of the current WhatsApp chat.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => ({ chatId: context.chatId })
+});
+agentTools.register({
+    name: 'group_online_activity', description: 'Count group members active in the last 30 minutes.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('This command is available only in a WhatsApp group.');
+        const metadata = await context.sock.groupMetadata(context.chatId); const active = (metadata.participants || []).filter(person => activityTracker.has(person.id) && Date.now() - activityTracker.get(person.id) < 30 * 60 * 1000).length;
+        return { active, inactive: Math.max(0, (metadata.participants || []).length - active), total: metadata.participants?.length || 0 };
+    }
+});
+agentTools.register({
+    name: 'group_ids_list', description: 'List WhatsApp groups the bot participates in. Bot owner only.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['owner'],
+    handler: async (_args, context) => {
+        if (!context.sock?.groupFetchAllParticipating) throw new Error('Group listing is unavailable in this Baileys version.');
+        const groups = await context.sock.groupFetchAllParticipating();
+        return Object.entries(groups || {}).filter(([id]) => id.endsWith('@g.us')).map(([id, group]) => ({ id, name: group.subject || id, members: group.participants?.length || 0 }));
+    }
+});
+agentTools.register({
+    name: 'profile_name_set', description: 'Register or update the current learner profile name.',
+    parameters: { type: 'object', properties: { name: { type: 'string', minLength: 2, maxLength: 80 } }, required: ['name'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ name }, context) => {
+        const cleanName = String(name).replace(/[<>\\]/g, '').trim();
+        if (cleanName.length < 2) throw new Error('Please provide a valid name with at least two characters.');
+        const phone = normalizePhone(context.actor);
+        if (!phone) throw new Error('Could not identify the WhatsApp account for this profile.');
+        await db.collection('users').doc(phone).set({ name: cleanName, phone, updatedAt: Date.now(), createdAt: Date.now() }, { merge: true });
+        return { saved: true, name: cleanName };
+    }
+});
+agentTools.register({
+    name: 'payment_request', description: 'Open the existing Flexi tutorial payment flow for monthly or weekly payment.',
+    parameters: { type: 'object', properties: { period: { type: 'string', enum: ['month','week'] } }, required: ['period'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ period }, context) => {
+        if (!context.sock || !context.messageObject) throw new Error('WhatsApp message context is unavailable for the payment flow.');
+        await paymentHandler.handlePaymentRequest(context.sock, context.messageObject, context.actor, [period]);
+        return { opened: true, period };
+    }
+});
+agentTools.register({
+    name: 'health_graph', description: 'Generate and send a current JARVIS health snapshot image.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        const memory = process.memoryUsage(); const wa = context.sock?.user ? 100 : 0; const database = mongoose.connection.readyState === 1 ? 100 : 0;
+        const heap = Math.max(0, Math.min(100, Math.round((1 - memory.heapUsed / Math.max(memory.heapTotal, 1)) * 100)));
+        const chartConfig = { type: 'line', data: { labels: ['WhatsApp','Database','Memory headroom'], datasets: [{ label: 'Health (%)', data: [wa,database,heap], borderColor: '#00d9ff', backgroundColor: 'rgba(0,217,255,0.2)', fill: true, tension: 0.35 }] }, options: { title: { display: true, text: 'JARVIS AI — Current Health Snapshot' }, legend: { display: false }, scales: { yAxes: [{ ticks: { min: 0, max: 100 } }] } } };
+        const response = await axios.post('https://quickchart.io/chart', { chart: chartConfig, width: 900, height: 500, format: 'png', backgroundColor: '#07111f' }, { responseType: 'arraybuffer', timeout: 15000 });
+        await context.sock.sendMessage(context.chatId, { image: Buffer.from(response.data), caption: '📈 *JARVIS AI health snapshot*' });
+        return { sent: true };
+    }
+});
+agentTools.register({
+    name: 'command_menu', description: 'Show the available JARVIS WhatsApp command menu.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
+        await context.sock.sendMessage(context.chatId, { text: menu });
+        return { sent: true };
+    }
+});
+
+async function assertAgentGroupAdmin(context) {
+    if (!context.isGroup || !context.sock) throw new Error('This action is available only inside a WhatsApp group.');
+    const metadata = await context.sock.groupMetadata(context.chatId);
+    const requesterJid = context.requestedBy || context.actor;
+    const requester = metadata.participants?.find(person => [person.id, person.phoneNumber, person.lid].filter(Boolean).some(candidate => areJidsSameUser(candidate, requesterJid)));
+    const requesterNumber = String(requesterJid || '').split('@')[0].replace(/\D/g, '');
+    if (requesterNumber !== OWNER_NUMBER && !requester?.admin) throw new Error('The original requester is no longer a WhatsApp group administrator.');
+    return metadata;
+}
+agentTools.register({
+    name: 'group_add_member', description: 'Add a phone number to the current WhatsApp group. Requires group admin permission and approval.',
+    parameters: { type: 'object', properties: { phone: { type: 'string', minLength: 7, maxLength: 20 } }, required: ['phone'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ phone }, context) => { await assertAgentGroupAdmin(context); const number = phone.replace(/\D/g, ''); if (number.length < 7) throw new Error('Provide a valid phone number with country code.'); const result = await context.sock.groupParticipantsUpdate(context.chatId, [`${number}@s.whatsapp.net`], 'add'); return { action: 'add', result }; }
+});
+agentTools.register({
+    name: 'group_remove_member', description: 'Remove a participant from the current WhatsApp group. Requires group admin permission and approval.',
+    parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; return { action: 'remove', result: await context.sock.groupParticipantsUpdate(context.chatId, [target], 'remove') }; }
+});
+agentTools.register({
+    name: 'group_promote_member', description: 'Promote a participant to WhatsApp group administrator. Requires group admin permission and approval.',
+    parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; return { action: 'promote', result: await context.sock.groupParticipantsUpdate(context.chatId, [target], 'promote') }; }
+});
+agentTools.register({
+    name: 'group_ban_member', description: 'Ban a participant from the current group and remove them. Requires group admin permission and approval.',
+    parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; await Ban.findOneAndUpdate({ groupJid: context.chatId, userJid: target }, { $set: { bannedBy: context.requestedBy || context.actor } }, { upsert: true, new: true }); const result = await context.sock.groupParticipantsUpdate(context.chatId, [target], 'remove'); return { action: 'ban', target, result }; }
+});
+agentTools.register({
+    name: 'group_unban_member', description: 'Lift a participant ban in the current WhatsApp group. Requires group admin permission and approval.',
+    parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; const result = await Ban.deleteOne({ groupJid: context.chatId, userJid: target }); return { action: 'unban', lifted: result.deletedCount > 0, target }; }
+});
+agentTools.register({
+    name: 'group_reset_warnings', description: 'Reset a participant warning count. Requires group admin permission.',
+    parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'],
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; const result = await Warn.deleteOne({ userId: target }); return { reset: result.deletedCount > 0, participant: target }; }
+});
+
+agentTools.register({
+    name: 'quiet_mode_set', description: 'Pause or resume conversational AI replies in the current group. Requires a current WhatsApp group admin.',
+    parameters: { type: 'object', properties: { quiet: { type: 'boolean' } }, required: ['quiet'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async ({ quiet }, context) => {
+        if (!context.isGroup || !context.sock) throw new Error('Quiet mode is available only in WhatsApp groups.');
+        const metadata = await context.sock.groupMetadata(context.chatId);
+        const requester = metadata.participants?.find(person => [person.id, person.phoneNumber, person.lid].filter(Boolean).some(candidate => areJidsSameUser(candidate, context.requestedBy || context.actor)));
+        if (!requester?.admin && !context.isOwner) throw new Error('The requester is no longer a group administrator.');
+        await Config.findOneAndUpdate({ keyName: `ai-quiet:${context.chatId}` }, { $set: { keyValue: quiet ? 'true' : 'false' } }, { upsert: true, new: true, setDefaultsOnInsert: true });
+        return { quiet };
+    }
+});
+agentTools.register({
+    name: 'video_generate', description: 'Generate a video from a text prompt using the existing JARVIS video service.',
+    parameters: { type: 'object', properties: { prompt: { type: 'string', minLength: 5, maxLength: 1000 } }, required: ['prompt'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ prompt }, context) => {
+        const result = await createMagicHourVideo(prompt);
+        const projectId = findMagicHourValue(result, ['project_id','projectId','id','job_id','jobId']);
+        const videoUrl = findMagicHourVideoUrl(result);
+        if (projectId) latestMagicHourVideoByChat.set(context.chatId, String(projectId));
+        if (videoUrl) {
+            const buffer = await downloadMagicHourVideo(videoUrl);
+            await context.sock.sendMessage(context.chatId, { video: buffer, mimetype: 'video/mp4', caption: '🎬 *JARVIS video generated successfully*' });
+            return { generated: true, delivered: true };
+        }
+        if (projectId) { void monitorAndDeliverMagicHourVideo(context.sock, context.chatId, String(projectId)); return { generated: true, processing: true, projectId }; }
+        throw new Error('The video service did not return a project ID or video URL.');
+    }
+});
+agentTools.register({
+    name: 'video_status', description: 'Check the latest JARVIS video-generation job in the current chat.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
+    handler: async (_args, context) => {
+        const projectId = latestMagicHourVideoByChat.get(context.chatId);
+        if (!projectId) return { found: false, message: 'No recent video request was found in this chat.' };
+        const status = await getMagicHourVideoStatus(projectId);
+        return { found: true, projectId, status: String(findMagicHourValue(status, ['status','state','project_status']) || 'unknown').toLowerCase(), videoUrl: findMagicHourVideoUrl(status) || null };
+    }
+});
+agentTools.register({
+    name: 'youtube_send_video', description: 'Download and send a YouTube video by video ID or URL through the configured JARVIS media service.',
+    parameters: { type: 'object', properties: { video: { type: 'string', minLength: 5, maxLength: 300 } }, required: ['video'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ video }, context) => { const buffer = await downloadYouTubeVideo(video); await context.sock.sendMessage(context.chatId, { video: buffer, mimetype: 'video/mp4', caption: '▶️ *YouTube video*' }); return { sent: true }; }
+});
+agentTools.register({
+    name: 'youtube_send_audio', description: 'Download and send audio for a YouTube video by video ID or URL through the configured JARVIS media service.',
+    parameters: { type: 'object', properties: { video: { type: 'string', minLength: 5, maxLength: 300 } }, required: ['video'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ video }, context) => { const buffer = await downloadYouTubeAudio(video); await context.sock.sendMessage(context.chatId, { audio: buffer, mimetype: 'audio/mpeg', fileName: 'youtube-audio.mp3' }); return { sent: true }; }
+});
+agentTools.register({
+    name: 'timetable_set', description: 'Set a Science, Commercial or Art timetable URL. Bot owner only.',
+    parameters: { type: 'object', properties: { department: { type: 'string', enum: ['science','commercial','art'] }, url: { type: 'string', minLength: 8, maxLength: 2000 } }, required: ['department','url'], additionalProperties: false }, permissions: ['owner'],
+    handler: async ({ department, url }) => { const safe = validatePublicHttpUrl(url); await Config.findOneAndUpdate({ keyName: `timetable:${department}` }, { $set: { keyValue: safe.toString() } }, { upsert: true, new: true, setDefaultsOnInsert: true }); return { saved: true, department, url: safe.toString() }; }
+});
+agentTools.register({
+    name: 'group_remove_all_non_admins', description: 'Remove all non-admin members from the current WhatsApp group. Requires group admin permission and explicit approval.',
+    parameters: { type: 'object', properties: { confirm: { type: 'boolean', enum: [true] } }, required: ['confirm'], additionalProperties: false }, permissions: ['admin'], requiresApproval: true,
+    handler: async (_args, context) => {
+        const metadata = await assertAgentGroupAdmin(context);
+        const botJid = context.sock.user?.id;
+        const targets = (metadata.participants || []).filter(person => !person.admin && !areJidsSameUser(person.id, botJid)).map(person => person.id);
+        let removed = 0;
+        for (let i = 0; i < targets.length; i += 10) { await context.sock.groupParticipantsUpdate(context.chatId, targets.slice(i, i + 10), 'remove'); removed += targets.slice(i, i + 10).length; }
+        return { removed, group: metadata.subject || context.chatId };
+    }
+});
+agentTools.register({
+    name: 'approval_list', description: 'List pending actions that this requester is authorised to review.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['admin'],
+    handler: async (_args, context) => {
+        const actorNumber = String(context.actor || '').split('@')[0].replace(/\D/g, '');
+        const isSystemAdmin = String(process.env.ADMIN_NUMBERS || '').split(',').map(x => x.trim().replace(/\D/g,'')).includes(actorNumber);
+        return approvalManager.list({ chatId: context.chatId, includeAll: !!context.isOwner || isSystemAdmin });
+    }
+});
+agentTools.register({
+    name: 'approval_decide', description: 'Approve or reject a pending action in this chat. Only the owner, system admin or an admin of the requesting group may decide.',
+    parameters: { type: 'object', properties: { id: { type: 'string', minLength: 8, maxLength: 8 }, approve: { type: 'boolean' } }, required: ['id','approve'], additionalProperties: false }, permissions: ['admin'],
+    handler: async ({ id, approve }, context) => {
+        const actorNumber = String(context.actor || '').split('@')[0].replace(/\D/g, '');
+        const isSystemAdmin = String(process.env.ADMIN_NUMBERS || '').split(',').map(x => x.trim().replace(/\D/g,'')).includes(actorNumber);
+        const isGroupAdmin = context.isGroup ? !!(await context.sock.groupMetadata(context.chatId)).participants?.some(person => person.admin && [person.id,person.phoneNumber,person.lid].filter(Boolean).some(candidate => areJidsSameUser(candidate, context.actor))) : false;
+        return approvalManager.decide(id, { actor: context.actor, isOwner: !!context.isOwner, isSystemAdmin, isGroupAdmin, chatId: context.chatId, approve, execute: item => agentTools.execute(item.tool, item.args, { actor: context.actor, requestedBy: item.requester, chatId: item.chatId || context.chatId, isGroup: !!item.isGroup, isOwner: !!context.isOwner, isAdmin: !!context.isAdmin, sock: context.sock, approved: true }) });
+    }
+});
+
+agentTools.register({
+    name: 'file_create', description: 'Create a requested PDF, Word, Excel, PowerPoint, CSV, text, data, code, SVG or ZIP file and send it to the current WhatsApp chat.',
+    parameters: { type: 'object', properties: { request: { type: 'string', minLength: 5, maxLength: 4000 } }, required: ['request'], additionalProperties: false }, permissions: ['user'],
+    handler: async ({ request }, context) => {
+        if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
+        return createFileForChat({ request, chatId: context.chatId, actor: context.actor, sock: context.sock });
+    }
+});
+
 const githubAgent = new GitHubAgent();
+const vercelAgent = new VercelAgent();
 const platformAuth = new PlatformAuth();
 agentTools.register({
     name: 'image_generate',
@@ -293,30 +582,60 @@ agentTools.register({
     name: 'github_list_repositories',
     description: 'List repositories accessible to the configured GitHub token.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['admin'],
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
     name: 'github_inspect_tree',
     description: 'List paths in a GitHub repository tree.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['admin'],
     handler: async args => githubAgent.getTree(args.owner, args.repo, args.branch)
 });
 agentTools.register({
     name: 'github_read_file',
     description: 'Read a file from a GitHub repository.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['admin'],
     handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
 });
 agentTools.register({
     name: 'website_create_and_deploy',
-    description: 'Create a public static website repository, publish its HTML/CSS/JS files, enable GitHub Pages, and return the Pages URL. Requires GitHub repository creation/admin permission and explicit JARVIS approval.',
-    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, description: { type: 'string', maxLength: 350 }, files: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 50000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo','files'], additionalProperties: false },
+    description: 'Deploy a website project to Vercel and return its verified .vercel.app URL. Requires explicit JARVIS approval.',
+    parameters: { type: 'object', properties: { repo: { type: 'string', maxLength: 100 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 1000000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo','files'], additionalProperties: false },
     permissions: ['admin'],
     requiresApproval: true,
-    handler: async ({ owner, repo, description, files }) => githubAgent.createAndDeployStaticWebsite(owner, repo, description, files, true)
+    handler: async ({ repo, files }) => vercelAgent.deployFiles({ name: repo, files, production: true })
+});
+agentTools.register({
+    name: 'github_repository_deploy_to_vercel',
+    description: 'Read an authorised GitHub repository and deploy its source files to Vercel. Requires explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
+    permissions: ['admin'], requiresApproval: true,
+    handler: async ({ owner, repo, branch }) => {
+      const metadata = await githubAgent.getRepository(owner, repo);
+      const tree = await githubAgent.getTree(owner, repo, branch || metadata.default_branch);
+      const excluded = /(^|\/)(node_modules|\.next|dist|build)(\/|$)/i;
+      const sensitive = /(^|\/)(?:\.env(?:\..*)?|\.git|id_rsa|id_ed25519|secrets?\.(?:json|ya?ml)|credentials?\.(?:json|ya?ml))$/i;
+      const eligible = tree.filter(item => item.type === 'blob' && !excluded.test(item.path));
+      if (!eligible.length || eligible.length > 100) throw new Error('Repository must contain between 1 and 100 deployable files.');
+      const files = []; const textFiles = [];
+      const textExtensions = new Set(['html','htm','css','js','mjs','cjs','json','md','txt','xml','yaml','yml','svg','ts','tsx','jsx','vue','svelte','php','py','java','cpp','sql','toml','webmanifest']);
+      for (const item of eligible) {
+        if (sensitive.test(item.path)) throw new Error(`Deployment blocked because the repository contains a sensitive file: ${item.path}`);
+        if (item.size > 1000000) throw new Error(`Repository file ${item.path} exceeds the 1 MB limit.`);
+        const extension = item.path.split('.').pop().toLowerCase();
+        if (textExtensions.has(extension)) {
+          const content = await githubAgent.readFile(owner, repo, item.path, branch || metadata.default_branch);
+          files.push({ path: item.path, content }); textFiles.push({ path: item.path, content });
+        } else {
+          files.push({ path: item.path, contentBase64: await githubAgent.readFileBase64(owner, repo, item.path, branch || metadata.default_branch) });
+        }
+      }
+      validateProjectFiles(textFiles, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000 });
+      const deployment = await vercelAgent.deployFiles({ name: repo, files, production: true });
+      return { ...deployment, repository: metadata.full_name, branch: branch || metadata.default_branch };
+    }
 });
 agentTools.register({
     name: 'github_write_file',
@@ -338,7 +657,7 @@ agentTools.register({
     name: 'github_search_code',
     description: 'Search source code in repositories accessible to the configured GitHub account.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['admin'],
     handler: async ({ query }) => githubAgent.searchCode(query)
 });
 agentTools.register({
@@ -494,15 +813,6 @@ async function captureWebsiteScreenshot(rawUrl) {
         throw new Error('Webshot response was not a valid JPEG image.');
     }
     return { buffer, url, fullPage: mode.endsWith('_full'), mode };
-}
-
-async function translateText(source, target, input) {
-    const endpoint = (process.env.LIBRETRANSLATE_URL || 'https://libretranslate.de').replace(/\/$/, '');
-    const payload = { q: input, source: source || 'auto', target, format: 'text' };
-    if (process.env.LIBRETRANSLATE_API_KEY) payload.api_key = process.env.LIBRETRANSLATE_API_KEY;
-    const response = await axios.post(`${endpoint}/translate`, payload, { timeout: 20000, headers: { 'Content-Type': 'application/json' } });
-    if (!response.data?.translatedText) throw new Error('Translation service returned no translated text.');
-    return response.data.translatedText;
 }
 
 // ============================================================
@@ -1190,6 +1500,38 @@ async function generatePdfBuffer({ title, content, filename }) {
     const result = await callPythonDocumentApi('generate', { title, content, filename });
     if (!result.pdfBase64) throw new Error('Python document service returned no PDF file.');
     return Buffer.from(result.pdfBase64, 'base64');
+}
+
+async function createFileForChat({ request, chatId, actor, sock, quotedMessage = null }) {
+    validateCreateFileRequest(request);
+    const format = inferCreateFileFormat(request);
+    const requestedName = extractCreateFileName(request);
+    const title = deriveCreateFileTitle(request, requestedName);
+    const extension = format === 'yml' ? 'yaml' : format;
+    const safeTitle = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_File';
+    const filename = requestedName || `${safeTitle}.${extension}`;
+    const generated = await askAIWithMemory(chatId, actor, buildCreateFilePrompt(request, format, title));
+    if (!generated || generated.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
+    let content = String(generated).trim().replace(/^```(?:[a-z0-9_-]+)?\s*/i, '').replace(/```\s*$/i, '');
+    let files = null;
+    if (format === 'zip') {
+        let parsed;
+        try { parsed = JSON.parse(content); } catch { throw new Error('The AI did not return a valid file collection for the ZIP archive.'); }
+        files = parsed.files;
+        if (!Array.isArray(files) || !files.length || files.length > 100) throw new Error('The ZIP archive must contain between 1 and 100 files.');
+    }
+    const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+    if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
+    const response = await axios.post(`${PIPER_DOCUMENT_API_URL}/files/generate`, { filename, title, content, ...(files ? { files } : {}) }, {
+        timeout: PIPER_DOCUMENT_TIMEOUT_MS, maxContentLength: 20 * 1024 * 1024, maxBodyLength: 20 * 1024 * 1024,
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+    });
+    if (!response.data?.success || !response.data?.fileBase64) throw new Error(response.data?.error || 'File service returned no generated file.');
+    const buffer = Buffer.from(response.data.fileBase64, 'base64');
+    if (!buffer.length) throw new Error('The generated file was empty.');
+    await sock.sendMessage(chatId, { document: buffer, mimetype: response.data.mimeType || CREATE_FILE_FORMATS[format] || 'application/octet-stream', fileName: response.data.filename || filename,
+        caption: `✅ *JARVIS File Creator*\n\nYour ${format.toUpperCase()} file is ready.` }, quotedMessage ? { quoted: quotedMessage } : undefined);
+    return { created: true, filename: response.data.filename || filename, format, bytes: buffer.length };
 }
 
 // Build a stable memory boundary: each person's DM is separate, and
@@ -2029,7 +2371,12 @@ We wish you success ahead from *${groupName}* 🎓`,
                 approve: approved,
                 execute: item => agentTools.execute(item.tool, item.args, { actor: sender, requestedBy: item.requester, chatId: item.chatId || jid, isGroup: !!item.isGroup, isOwner: isConfiguredOwner, isAdmin: isConfiguredOwner || isConfiguredSystemAdmin || isWhatsAppGroupAdmin, sock, approved: true })
             });
-            await sock.sendMessage(jid, { text: approved ? `✅ Approval ${result.approvalId} executed for ${result.tool}.\n\n${JSON.stringify(result.result?.result ?? result.result).slice(0, 2500)}` : `🚫 Approval ${result.approvalId} rejected. The action was not executed.` }, { quoted: m });
+            const approvedValue = result.result?.result ?? result.result;
+            let approvalMessage = '✅ Approved action completed successfully.';
+            if (approved && result.tool === 'website_create_and_deploy') approvalMessage = `✅ *Website deployment completed successfully!*\n\n🌐 *Live Website:* ${approvedValue?.url || 'Deployment URL unavailable'}\n📦 *Project:* ${approvedValue?.project || 'Website'}\n🚀 *Platform:* Vercel\n📌 *Status:* ${approvedValue?.verified ? 'Deployment verified' : 'Verification pending'}`;
+            else if (approved && result.tool === 'github_repository_deploy_to_vercel') approvalMessage = `✅ *Website deployment completed successfully!*\n\n🌐 *Live Website:* ${approvedValue?.url || 'Deployment URL unavailable'}\n📦 *Repository:* ${approvedValue?.repository || 'GitHub project'}\n🚀 *Platform:* Vercel\n📌 *Status:* ${approvedValue?.verified ? 'Deployment verified' : 'Verification pending'}`;
+            else if (!approved) approvalMessage = '🚫 Approval rejected. The action was not executed.';
+            await sock.sendMessage(jid, { text: approvalMessage }, { quoted: m });
         } catch (error) {
             await sock.sendMessage(jid, { text: `⚠️ Approval action failed: ${String(error.message).slice(0, 500)}` }, { quoted: m });
         }
@@ -2201,23 +2548,6 @@ if (
             const result = await Reminder.updateOne({ _id: cancelReminderMatch[1], chatJid: jid, status: 'pending' }, { $set: { status: 'cancelled' } });
             await operationalReply(result.modifiedCount ? '✅ Reminder cancelled.' : 'I could not find a pending reminder with that ID in this chat.');
         } catch (err) { await operationalReply(`⚠️ Could not cancel reminder: ${err.message}`); }
-        return;
-    }
-
-    // Translation: !translate English Yoruba text, or "translate ... to Yoruba: ...".
-    let translationParts = rawMsgCheck.match(/^!translate\s+(\S+)\s+(\S+)\s+([\s\S]+)$/i);
-    if (!translationParts) {
-        const naturalTranslate = rawMsgCheck.match(/^translate\s+([\s\S]+?)\s+to\s+(English|Yoruba|Igbo|Hausa|French|Spanish|Arabic|Portuguese|German|Chinese|Japanese|Korean|Italian|Swahili)\s*[:：]?\s*["“]?([\s\S]+?)["”]?$/i);
-        if (naturalTranslate) translationParts = [naturalTranslate[0], 'auto', naturalTranslate[2], naturalTranslate[3]];
-    }
-    if (translationParts) {
-        try {
-            const langCodes = { english: 'en', yoruba: 'yo', igbo: 'ig', hausa: 'ha', french: 'fr', spanish: 'es', arabic: 'ar', portuguese: 'pt', german: 'de', chinese: 'zh', japanese: 'ja', korean: 'ko', italian: 'it', swahili: 'sw', auto: 'auto' };
-            const sourceLang = langCodes[String(translationParts[1]).toLowerCase()] || String(translationParts[1]).toLowerCase();
-            const targetLang = langCodes[String(translationParts[2]).toLowerCase()] || String(translationParts[2]).toLowerCase();
-            const translated = await translateText(sourceLang, targetLang, translationParts[3]);
-            await operationalReply(`🌍 *TRANSLATION* (${translationParts[1]} → ${translationParts[2]})\n\n${translated}`);
-        } catch (err) { await operationalReply(`⚠️ Translation failed: ${err.response?.data?.error || err.message}\nYou may configure LIBRETRANSLATE_URL and, if required, LIBRETRANSLATE_API_KEY in Render.`); }
         return;
     }
 
@@ -2814,7 +3144,7 @@ const mediaRequestWords = [
     "study",
     "interpret",
     "calculate",
-    "translate"
+    ""
 ];
 
 const hasExplicitMedia =
@@ -4383,36 +4713,6 @@ if (!naturalText.startsWith("!")) {
         },
 
         // =========================
-        // DICTIONARY
-        // =========================
-        {
-            name: "define",
-            patterns: [
-                /^define\s+.+$/i,
-                /^define\s+/i,
-                /^dictionary\s+.+$/i,
-                /^dictionary\s+/i,
-                /^what does .+ mean/i,
-                /^what is .+ mean/i,
-                  /^what is .+/i,
-                 /^what are .+/i,
-                /^tell me what .+ means/i,
-                /^explain the word .+/i,
-                /^give me the meaning of .+/i,
-                /^define the word .+/i,
-                /^lookup .+/i,
-                /^look up .+/i,
-                /^meaning of .+/i,
-                /^define (a|the|an)\s+/i,
-                /^jarvis\s+define\s+.+$/i,
-                /^jarvis\s+dictionary\s+.+$/i,
-                /^what does jarvis\s+mean/i,
-                 /^explain .+/i,
-                /^define the word jarvis/i
-            ]
-        },
-
-        // =========================
         // AI
         // =========================
         {
@@ -4489,7 +4789,6 @@ if (natural) {
         unmute: "!unmute",
         reset: "!reset",
         createfile: "__createfile__", // 👈 Added missing comma here
-        define: "!define",              // 👈 Properly mapped dictionary command
         vv: "!vv"
     };
 
@@ -4517,38 +4816,6 @@ if (natural) {
 
         args.splice(0, args.length, ...prompt.split(/\s+/));
     }
-
-// =========================
-// 📖 DICTIONARY ARGUMENT EXTRACTION
-// =========================
-if (natural === "define") {
-
-    let word = naturalText
-        .replace(/^define\s+/i, "")
-        .replace(/^dictionary\s+/i, "")
-        .replace(/^what does\s+/i, "")
-        .replace(/\s+mean\??$/i, "")
-        .replace(/^tell me what\s+/i, "")
-        .replace(/\s+means\??$/i, "")
-        .replace(/^explain the word\s+/i, "")
-        .replace(/^give me the meaning of\s+/i, "")
-        .replace(/^define the word\s+/i, "")
-        .replace(/^lookup\s+/i, "")
-        .replace(/^look up\s+/i, "")
-        .replace(/^meaning of\s+/i, "")
-        .replace(/^what is\s+/i, "")
-        .replace(/^what are\s+/i, "")
-        .replace(/[?.!]+$/g, "")
-        .trim();
-
-    args.splice(
-        0,
-        args.length,
-        word
-    );
-
-    console.log(`📖 Dictionary Word: ${word}`);
-}
 
     if (natural === "image") {
 
@@ -4752,22 +5019,12 @@ if (command === "__createfile__" || command === "!createfile") {
     await sock.sendMessage(jid, { react: { key: m.key, text: '📝' } });
     await sock.sendPresenceUpdate('composing', jid);
     try {
-        const contentPrompt = `Prepare a clear, accurate, well-structured educational document for this request. Use a useful title, section headings, concise explanations and examples where appropriate. Return document content only; do not claim a PDF has already been created.\n\nREQUEST: ${request}`;
-        const content = await askAIWithMemory(jid, sender, contentPrompt);
-        if (!content || content.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
-        const title = request.replace(/^.*?\b(?:pdf|document|file|note)\b\s*/i, '').trim().slice(0, 100) || 'JARVIS Study Notes';
-        const cleanName = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_Study_Notes';
-        const pdfBuffer = await generatePdfBuffer({ title, content, filename: `${cleanName}.pdf` });
-        return sock.sendMessage(jid, {
-            document: pdfBuffer,
-            mimetype: 'application/pdf',
-            fileName: `${cleanName}.pdf`,
-            caption: '✅ *JARVIS PDF Generator*\n\nContent generated by the AI Link and PDF rendered by the Python document service.'
-        }, { quoted: m });
+        await createFileForChat({ request, chatId: jid, actor: sender, sock, quotedMessage: m });
     } catch (err) {
-        console.error('[PDF GENERATOR] Failed:', err.message);
-        return sock.sendMessage(jid, { text: `⚠️ I couldn't create the PDF. ${err.message}` }, { quoted: m });
+        console.error('[FILE GENERATOR] Failed:', err.message);
+        return sock.sendMessage(jid, { text: `⚠️ I couldn't create that file. ${String(err.message || err).slice(0, 350)}` }, { quoted: m });
     }
+    return;
 }
 
     // =========================
@@ -4839,141 +5096,7 @@ if (command === "__createfile__" || command === "!createfile") {
     }
 
 
-// --- PUBLIC COMMAND: DICTIONARY ---
-if (command === "!define" || command === "!dictionary" || natural === "define") {
-
-    const word = args.join(" ")
-        .toLowerCase()
-        .replace(/[^a-z'-]/g, "")
-        .trim();
-
-    if (!word) {
-        return sendWithTyping(jid, {
-            text: "Sure — which word would you like me to explain?"
-        }, m);
-    }
-
-    await sock.sendMessage(jid, {
-        react: {
-            key: m.key,
-            text: "📖"
-        }
-    });
-
-    // ==========================================
-    // PRIMARY DICTIONARY API
-    // ==========================================
-    try {
-
-        console.log(`📖 Looking up: ${word}`);
-
-        const response = await axios.get(
-            `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
-            {
-                timeout: 8000
-            }
-        );
-
-        const data = response.data?.[0];
-
-        if (data) {
-
-            const phonetic =
-                data.phonetic ||
-                data.phonetics?.find(p => p.text)?.text ||
-                "";
-
-            const meaning =
-                data.meanings?.[0];
-
-            const partOfSpeech =
-                meaning?.partOfSpeech || "";
-
-            const definition =
-                meaning?.definitions?.[0]?.definition || "";
-
-            const example =
-                meaning?.definitions?.[0]?.example || "";
-
-            if (definition) {
-
-                let reply =
-                    `*${data.word || word}*`;
-
-                if (phonetic) {
-                    reply += ` ${phonetic}`;
-                }
-
-                if (partOfSpeech) {
-                    reply += `\n_${partOfSpeech}_`;
-                }
-
-                reply += `\n\n${definition}`;
-
-                if (example) {
-                    reply += `\n\nFor example: "${example}"`;
-                }
-
-                return sendWithTyping(jid, {
-                    text: reply
-                }, m);
-            }
-        }
-
-    } catch (err) {
-
-        console.log(
-            `⚠️ Dictionary API failed: ${err.response?.status || err.message}`
-        );
-    }
-
-
-    // ==========================================
-    // DATAMUSE FALLBACK
-    // ==========================================
-    try {
-
-        console.log(`🔄 Trying dictionary fallback: ${word}`);
-
-        const fallback = await axios.get(
-            `https://api.datamuse.com/words?sp=${encodeURIComponent(word)}&md=d&max=1`,
-            {
-                timeout: 8000
-            }
-        );
-
-        const result = fallback.data?.[0];
-
-        if (result?.defs?.length) {
-
-            const definition =
-                result.defs[0].replace(/^[a-z]+\t/i, "");
-
-            return sendWithTyping(jid, {
-                text:
-                    `*${word}*\n\n${definition}`
-            }, m);
-        }
-
-    } catch (err) {
-
-        console.log(
-            `⚠️ Dictionary fallback failed: ${err.response?.status || err.message}`
-        );
-    }
-
-
-    // ==========================================
-    // FINAL RESPONSE
-    // ==========================================
-    return sendWithTyping(jid, {
-        text:
-            `I couldn't find a clear definition for *${word}* right now. ` +
-            `Please check the spelling and try again.`
-    }, m);
-}
-
-   // --- COMMAND: VIEW ONCE RETRIEVER (!vv) ---
+// --- COMMAND: VIEW ONCE RETRIEVER (!vv) ---
 if (command === "!vv" || text === "vv" || text === "save view once") {
     await vvCommand(sock, jid, m);
     return;
@@ -5068,7 +5191,6 @@ if (command === "!menu" || command === "!help") {
 ━━━━━━━━━━━━━━━━━━
 🧠 *AI & LEARNING*
 🔹 !ai [question] — Ask Jarvis anything (or tag Jarvis)
-🔹 !define [word] / !dictionary [word] — Word meanings
 🔹 !quiz [subject] — Start a subject quiz
 🔹 !quiz off / !stopquiz — Stop the active quiz (group admins)
 🔹 !command list — List saved custom commands
@@ -5076,12 +5198,11 @@ if (command === "!menu" || command === "!help") {
 🔹 !timetable — Get the tutorial timetable
 🔹 !image [prompt] — Generate an image
 🔹 !vv — Retrieve view-once media (reply to it)
-🔹 !createfile / !create document / !generate pdf — Create study notes/files
+🔹 !createfile / !create document / !generate pdf — Create documents, spreadsheets, presentations, code and more
 
-🌐 *WEB, TRANSLATION & MEDIA*
+🌐 *WEB & MEDIA*
 🔹 !crawl [URL] — Inspect a website and capture a screenshot
 🔹 !sitecheck [URL] — Check if a website is online
-🔹 !translate [source] [target] [text] — Translate text
 🔹 !yt search [query] — Search YouTube
 🔹 !yt video [query or VIDEO_ID] — Download/send video
 🔹 !yt audio [query or VIDEO_ID] — Download/send MP3 audio
@@ -5369,8 +5490,9 @@ if (isAiCommand) {
                 actor: sender,
                 chatId: jid,
                 isGroup: jid.endsWith('@g.us'),
-                isAdmin: !!isStaff,
+                isAdmin: !!isStaff || String(process.env.ADMIN_NUMBERS || '').split(',').map(x => x.trim().replace(/\D/g, '')).includes(String(sender || '').split('@')[0].replace(/\D/g, '')),
                 sock,
+                messageObject: m,
                 isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER
             });
             aiReply = result.reply;

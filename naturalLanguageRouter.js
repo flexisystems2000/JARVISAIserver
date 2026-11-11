@@ -28,7 +28,6 @@ const VALID_INTENTS = [
     "mute",
     "unmute",
     "reset",
-    "define",
     "createfile",
     "vv",
     "ai"
@@ -225,28 +224,6 @@ function localClassify(text) {
             intent: "getjid",
             confidence: 0.95,
             arguments: {}
-        };
-    }
-
-
-    // --------------------------------------------------------
-    // DICTIONARY
-    // --------------------------------------------------------
-
-    if (
-        /\b(meaning|definition|define|dictionary)\b/i
-            .test(value)
-        ||
-        /\bwhat does\b.+\bmean\b/i
-            .test(value)
-    ) {
-
-        return {
-            intent: "define",
-            confidence: 0.94,
-            arguments: {
-                query: value
-            }
         };
     }
 

@@ -1,24 +1,32 @@
-# JARVIS 3.3.1 — Upgrade notes
+# JARVIS AI upgrade notes — November 2026
 
-## Command visibility
-- Exactly 57 command forms are exposed as Agent tools.
-- `!define` and `!dictionary` are removed from the Agent registry and `!menu`.
-- `!add`, `!kick`, `!remove all`, `!ban`, `!unban`, `!promote`, `!mute`, `!unmute` and `!reset` remain in the WhatsApp command menu and existing handlers, but are not Agent tools.
+## Protected architecture
+- Existing WhatsApp bot structure and frontend are retained. `!ai` remains on its existing flow.
+- No new AI Agent or central router was introduced. The existing AI Agent now uses compact tool discovery, schema validation, one argument-correction attempt, duplicate-step protection and bounded multi-step execution.
 
-## File creation
-`!createfile` supports PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON. It infers the requested format, accepts a filename/title, creates a real file through the authenticated Python document service and sends it as a WhatsApp document. PDF remains the default. Install the updated `python_services/requirements.txt` in the document service before deployment.
+## Removed commands
+- `!define`, `!dictionary` and `!translate` are removed from the command registry, menu, natural-language router and direct command handling.
 
-## Memory and AI reliability
-MongoDB conversation turns now support an interaction ID to avoid duplicate user/assistant records when a WhatsApp event is processed more than once. The existing per-chat/per-user boundary and 200-record cap remain. Agent dispatch results and useful Agent failures are saved. Planner prompts are smaller, malformed structured output receives one correction attempt, and HTTP 413 receives at most one compacted retry.
+## AI Agent command access
+- Added tools for file creation, timetable delivery, quiz start/stop, reminders, voice preferences, YouTube search/video/audio delivery, video generation/status, website inspection, system status, chat/group information, learner profile names, payment requests, health snapshots and command menu display.
+- Added protected group-member add/remove/promote/ban/unban and warning-reset tools. Group membership changes require approval and re-check that the original requester remains a current group admin.
+- Existing group mute/unmute, group-name and image-generation tools remain available. The bulk `!remove all` operation is exposed only through an explicit approval-gated tool. View-once media retrieval is not exposed as an AI Agent tool.
 
-## Permissions and Piper
-Approval remains available to the bot owner, system administrators and authorized administrators of the requesting WhatsApp group. Ordinary group members and administrators of unrelated groups are denied. Piper TTS source, voice engine and existing endpoints were not replaced or restructured.
+## GitHub and Vercel
+- GitHub repository listing, tree inspection, file reading and code search now allow owner, configured system admins and current WhatsApp group admins. Write/delete operations remain approval-gated.
+- Removed the GitHub Pages publisher. Website creation and repository-to-website deployment now use Vercel and return a `.vercel.app` URL only after Vercel reports READY and the URL responds successfully.
+- Configure `VERCEL_TOKEN` and optional `VERCEL_TEAM_ID` in the protected hosting environment. Direct upload supports static/text project files (up to 100 files, 1 MB per file, 8 MB total); framework projects needing dependency installation/build steps require a linked Vercel Git integration or CLI deployment workflow.
 
-## Local validation
-- Node.js automated tests: 64 passed, 0 failed.
-- Node.js syntax checks: passed.
-- Python document/PDF tests: 9 passed, 0 failed.
-- Live WhatsApp, AI provider, MongoDB and Piper playback checks require deployment credentials and a staging environment.
+## Multi-format file creation
+- `!createfile` and the AI Agent `file_create` tool support PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML, JSON, XML, YAML/YML, CSS, JavaScript, Python, PHP, Java, C++, SQL, SVG, RTF, TypeScript/TSX/JSX, C/C++, C#, Go, Rust, Ruby, shell/PowerShell, TOML, INI, configuration, LaTeX, MDX, JSONL and ZIP.
+- The authenticated Python service exposes `/files/generate`; install the updated `python_services/requirements.txt` and mount both routers in the deployed service. Existing `/pdf/*` routes remain.
+- PDF remains the default when no format is specified.
 
-## Frontend Firebase configuration
-The Firebase browser configuration, including its public Web API key, remains embedded in the frontend as in the original project. No `FIREBASE_WEB_API_KEY` environment variable is required. Restrict the key to required APIs and enforce access through Firebase Authentication and security rules.
+## Validation
+- `npm run check`: passed.
+- `node --test`: 57 passed, 0 failed.
+- Python document-service tests: 7 passed, 0 failed; Python syntax compilation: passed.
+- Live WhatsApp, GitHub, Vercel, MongoDB, AI Link and deployed Piper integration checks were not possible in this local ZIP-editing session.
+
+## Required deployment configuration
+See `.env.example` and `INTEGRATION-DEPLOYMENT.md`. Do not put secrets in source control or WhatsApp messages.

@@ -25,7 +25,7 @@ Do not commit `.env`, `auth_info/`, audit logs, approval data, or the sandbox wo
 
 JARVIS calls the Flexieduconsult AI Link through `AI_API_URL` and authenticates every `/ai` and `/image` request with `AI_API_KEY`. Set this value to exactly the same secret as `JARVIS_API_KEY` on the AI Link deployment. The agent planner requests JSON-mode model output; the tool registry still validates tool names, arguments, permissions and approvals before execution.
 
-PDF creation and PDF text extraction are performed by the Python/ReportLab service, not by the AI Link. The JARVIS package includes `python_services/piper_pdf_router.py`; mount its FastAPI router into the existing Piper app as described in `python_services/README.md`. The routes use the existing `PIPER_API_KEY` and expose `/pdf/generate` and `/pdf/extract`. Piper remains responsible for TTS/voice and its existing media services. If the router is hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
+File creation is performed by the authenticated Python service, not by the AI Link. The JARVIS package includes `python_services/piper_pdf_router.py`; mount both its PDF and general-file routers into the existing Piper FastAPI app as described in `python_services/README.md`. The routes use `PIPER_API_KEY` and expose `/pdf/generate`, `/pdf/extract` and `/files/generate`. The general file route supports PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML, JSON, XML, YAML, CSS, JavaScript, Python, PHP, Java, C++, SQL, SVG, RTF, TypeScript/TSX/JSX, C/C++, C#, Go, Rust, Ruby, shell/PowerShell, TOML, INI, configuration, LaTeX, MDX, JSONL and ZIP. Piper remains responsible for TTS/voice and its existing media services. If hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
 
 The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz retrieval, WhatsApp poll voting, the 30-second timer, answer explanation and next-question progression.
 
@@ -56,9 +56,9 @@ Requests expire after 10 minutes by default. Approval records are stored under `
 
 The Command Inventor supports `!command list` and `!command create name | description | template`. It only persists safe `echo` and `template` commands; it does not generate arbitrary JavaScript or shell scripts. Ordinary members can propose a command, but a JARVIS owner/system admin or an administrator of the requesting WhatsApp group must approve it before persistence. Saved commands are stored under `data/commands/` and can be invoked as `!command_name` by authorised admins.
 
-## GitHub Pages website creation
+## Vercel website deployment
 
-The Agent exposes `website_create_and_deploy` for static HTML/CSS/JavaScript websites. JARVIS creates or updates the requested repository, publishes up to 30 text files (including a root `index.html`), enables GitHub Pages, and returns the Pages URL. The action requires an explicit approval and the configured GitHub token must have the required repository creation/admin and Pages permissions. The returned URL is the configured publication URL; the first deployment can take several minutes to become publicly reachable, so JARVIS does not claim it is live-verified until an actual HTTP check succeeds.
+The Agent exposes `website_create_and_deploy` for new static website files and `github_repository_deploy_to_vercel` for importing an authorised GitHub repository's files into a Vercel deployment. Both are approval-gated and return a `.vercel.app` URL only after Vercel reports the deployment READY and the public URL responds successfully. Direct file deployment supports up to 100 files, 1 MB per file and 8 MB total. It does not run framework dependency installation/build steps; framework projects should use a linked Vercel Git integration or Vercel CLI workflow. Configure `VERCEL_TOKEN` and optional `VERCEL_TEAM_ID` in protected hosting environment variables.
 
 ## Platform authentication and GitHub
 
@@ -85,11 +85,13 @@ Security checks are intended only for repositories and systems the operator owns
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
-| `PIPER_API_KEY` | Shared secret for Piper TTS and the Python PDF routes |
-| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/generate` and `/pdf/extract` |
+| `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
+| `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/*` and `/files/generate` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
 | `ALOC_TOKEN` | ALOC API access token |
 | `GITHUB_TOKEN` | Least-privilege GitHub token |
+| `VERCEL_TOKEN` | Vercel API token used for approved production deployments |
+| `VERCEL_TEAM_ID` | Optional Vercel team ID for team-scoped deployments |
 | `GITHUB_OWNER` | Optional default GitHub owner/org |
 | `GITHUB_ALLOWED_REPOS` | Optional comma-separated repository allowlist |
 | `JARVIS_PLATFORM_ADAPTERS` | Optional JSON array of provider HTTPS identity adapters |
@@ -108,7 +110,8 @@ The existing project may also require Firebase and other settings used by its pr
 6. Test `!quiz Mathematics`, voting, 30-second close, explanation, next-question progression, `!stopquiz`, and approval request/reject/approve in a private staging group.
 7. Test GitHub identity and repository permissions with a token limited to the repositories JARVIS should access.
 8. Deploy the authenticated AI Link with the matching `JARVIS_API_KEY`; set `AI_API_URL` and `AI_API_KEY` in JARVIS.
-9. Mount `python_services/piper_pdf_router.py` into the existing Piper FastAPI app, deploy it with `PIPER_API_KEY`, then test `generate pdf ...` and PDF upload analysis in a private chat.
+9. Mount both routers from `python_services/piper_pdf_router.py` into the Piper FastAPI app (or deploy `python_services/pdf_service.py` as a companion), configure `PIPER_API_KEY`, then test PDF, DOCX, XLSX and ZIP generation in a private chat.
+10. Configure `VERCEL_TOKEN` and optional `VERCEL_TEAM_ID` in Render, then test a Vercel deployment using a non-critical test project and approve the production deployment only after reviewing it.
 
 ## Verification and limitations
 
@@ -116,9 +119,16 @@ The included automated suite covers tool validation, role checks, approval lifec
 
 The group Watchdog remains enabled for configured blocked terms and links. It now uses whole-word matching to avoid substring false positives, and current WhatsApp group admins are excluded from moderation. Group admins are verified from live WhatsApp group metadata rather than relying only on environment variables. Universal OAuth and platform management for every service are not claimed as complete; each platform must be integrated and tested individually.
 
-See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end AI Link, Piper and PDF setup.
+See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end AI Link, Piper multi-format file service and Vercel setup.
 
 
 ## AI-first planner and external services
 
 Natural-language requests are interpreted by the AI planner and mapped to registered tools. The former local keyword/regex natural-language router has been removed. Tool plans require a confidence value of at least 0.75 and still pass argument, role, rate-limit and approval checks. Deterministic explicit commands remain available. See `INTEGRATION-DEPLOYMENT.md` for the paired AI Link and Piper/PDF deployment steps.
+
+
+## Vercel deployment and file generation
+
+Website deployments use the Vercel API and return verified `.vercel.app` URLs. Configure `VERCEL_TOKEN` (and optional `VERCEL_TEAM_ID`) in the hosting environment. Production deployment remains approval-gated.
+
+The file creator supports PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML, JSON, XML, YAML, CSS, JavaScript, Python, PHP, Java, C++, SQL, SVG, RTF, TypeScript/TSX/JSX, C/C++, C#, Go, Rust, Ruby, shell/PowerShell, TOML, INI, configuration, LaTeX, MDX, JSONL and ZIP. The Python service must be updated and deployed with the dependencies and `/files/generate` route documented in `INTEGRATION-DEPLOYMENT.md`.

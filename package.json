@@ -1,7 +1,7 @@
 {
   "name": "jarvis-ai-bot",
   "version": "3.1.0",
-  "description": "JARVIS AI WhatsApp agent with AI-first intent routing, approval-gated tools, poll quizzes, PDF tools and Piper TTS",
+  "description": "JARVIS AI WhatsApp agent with Vercel deployments, multi-format file creation, approval-gated tools, GitHub integration and Piper services",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -19,13 +19,17 @@
     "render",
     "mongodb",
     "tts",
-    "translation",
     "youtube",
     "reminders",
     "agent",
     "tool-registry",
     "github",
-    "sandbox"
+    "sandbox",
+    "vercel",
+    "file-generation",
+    "docx",
+    "xlsx",
+    "pptx"
   ],
   "author": "Flexi edTech Digital Academy",
   "license": "ISC",
