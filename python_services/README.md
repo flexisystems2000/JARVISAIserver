@@ -1,27 +1,29 @@
-# Piper PDF routes (Python)
+# JARVIS document and multi-format file service
 
-This module adds PDF generation and text extraction to the existing Piper Python service. It does not replace Piper's speech/TTS, YouTube, or other endpoints.
+This FastAPI service provides authenticated PDF extraction and general file generation. It can run as a standalone companion service or be mounted into the existing Piper FastAPI app. It does not replace Piper TTS, YouTube or video endpoints.
 
-## Mount into Piper (FastAPI)
+## Mount into an existing Piper FastAPI service
 
-Copy `piper_pdf_router.py` into the Piper service source tree, install `requirements.txt` dependencies (or merge them into Piper's existing requirements), then register the router in Piper's FastAPI app:
+Install the packages in `requirements.txt` (merge them into the Piper service requirements), then mount both routers:
 
 ```python
-from piper_pdf_router import router as pdf_router
+from piper_pdf_router import router as pdf_router, files_router
 app.include_router(pdf_router)
+app.include_router(files_router)
 ```
 
-The routes use the existing `PIPER_API_KEY` environment variable and `x-api-key` header. They do not expose PDF operations publicly.
-
-If the Piper service uses a framework other than FastAPI, deploy this module as a small FastAPI companion service instead; set `PIPER_DOCUMENT_API_URL` in JARVIS to that service's base URL.
+Set `PIPER_API_KEY` in the service and configure the same value as `PIPER_API_KEY` in JARVIS. Requests use the `x-api-key` header.
 
 ## Routes
 
-- `POST /pdf/generate` — JSON `{ "title": "...", "content": "...", "filename": "notes.pdf" }`; returns `pdfBase64`.
-- `POST /pdf/extract` — JSON `{ "fileBase64": "...", "filename": "source.pdf" }`; returns extracted text and page count.
+- `POST /pdf/generate` — generate a PDF from title/content; returns `pdfBase64`.
+- `POST /pdf/extract` — extract text from a PDF; returns text and page count.
+- `POST /files/generate` — create PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML, JSON, XML, YAML/YML, CSS, JavaScript, Python, PHP, Java, C++, SQL, SVG, RTF, TypeScript/TSX/JSX, C/C++, C#, Go, Rust, Ruby, shell/PowerShell, TOML, INI, configuration, LaTeX, MDX, JSONL or ZIP; returns `fileBase64` and MIME type.
 
-Limits: 15 MB per uploaded PDF, 100 pages, and 100,000 characters of generated content. Text extraction is not OCR; scanned/image-only PDFs will need OCR added separately if required.
+General file generation accepts `{ "filename": "notes.docx", "title": "Notes", "content": "..." }`. ZIP generation accepts a `files` array of `{ "path": "relative/path", "content": "..." }` entries. XLSX/CSV content should be JSON tabular data; PPTX content should be a JSON object with a `slides` array.
+
+Limits: 15 MB generated/uploaded file size, up to 100 ZIP entries, and 2 million characters for a general text payload. HTML/SVG content is stripped of script-like elements and common inline event attributes. ZIP paths are checked to prevent traversal.
 
 ## Standalone deployment
 
-Create a FastAPI app that includes the router, then start it with `uvicorn app:app --host 0.0.0.0 --port $PORT`. Set `PIPER_API_KEY` to the same secret already used by JARVIS.
+`pdf_service.py` mounts both routers. Run it with `uvicorn pdf_service:app --host 0.0.0.0 --port $PORT`. Point `PIPER_DOCUMENT_API_URL` in JARVIS to the service base URL.
