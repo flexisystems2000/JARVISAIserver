@@ -9,25 +9,39 @@ class ToolRegistry {
   }
   unregister(name) { return this.tools.delete(name); }
   describe() { return [...this.tools.values()].map(({ name, description, parameters, permissions, requiresApproval }) => ({ name, description, parameters, permissions: permissions || ['user'], requiresApproval: !!requiresApproval })); }
-  validateArguments(schema, args) {
+  validateValue(rule, value, key) {
+    if (rule.type === 'string' && typeof value !== 'string') throw new Error(`${key} must be a string`);
+    if (rule.type === 'integer' && !Number.isInteger(value)) throw new Error(`${key} must be an integer`);
+    if (rule.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`${key} must be a finite number`);
+    if (rule.type === 'boolean' && typeof value !== 'boolean') throw new Error(`${key} must be a boolean`);
+    if (rule.type === 'array') {
+      if (!Array.isArray(value)) throw new Error(`${key} must be an array`);
+      if (rule.minItems !== undefined && value.length < rule.minItems) throw new Error(`${key} has too few items`);
+      if (rule.maxItems !== undefined && value.length > rule.maxItems) throw new Error(`${key} has too many items`);
+      if (rule.items) value.forEach((item, index) => this.validateValue(rule.items, item, `${key}[${index}]`));
+    }
+    if (rule.type === 'object') this.validateArguments(rule, value, key);
+    if (rule.enum && !rule.enum.includes(value)) throw new Error(`${key} has an unsupported value`);
+    if (rule.minimum !== undefined && typeof value === 'number' && value < rule.minimum) throw new Error(`${key} is below its minimum`);
+    if (rule.maximum !== undefined && typeof value === 'number' && value > rule.maximum) throw new Error(`${key} exceeds its maximum`);
+    if (rule.minLength !== undefined && typeof value === 'string' && value.length < rule.minLength) throw new Error(`${key} is too short`);
+    if (rule.maxLength !== undefined && typeof value === 'string' && value.length > rule.maxLength) throw new Error(`${key} is too long`);
+  }
+  validateArguments(schema, args, prefix = 'arguments') {
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be an object');
     if (schema.additionalProperties === false) for (const key of Object.keys(args)) if (!schema.properties?.[key]) throw new Error(`Unexpected argument: ${key}`);
     for (const key of schema.required || []) if (!(key in args)) throw new Error(`Missing required argument: ${key}`);
     for (const [key, value] of Object.entries(args)) {
-      const rule = schema.properties?.[key]; if (!rule) continue;
-      if (rule.type === 'string' && typeof value !== 'string') throw new Error(`${key} must be a string`);
-      if (rule.type === 'integer' && !Number.isInteger(value)) throw new Error(`${key} must be an integer`);
-      if (rule.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`${key} must be a finite number`);
-      if (rule.type === 'boolean' && typeof value !== 'boolean') throw new Error(`${key} must be a boolean`);
-      if (rule.type === 'array' && !Array.isArray(value)) throw new Error(`${key} must be an array`);
-      if (rule.enum && !rule.enum.includes(value)) throw new Error(`${key} has an unsupported value`);
-      if (rule.minimum !== undefined && typeof value === 'number' && value < rule.minimum) throw new Error(`${key} is below its minimum`);
-      if (rule.maximum !== undefined && typeof value === 'number' && value > rule.maximum) throw new Error(`${key} exceeds its maximum`);
-      if (rule.minLength !== undefined && typeof value === 'string' && value.length < rule.minLength) throw new Error(`${key} is too short`);
-      if (rule.maxLength !== undefined && typeof value === 'string' && value.length > rule.maxLength) throw new Error(`${key} is too long`);
-      if (rule.minItems !== undefined && Array.isArray(value) && value.length < rule.minItems) throw new Error(`${key} has too few items`);
-      if (rule.maxItems !== undefined && Array.isArray(value) && value.length > rule.maxItems) throw new Error(`${key} has too many items`);
+      const rule = schema.properties?.[key];
+      if (rule) this.validateValue(rule, value, `${prefix}.${key}`);
     }
+  }
+  catalog({ actor, context = {} } = {}) {
+    const role = this.permissions?.role(actor, context) || 'user';
+    const levels = { user: 1, admin: 2, owner: 3 };
+    return [...this.tools.values()].filter(tool => (tool.permissions || ['user']).some(required => required === 'public' || levels[role] >= (levels[required] || 99))).map(tool => ({
+      name: tool.name, description: String(tool.description).slice(0, 150), requiresApproval: !!tool.requiresApproval
+    }));
   }
   async execute(name, args, context = {}) {
     const tool = this.tools.get(name);

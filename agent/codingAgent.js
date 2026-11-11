@@ -4,26 +4,22 @@ const { validateProjectFiles } = require('./codeValidator');
 const { ProjectManager } = require('./projectManager');
 const { DeploymentAgent } = require('./deploymentAgent');
 class CodingAgent {
-  constructor({ github, askModel, projectManager } = {}) {
-    if (!github || typeof askModel !== 'function') throw new Error('CodingAgent requires GitHubAgent and AI model adapter.');
-    this.github = github;
+  constructor({ vercel, askModel, projectManager } = {}) {
+    if (!vercel || typeof askModel !== 'function') throw new Error('CodingAgent requires VercelAgent and AI model adapter.');
+    this.vercel = vercel;
     this.generator = createCodeGenerator({ askModel });
     this.projects = projectManager || new ProjectManager();
-    this.deployment = new DeploymentAgent({ github });
+    this.deployment = new DeploymentAgent({ vercel });
   }
-  async createAndDeploy({ request, repositoryName, owner, approved = false }) {
-    if (!approved) throw new Error('Owner approval is required before creating a public repository or deploying a website.');
-    const generated = await this.generator.generate({ request, projectName: repositoryName });
-    const files = validateProjectFiles(generated.files);
-    const name = String(repositoryName || generated.name || 'jarvis-website')
-      .toLowerCase().replace(/[^a-z0-9_.-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 90) || 'jarvis-website';
-    const repo = await this.github.createRepository(name, generated.description, false);
-    const record = { name, description: generated.description, owner: repo.owner, repository: repo.full_name, files: files.map(x => x.path), createdAt: new Date().toISOString() };
+  async createAndDeploy({ request, projectName, approved = false }) {
+    if (!approved) throw new Error('Explicit approval is required before deploying a production website.');
+    const generated = await this.generator.generate({ request, projectName });
+    const files = validateProjectFiles(generated.files, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000 });
+    const name = String(projectName || generated.name || 'jarvis-website').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-website';
+    const deployment = await this.deployment.publish({ name, files, approved: true });
+    const record = { name, description: generated.description, files: files.map(x => x.path), deploymentUrl: deployment.url, createdAt: new Date().toISOString() };
     await this.projects.save(record);
-    const deployment = await this.deployment.publish({ owner: repo.owner, repo: repo.name, files, branch: repo.default_branch || 'main', approved: true });
-    return { ...record, repositoryUrl: deployment.repositoryUrl, liveUrl: deployment.deploymentUrl,
-      deploymentVerified: deployment.deploymentVerified, deploymentStatus: deployment.pagesStatus,
-      verification: deployment.verification };
+    return { ...record, liveUrl: deployment.url, deploymentVerified: deployment.verified, deploymentStatus: deployment.state };
   }
 }
 module.exports = { CodingAgent };

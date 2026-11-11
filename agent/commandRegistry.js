@@ -2,16 +2,14 @@
 
 const BUILT_IN_COMMANDS = [
   ['!ai','AI & Learning','!ai [question]','Ask JARVIS a question'],
-  ['!define','AI & Learning','!define [word]','Define a word',['!dictionary']],
   ['!quiz','AI & Learning','!quiz [subject]','Start a subject quiz; use !quiz off to stop'],
   ['!quiz off','AI & Learning','!quiz off','Stop the active quiz in the current group'],
   ['!timetable','AI & Learning','!timetable','Show the tutorial timetable'],
   ['!image','AI & Learning','!image [prompt]','Generate an image'],
   ['!vv','AI & Learning','!vv','Retrieve view-once media'],
-  ['!createfile','AI & Learning','!createfile','Create a study document or PDF',['!create document','!generate pdf']],
+  ['!createfile','AI & Learning','!createfile','Create documents, spreadsheets, presentations, code and other supported files',['!create document','!generate pdf']],
   ['!crawl','Web & Media','!crawl [URL]','Inspect a public website'],
   ['!sitecheck','Web & Media','!sitecheck [URL]','Check website availability'],
-  ['!translate','Web & Media','!translate [source] [target] [text]','Translate text'],
   ['!yt','Web & Media','!yt [search|video|audio|download]','Search or retrieve YouTube media'],
   ['!video','Web & Media','!video [prompt|status]','Generate or check a video'],
   ['!remind','Reminders','!remind [duration] [message]','Create a reminder'],
