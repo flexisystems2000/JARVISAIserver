@@ -123,3 +123,15 @@ test('command inventor registers safe templates as callable tools', async () => 
  assert.equal(result.result.text,'Welcome Ada to Flexi!');
  await fs.promises.rm(dir,{recursive:true,force:true});
 });
+
+test('agent returns a clean verified Vercel deployment response instead of raw tool JSON', async () => {
+  const { createAgentBrain } = require('../agent/brain');
+  const { createToolRegistry } = require('../agent/toolRegistry');
+  const registry = createToolRegistry();
+  registry.register({ name: 'website_create_and_deploy', description: 'Deploy a static website to Vercel.', parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'], handler: async () => ({ url: 'https://sample-site.vercel.app', project: 'sample-site', verified: true }) });
+  const brain = createAgentBrain({ registry, askModel: async () => JSON.stringify({ action: 'tool', tool: 'website_create_and_deploy', arguments: {}, confidence: 0.99 }) });
+  const result = await brain.handle({ message: 'Deploy my website', actor: 'user' });
+  assert.match(result.reply, /https:\/\/sample-site\.vercel\.app/);
+  assert.match(result.reply, /Deployment verified/);
+  assert.doesNotMatch(result.reply, /\{"success"/);
+});

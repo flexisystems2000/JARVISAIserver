@@ -31,8 +31,7 @@ test('GitHub agent enforces optional repository allowlist', () => {
   }
 });
 
-test('GitHub Pages deployment requires approval and a root index.html', async () => {
- const agent=new GitHubAgent({token:'test-token',owner:'flexisystems2000'});
- await assert.rejects(()=>agent.createAndDeployStaticWebsite(undefined,'demo','Demo',[],false),/Explicit approval/);
- await assert.rejects(()=>agent.createAndDeployStaticWebsite(undefined,'demo','Demo',[{path:'about.html',content:'hello'}],true),/index.html/);
+test('GitHub agent no longer exposes a GitHub Pages publisher', () => {
+ const agent = new GitHubAgent({ token: 'test-token', owner: 'flexisystems2000' });
+ assert.equal(typeof agent.createAndDeployStaticWebsite, 'undefined');
 });
