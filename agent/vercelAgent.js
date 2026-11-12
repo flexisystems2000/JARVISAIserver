@@ -1,6 +1,23 @@
 'use strict';
 const axios = require('axios');
 const { verifyVercelUrl } = require('./vercelVerifier');
+
+function assertDirectStaticProject(files) {
+  const configs = /^(?:next|vite|nuxt|astro|svelte|remix|gatsby)\.config\./i;
+  const configFile = files.find(item => configs.test(String(item.path || '').split('/').pop()));
+  if (configFile) throw new Error(`Framework configuration detected in ${configFile.path}. Direct file deployment does not run framework builds; connect the repository to Vercel Git integration or deploy its build output with the Vercel CLI.`);
+  const packageFile = files.find(item => String(item.path || '').toLowerCase() === 'package.json');
+  if (!packageFile) return true;
+  let pkg;
+  try { pkg = JSON.parse(typeof packageFile.content === 'string' ? packageFile.content : Buffer.from(packageFile.contentBase64 || '', 'base64').toString('utf8')); }
+  catch (_) { throw new Error('The repository package.json is not valid JSON; fix it before deployment.'); }
+  const dependencies = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+  const frameworks = ['next', 'vite', 'nuxt', '@sveltejs/kit', 'astro', '@remix-run/react', 'react-scripts', 'gatsby'];
+  if (pkg.scripts?.build || frameworks.some(name => Object.prototype.hasOwnProperty.call(dependencies, name))) {
+    throw new Error('This project requires a framework build. Direct Vercel file deployment only serves prebuilt static files; connect the repository to Vercel Git integration or deploy its build output with the Vercel CLI. No deployment was started.');
+  }
+  return true;
+}
 class VercelAgent {
   constructor({ token = process.env.VERCEL_TOKEN, teamId = process.env.VERCEL_TEAM_ID } = {}) { this.token = token; this.teamId = teamId; }
   client() {
@@ -11,6 +28,7 @@ class VercelAgent {
   async deployFiles({ name, files, production = true }) {
     const projectName = String(name || 'jarvis-site').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-site';
     if (!Array.isArray(files) || !files.length || files.length > 100) throw new Error('Provide between 1 and 100 project files for deployment.');
+    assertDirectStaticProject(files);
     const clean = files.map(item => {
       const file = String(item.path || '').replace(/\\/g, '/').replace(/^\/+/, '');
       if (!file || file.split('/').some(part => !part || part === '.' || part === '..') || (typeof item.content !== 'string' && typeof item.contentBase64 !== 'string')) throw new Error('A deployment file has an invalid path or content.');
@@ -41,4 +59,4 @@ class VercelAgent {
     return { success: true, project: projectName, deploymentId: deployment.id, url, platform: 'Vercel', state: verification.state, verified: true };
   }
 }
-module.exports = { VercelAgent };
+module.exports = { VercelAgent, assertDirectStaticProject };

@@ -11,6 +11,21 @@ function parsePlan(raw) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('AI planner returned invalid structured output');
   return parsed;
 }
+function normalizeToolArguments(tool, args, schema) {
+  const normalized = { ...(args && typeof args === 'object' && !Array.isArray(args) ? args : {}) };
+  const properties = schema?.properties || {};
+  // The planner sometimes calls the repository field `repository`; the registered GitHub tools use `repo`.
+  if (properties.repo && normalized.repo === undefined && typeof normalized.repository === 'string') {
+    const value = normalized.repository.trim();
+    if (properties.owner && !normalized.owner && value.includes('/')) {
+      const parts = value.split('/');
+      if (parts.length === 2 && parts.every(Boolean)) { normalized.owner = parts[0]; normalized.repo = parts[1]; }
+      else normalized.repo = value;
+    } else normalized.repo = value;
+    delete normalized.repository;
+  }
+  return normalized;
+}
 function deploymentReply(tool, outcome) {
   const pending = outcome?.success === false && outcome?.result?.approvalRequired;
   if (pending) return `🛡️ This deployment is ready for approval.\n\nApproval ID: ${outcome.result.approvalId}\nAn authorised administrator can approve it with !approve ${outcome.result.approvalId}.`;
@@ -50,7 +65,8 @@ function createAgentBrain({ registry, askModel } = {}) {
           if (!step || typeof step.tool !== 'string' || !toolMap.has(step.tool) || (selectedNames && !selectedNames.includes(step.tool))) throw new Error(`Tool ${step?.tool || '(missing)'} was not discovered or registered.`);
           if (seen.has(step.tool)) throw new Error(`Duplicate command execution is not allowed in one plan: ${step.tool}`);
           seen.add(step.tool);
-          registry.validateArguments(toolMap.get(step.tool).parameters, step.arguments || {});
+          step.arguments = normalizeToolArguments(step.tool, step.arguments, toolMap.get(step.tool).parameters);
+          registry.validateArguments(toolMap.get(step.tool).parameters, step.arguments);
         }
       };
       try { validateSteps(steps); }
@@ -59,7 +75,7 @@ function createAgentBrain({ registry, askModel } = {}) {
         const correctionPrompt = `${SYSTEM}\n\nThe proposed tool arguments failed validation: ${error.message}. Correct the arguments once. Return a single action=tool JSON object using this exact registered tool schema: ${JSON.stringify(toolMap.get(steps[0].tool))}\n\nUSER REQUEST: ${String(message || '').slice(-8000)}`;
         const corrected = parsePlan(await askModel(correctionPrompt, { responseFormat: 'json' }));
         if (corrected.action !== 'tool' || corrected.tool !== steps[0].tool || typeof corrected.confidence !== 'number' || corrected.confidence < 0.75) throw new Error('Invalid plan after one correction attempt.');
-        steps = [{ tool: corrected.tool, arguments: corrected.arguments || {} }];
+        steps = [{ tool: corrected.tool, arguments: normalizeToolArguments(corrected.tool, corrected.arguments || {}, toolMap.get(corrected.tool).parameters) }];
         try { validateSteps(steps); } catch (secondError) { throw new Error(`Invalid plan after one correction attempt: ${secondError.message}`); }
       }
       const outcomes = [];
@@ -88,4 +104,4 @@ function createAgentBrain({ registry, askModel } = {}) {
     }
   };
 }
-module.exports = { createAgentBrain, parsePlan, boundedPrompt };
+module.exports = { createAgentBrain, parsePlan, boundedPrompt, normalizeToolArguments };
