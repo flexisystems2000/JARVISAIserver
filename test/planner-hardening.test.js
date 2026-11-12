@@ -166,3 +166,22 @@ test('HTTP 413 prompt compaction keeps the leading policy and latest request wit
   assert.match(compacted, /compacted after HTTP 413/);
   assert.equal(compactPromptAfter413('short prompt'), null);
 });
+
+test('planner normalizes repository alias to the registered repo argument', async () => {
+  const registry = createToolRegistry();
+  let received;
+  register(registry, 'inspect_repository', async args => { received = args; return 'ok'; }, {
+    type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' } }, required: ['repo'], additionalProperties: false
+  });
+  const brain = createAgentBrain({ registry, askModel: async () => JSON.stringify({ action: 'tool', tool: 'inspect_repository', arguments: { repository: 'flexisystems2000/JARVISAIserver' }, confidence: 0.99 }) });
+  await brain.handle({ message: 'inspect repository', actor: 'owner' });
+  assert.deepEqual(received, { owner: 'flexisystems2000', repo: 'JARVISAIserver' });
+});
+
+test('explicit WhatsApp owner context receives owner permissions', async () => {
+  const permissions = createPermissionManager({ ownerNumber: '1111111111' });
+  const registry = createToolRegistry({ permissions });
+  register(registry, 'owner_context_tool', async () => 'allowed', undefined, ['owner']);
+  const result = await registry.execute('owner_context_tool', {}, { actor: '2222222222@s.whatsapp.net', isOwner: true });
+  assert.equal(result.result, 'allowed');
+});
