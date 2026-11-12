@@ -586,6 +586,14 @@ agentTools.register({
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
+    name: 'github_create_repository',
+    description: 'Create a private-by-default GitHub repository under the authenticated user or configured GITHUB_OWNER. Requires explicit owner approval.',
+    parameters: { type: 'object', properties: { name: { type: 'string', minLength: 1, maxLength: 100 }, description: { type: 'string', maxLength: 350 }, isPrivate: { type: 'boolean' } }, required: ['name'], additionalProperties: false },
+    permissions: ['owner'],
+    requiresApproval: true,
+    handler: async ({ name, description = '', isPrivate = true }) => githubAgent.createRepository({ name, description, isPrivate, approved: true })
+});
+agentTools.register({
     name: 'github_inspect_tree',
     description: 'List paths in a GitHub repository tree.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
@@ -619,6 +627,7 @@ agentTools.register({
       const sensitive = /(^|\/)(?:\.env(?:\..*)?|\.git|id_rsa|id_ed25519|secrets?\.(?:json|ya?ml)|credentials?\.(?:json|ya?ml))$/i;
       const eligible = tree.filter(item => item.type === 'blob' && !excluded.test(item.path));
       if (!eligible.length || eligible.length > 100) throw new Error('Repository must contain between 1 and 100 deployable files.');
+      // VercelAgent repeats this check for direct uploads from every entry point.
       const files = []; const textFiles = [];
       const textExtensions = new Set(['html','htm','css','js','mjs','cjs','json','md','txt','xml','yaml','yml','svg','ts','tsx','jsx','vue','svelte','php','py','java','cpp','sql','toml','webmanifest']);
       for (const item of eligible) {
@@ -644,6 +653,14 @@ agentTools.register({
     permissions: ['admin'],
     requiresApproval: true,
     handler: async args => githubAgent.writeFile(args.owner, args.repo, args.path, args.content, args.message, args.branch, true)
+});
+agentTools.register({
+    name: 'github_batch_write_files',
+    description: 'Upload or replace up to 100 files in one GitHub commit on a selected branch. Requires repository write permission and explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 }, message: { type: 'string', minLength: 1, maxLength: 200 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 240 }, content: { type: 'string', maxLength: 1000000 }, contentBase64: { type: 'string', maxLength: 1400000 } }, required: ['path'], additionalProperties: false } } }, required: ['repo','message','files'], additionalProperties: false },
+    permissions: ['admin'],
+    requiresApproval: true,
+    handler: async ({ owner, repo, branch, message, files }) => githubAgent.batchWriteFiles(owner, repo, files, message, branch, true)
 });
 agentTools.register({
     name: 'github_delete_file',

@@ -30,3 +30,13 @@
 
 ## Required deployment configuration
 See `.env.example` and `INTEGRATION-DEPLOYMENT.md`. Do not put secrets in source control or WhatsApp messages.
+
+
+## Stage 1 — GitHub and Vercel hardening (2026-11-12)
+
+- Added owner-approved GitHub repository creation (private by default; organization creation depends on the configured token's organization permissions).
+- Added approval-gated batch file uploads using one Git commit, with path, duplicate, file-count and size validation.
+- Normalized the planner's `repository` argument alias to the registered `repo` field, including `owner/repo` values.
+- Honoured the explicit WhatsApp owner context in permission checks.
+- Blocked direct Vercel file deployments for projects that require framework builds; static deployments remain supported and Vercel team scoping uses `VERCEL_TEAM_ID`.
+- Kept the existing frontend, WhatsApp architecture, `!ai`, quiz engine and reminder implementation unchanged.
