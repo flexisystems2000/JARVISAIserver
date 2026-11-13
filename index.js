@@ -3973,22 +3973,20 @@ aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 // ============================================================
 // 📣 JARVIS WHATSAPP CHANNEL NATIVE QUIZ COMMAND
 // Usage: !channelquiz <subject> | !channelquiz off
-// Owner-only because this publishes to the public Flexi Channel.
+// Access is controlled by WhatsApp Channel posting permissions:
+// commands are accepted only when they arrive from the configured Channel.
 // ============================================================
 
 if (command === "!channelquiz") {
     try {
-        const actorNumber = String(sender || '').split('@')[0].replace(/:\d+$/, '').replace(/\D/g, '');
-        const configuredOwner = Boolean(OWNER_NUMBER && actorNumber === OWNER_NUMBER);
-        const fromConfiguredOwnerAccount = Boolean(OWNER_NUMBER && m.key.fromMe);
-        if (!configuredOwner && !fromConfiguredOwnerAccount) {
+        const targetChannelJid = process.env.FLEXI_CHANNEL_JID || FLEXI_NEWSLETTER_JID;
+        if (jid !== targetChannelJid) {
             await sendWithTyping(jid, {
-                text: '🔒 Only the JARVIS owner can publish quizzes to the Flexi Educational Consult Channel.'
+                text: '🔒 Send this command as a Channel update from an administrator account in the configured Flexi Channel.'
             }, m);
             return;
         }
 
-        const targetChannelJid = process.env.FLEXI_CHANNEL_JID || FLEXI_NEWSLETTER_JID;
         const requested = args.join(' ').trim();
 
         if (/^(off|stop)$/i.test(requested)) {
@@ -5299,7 +5297,7 @@ if (command === "!menu" || command === "!help") {
 ━━━━━━━━━━━━━━━━━━
 🧠 *AI & LEARNING*
 🔹 !ai [question] — Ask Jarvis anything (or tag Jarvis)
-🔹 !quiz [subject] — Start a subject quiz in this group\n🔹 !channelquiz [subject] — Publish native quizzes to the Flexi Channel (owner only)\n🔹 !channelquiz off — Stop Channel quiz publishing
+🔹 !quiz [subject] — Start a subject quiz in this group\n🔹 !channelquiz [subject] — Publish native quizzes to the Flexi Channel (Channel admins)\n🔹 !channelquiz off — Stop Channel quiz publishing
 🔹 !quiz off / !stopquiz — Stop the active quiz (group admins)
 🔹 !command list — List saved custom commands
 🔹 !command create name | description | template — Propose a safe custom command

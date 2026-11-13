@@ -44,7 +44,7 @@ Poll-vote decryption depends on the installed Baileys fork emitting decrypted `p
 
 ## ALOC WhatsApp Channel native quiz
 
-`!channelquiz <subject>` publishes native WhatsApp quiz polls to the configured Flexi Educational Consult Channel. `!channelquiz off` stops the automatic sequence. These commands are owner-only because they publish to the public Channel.
+`!channelquiz <subject>` publishes native WhatsApp quiz polls to the configured Flexi Educational Consult Channel. `!channelquiz off` stops the automatic sequence. These commands are accepted only when sent as a post in the configured Channel; WhatsApp controls who is allowed to publish Channel updates.
 
 - Uses the same `ALOC_TOKEN`, ALOC API endpoint, subject map, aliases and question retrieval as group quizzes.
 - Publishes a native newsletter quiz (`pollType: 1`) with four A-D options and ALOC's correct option supplied as native quiz metadata.
