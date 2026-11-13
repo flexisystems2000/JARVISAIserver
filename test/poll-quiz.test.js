@@ -51,3 +51,72 @@ test('ALOC poll quiz sends a native poll, closes after tally, explains and advan
     if (oldMode === undefined) delete process.env.QUIZ_MODE; else process.env.QUIZ_MODE = oldMode;
   }
 });
+
+
+test('ALOC Channel quiz publishes a native newsletter quiz without answer or solution follow-up', async () => {
+  const oldToken = process.env.ALOC_TOKEN;
+  process.env.ALOC_TOKEN = 'test-token';
+  axiosStub.get = async () => ({
+    data: { data: {
+      question: 'What is 2 + 2?',
+      option: { a: '3', b: '4', c: '5', d: '6' },
+      answer: 'B',
+      solution: 'Two plus two equals four.'
+    } }
+  });
+  const sent = [];
+  const sock = {
+    sendMessage: async (jid, content) => {
+      sent.push({ jid, content });
+      return { key: { remoteJid: jid, id: 'channel-quiz-1' }, message: { pollCreationMessage: content.poll } };
+    }
+  };
+  const channel = '120363421353629040@newsletter';
+  try {
+    const result = await quiz.fireChannelQuiz(sock, {
+      subject: 'Mathematics',
+      channelJid: channel
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.mode, 'channel-quiz');
+    assert.equal(result.answerPublished, false);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].jid, channel);
+    assert.equal(sent[0].content.poll.pollType, 1);
+    assert.deepEqual(sent[0].content.poll.values, ['A. 3', 'B. 4', 'C. 5', 'D. 6']);
+    assert.equal(sent[0].content.poll.correctAnswer, 'B. 4');
+    assert.equal(sent[0].content.text, undefined);
+    assert.equal(JSON.stringify(sent).includes('Two plus two equals four.'), false);
+    assert.ok(quiz.getActiveChannelQuiz(channel));
+    await quiz.advanceChannelQuiz(sock, channel);
+    assert.equal(sent.length, 2, 'the next ALOC question should be published automatically');
+    assert.equal(sent[1].content.poll.pollType, 1);
+    assert.equal(sent.some(item => item.content.text), false, 'no answer-reveal text should be sent to the Channel');
+    assert.equal(JSON.stringify(sent).includes('Two plus two equals four.'), false);
+    quiz.stopChannelQuiz(channel);
+    assert.equal(quiz.getActiveChannelQuiz(channel), null);
+  } finally {
+    quiz.stopChannelQuiz(channel);
+    if (oldToken === undefined) delete process.env.ALOC_TOKEN; else process.env.ALOC_TOKEN = oldToken;
+  }
+});
+
+test('Channel quiz rejects invalid newsletter JIDs and does not publish to a group', async () => {
+  const oldToken = process.env.ALOC_TOKEN;
+  process.env.ALOC_TOKEN = 'test-token';
+  axiosStub.get = async () => ({ data: { data: {
+    question: 'What is 2 + 2?',
+    option: { a: '3', b: '4', c: '5', d: '6' },
+    answer: 'B'
+  } } });
+  const sent = [];
+  const sock = { sendMessage: async (jid, content) => { sent.push({ jid, content }); return {}; } };
+  try {
+    const result = await quiz.fireChannelQuiz(sock, { subject: 'Mathematics', channelJid: '120363000000000000@g.us' });
+    assert.equal(result.success, false);
+    assert.match(result.error, /Channel JID/i);
+    assert.equal(sent.length, 0);
+  } finally {
+    if (oldToken === undefined) delete process.env.ALOC_TOKEN; else process.env.ALOC_TOKEN = oldToken;
+  }
+});
