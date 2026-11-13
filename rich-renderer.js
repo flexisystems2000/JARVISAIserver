@@ -1,129 +1,353 @@
 'use strict';
 
-const { randomUUID } = require('node:crypto');
+const TYPE = Object.freeze({
+  TEXT: 2,
+  TABLE: 4,
+  CODE: 5
+});
 
-const TYPE = { TEXT: 2, TABLE: 4, CODE: 5 };
+const SUPPORTED_CODE_LANGUAGES = new Set([
+  'css',
+  'html',
+  'javascript',
+  'typescript',
+  'python',
+  'golang',
+  'rust',
+  'c',
+  'c#',
+  'c++',
+  'bash',
+  'bat',
+  'powershell'
+]);
+
+const LANGUAGE_ALIASES = Object.freeze({
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  go: 'golang',
+  sh: 'bash',
+  shell: 'bash',
+  zsh: 'bash',
+  ps1: 'powershell',
+  htm: 'html',
+  xml: 'html',
+  cs: 'c#',
+  csharp: 'c#',
+  cpp: 'c++',
+  cxx: 'c++'
+});
+
+function normalizeLanguage(language) {
+  const requested = String(language || 'text').trim().toLowerCase();
+  return LANGUAGE_ALIASES[requested] || requested;
+}
+
+function splitTableRow(line) {
+  let value = String(line || '').trim();
+
+  if (value.startsWith('|')) value = value.slice(1);
+  if (value.endsWith('|') && !value.endsWith('\\|')) {
+    value = value.slice(0, -1);
+  }
+
+  const cells = [];
+  let cell = '';
+  let escaped = false;
+
+  for (const character of value) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += character;
+    }
+  }
+
+  if (escaped) cell += '\\';
+
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isTableSeparator(line) {
+  const cells = splitTableRow(line);
+
+  return (
+    cells.length > 1 &&
+    cells.every(cell => /^:?-{3,}:?$/.test(cell))
+  );
+}
 
 function parseMarkdownBlocks(markdown) {
-  const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = String(markdown || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n');
+
   const blocks = [];
-  let text = [];
+  let textLines = [];
+
   const flushText = () => {
-    const value = text.join('\n').trim();
-    if (value) blocks.push({ messageType: TYPE.TEXT, messageText: value });
-    text = [];
+    const value = textLines.join('\n').trim();
+
+    if (value) {
+      blocks.push({
+        messageType: TYPE.TEXT,
+        messageText: value
+      });
+    }
+
+    textLines = [];
   };
 
   for (let i = 0; i < lines.length;) {
-    const fence = lines[i].match(/^\s*```([\w.+-]*)\s*$/);
+    const fence = lines[i].match(/^\s*```([\w.+#-]*)\s*$/);
+
     if (fence) {
       flushText();
-      const language = (fence[1] || 'text').toLowerCase();
-      const code = [];
+
+      const language = normalizeLanguage(fence[1] || 'text');
+      const codeLines = [];
+
       i++;
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) code.push(lines[i++]);
+
+      while (
+        i < lines.length &&
+        !/^\s*```\s*$/.test(lines[i])
+      ) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+
       if (i < lines.length) i++;
+
       blocks.push({
         messageType: TYPE.CODE,
         codeMetadata: {
           codeLanguage: language,
-          sourceCode: code.join('\n')
+          sourceCode: codeLines.join('\n')
         }
       });
+
       continue;
     }
 
-    if (i + 1 < lines.length && /^\s*\|?.+\|.+\|?\s*$/.test(lines[i]) &&
-        /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i + 1])) {
+    if (
+      i + 1 < lines.length &&
+      lines[i].includes('|') &&
+      isTableSeparator(lines[i + 1])
+    ) {
       flushText();
-      const splitRow = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
-      const headers = splitRow(lines[i]);
+
+      const headers = splitTableRow(lines[i]);
       i += 2;
-      const rows = [];
-      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) rows.push(splitRow(lines[i++]));
-      const width = headers.length;
+
+      const rows = [{
+        isHeading: true,
+        items: headers
+      }];
+
+      while (
+        i < lines.length &&
+        lines[i].includes('|') &&
+        lines[i].trim()
+      ) {
+        rows.push({
+          isHeading: false,
+          items: splitTableRow(lines[i])
+        });
+
+        i++;
+      }
+
+      const columnCount = headers.length;
+
+      const normalizedRows = rows.map(row => ({
+        isHeading: row.isHeading,
+        items: Array.from(
+          { length: columnCount },
+          (_, columnIndex) => row.items[columnIndex] || ''
+        )
+      }));
+
       blocks.push({
         messageType: TYPE.TABLE,
         tableMetadata: {
           title: '',
-          rows: [
-            { items: headers, isHeading: true },
-            ...rows.map(row => ({ items: Array.from({ length: width }, (_, n) => row[n] || '') }))
-          ]
+          rows: normalizedRows
         }
       });
+
       continue;
     }
 
-    if (!lines[i].trim()) { flushText(); i++; continue; }
-    text.push(lines[i++]);
+    if (!lines[i].trim()) {
+      flushText();
+      i++;
+      continue;
+    }
+
+    textLines.push(lines[i]);
+    i++;
   }
+
   flushText();
+
   return blocks;
 }
 
-// Locate the native rich response for validation while preserving the
-// complete composer-generated botForwardedMessage wrapper for transmission.
 function findRichResponse(value, seen = new Set()) {
-  if (!value || typeof value !== 'object' || seen.has(value)) return null;
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    seen.has(value)
+  ) {
+    return null;
+  }
+
   seen.add(value);
-  if (Object.prototype.hasOwnProperty.call(value, 'richResponseMessage')) {
+
+  if (
+    Object.prototype.hasOwnProperty.call(
+      value,
+      'richResponseMessage'
+    )
+  ) {
     return value.richResponseMessage;
   }
+
   for (const child of Object.values(value)) {
     const found = findRichResponse(child, seen);
-    if (found) return found;
+
+    if (found !== null) {
+      return found;
+    }
   }
+
   return null;
 }
 
-async function sendRichReply(sock, jid, markdown, quotedMessage = null) {
+function makeTableRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map((row, index) => ({
+    isHeading:
+      typeof row?.isHeading === 'boolean'
+        ? row.isHeading
+        : index === 0,
+
+    items: Array.isArray(row?.items)
+      ? row.items.map(item => String(item ?? ''))
+      : []
+  }));
+}
+
+async function sendRichReply(
+  sock,
+  jid,
+  markdown,
+  quotedMessage = null
+) {
   if (!sock || typeof sock.sendMessage !== 'function') {
-    throw new Error('The connected Baileys socket does not expose sendMessage().');
+    throw new Error(
+      'The connected Baileys socket does not expose sendMessage().'
+    );
   }
+
   const blocks = parseMarkdownBlocks(markdown);
+
   if (!blocks.length) return null;
 
-  // Use the documented richResponse sendMessage API. This avoids depending
-  // on private composer paths that belonged to the previous Baileys fork.
+  // Import the public API from @itsliaaa/baileys.
   const baileys = await import('@itsliaaa/baileys');
-  if (typeof baileys.tokenizeCode !== 'function') {
-    throw new Error('@itsliaaa/baileys does not expose tokenizeCode(), required for rich code blocks.');
+
+  const richResponse = [];
+
+  for (const block of blocks) {
+    if (block.messageType === TYPE.TEXT) {
+      richResponse.push({
+        text: block.messageText
+      });
+
+      continue;
+    }
+
+    if (block.messageType === TYPE.CODE) {
+      const language = normalizeLanguage(
+        block.codeMetadata.codeLanguage
+      );
+
+      const sourceCode = block.codeMetadata.sourceCode;
+
+      if (SUPPORTED_CODE_LANGUAGES.has(language)) {
+        if (typeof baileys.tokenizeCode !== 'function') {
+          throw new Error(
+            '@itsliaaa/baileys does not expose tokenizeCode(), required for syntax-highlighted code blocks.'
+          );
+        }
+
+        richResponse.push({
+          language,
+          code: baileys.tokenizeCode(sourceCode, language)
+        });
+      } else {
+        richResponse.push({
+          text: `\`\`\`${language}\n${sourceCode}\n\`\`\``
+        });
+      }
+
+      continue;
+    }
+
+    if (block.messageType === TYPE.TABLE) {
+      const table = makeTableRows(
+        block.tableMetadata.rows
+      );
+
+      if (table.length) {
+        richResponse.push({
+          title: block.tableMetadata.title || '',
+          table
+        });
+      }
+    }
   }
 
-  const richResponse = blocks.map(block => {
-    if (block.messageType === TYPE.TEXT) {
-      return { text: block.messageText };
-    }
-    if (block.messageType === TYPE.CODE) {
-      return {
-        language: block.codeMetadata.codeLanguage,
-        code: baileys.tokenizeCode(
-          block.codeMetadata.sourceCode,
-          block.codeMetadata.codeLanguage
-        )
-      };
-    }
-    if (block.messageType === TYPE.TABLE) {
-      return {
-        title: block.tableMetadata.title,
-        table: block.tableMetadata.rows.map(row => row.items)
-      };
-    }
-    return { text: '' };
-  }).filter(item => item.text || item.code || item.table);
-
   if (!richResponse.length) return null;
-  await sock.sendPresenceUpdate?.('composing', jid);
+
+  // Presence updates are best-effort.
+  try {
+    await sock.sendPresenceUpdate?.('composing', jid);
+  } catch (_) {}
+
   try {
     return await sock.sendMessage(
       jid,
-      { richResponse, disclaimerText: 'Flexi Educational Consult' },
-      quotedMessage ? { quoted: quotedMessage } : undefined
+      {
+        richResponse,
+        disclaimerText: 'Flexi Educational Consult'
+      },
+      quotedMessage
+        ? { quoted: quotedMessage }
+        : undefined
     );
   } finally {
-    try { await sock.sendPresenceUpdate?.('paused', jid); } catch (_) {}
+    try {
+      await sock.sendPresenceUpdate?.('paused', jid);
+    } catch (_) {}
   }
 }
 
-module.exports = { parseMarkdownBlocks, sendRichReply, findRichResponse };
+module.exports = {
+  parseMarkdownBlocks,
+  sendRichReply,
+  findRichResponse
+};
