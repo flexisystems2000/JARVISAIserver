@@ -6,6 +6,8 @@ const TYPE = Object.freeze({
   CODE: 5
 });
 
+const DISCLAIMER = 'Flexi Educational Consult';
+
 const SUPPORTED_CODE_LANGUAGES = new Set([
   'css',
   'html',
@@ -44,14 +46,20 @@ const LANGUAGE_ALIASES = Object.freeze({
 });
 
 function normalizeLanguage(language) {
-  const requested = String(language || 'text').trim().toLowerCase();
+  const requested = String(language || 'text')
+    .trim()
+    .toLowerCase();
+
   return LANGUAGE_ALIASES[requested] || requested;
 }
 
 function splitTableRow(line) {
   let value = String(line || '').trim();
 
-  if (value.startsWith('|')) value = value.slice(1);
+  if (value.startsWith('|')) {
+    value = value.slice(1);
+  }
+
   if (value.endsWith('|') && !value.endsWith('\\|')) {
     value = value.slice(0, -1);
   }
@@ -74,9 +82,12 @@ function splitTableRow(line) {
     }
   }
 
-  if (escaped) cell += '\\';
+  if (escaped) {
+    cell += '\\';
+  }
 
   cells.push(cell.trim());
+
   return cells;
 }
 
@@ -97,7 +108,7 @@ function parseMarkdownBlocks(markdown) {
   const blocks = [];
   let textLines = [];
 
-  const flushText = () => {
+  function flushText() {
     const value = textLines.join('\n').trim();
 
     if (value) {
@@ -108,9 +119,10 @@ function parseMarkdownBlocks(markdown) {
     }
 
     textLines = [];
-  };
+  }
 
   for (let i = 0; i < lines.length;) {
+    // Markdown code blocks
     const fence = lines[i].match(/^\s*```([\w.+#-]*)\s*$/);
 
     if (fence) {
@@ -129,7 +141,9 @@ function parseMarkdownBlocks(markdown) {
         i++;
       }
 
-      if (i < lines.length) i++;
+      if (i < lines.length) {
+        i++;
+      }
 
       blocks.push({
         messageType: TYPE.CODE,
@@ -142,6 +156,7 @@ function parseMarkdownBlocks(markdown) {
       continue;
     }
 
+    // Markdown tables
     if (
       i + 1 < lines.length &&
       lines[i].includes('|') &&
@@ -150,6 +165,7 @@ function parseMarkdownBlocks(markdown) {
       flushText();
 
       const headers = splitTableRow(lines[i]);
+
       i += 2;
 
       const rows = [{
@@ -174,6 +190,7 @@ function parseMarkdownBlocks(markdown) {
 
       const normalizedRows = rows.map(row => ({
         isHeading: row.isHeading,
+
         items: Array.from(
           { length: columnCount },
           (_, columnIndex) => row.items[columnIndex] || ''
@@ -237,7 +254,7 @@ function findRichResponse(value, seen = new Set()) {
   return null;
 }
 
-function makeTableRows(rows) {
+function normalizeTableRows(rows) {
   return (Array.isArray(rows) ? rows : []).map((row, index) => ({
     isHeading:
       typeof row?.isHeading === 'boolean'
@@ -248,6 +265,81 @@ function makeTableRows(rows) {
       ? row.items.map(item => String(item ?? ''))
       : []
   }));
+}
+
+function toNativeTableRows(rows) {
+  return normalizeTableRows(rows).map(row => row.items);
+}
+
+async function updatePresence(sock, jid, state) {
+  try {
+    await sock.sendPresenceUpdate?.(state, jid);
+  } catch (_) {
+    // Presence updates must not interrupt message delivery.
+  }
+}
+
+async function sendRichResponse(sock, jid, richResponse, quotedMessage) {
+  if (!richResponse.length) {
+    return null;
+  }
+
+  await updatePresence(sock, jid, 'composing');
+
+  try {
+    return await sock.sendMessage(
+      jid,
+      {
+        disclaimerText: DISCLAIMER,
+        richResponse
+      },
+      quotedMessage
+        ? { quoted: quotedMessage }
+        : undefined
+    );
+  } finally {
+    await updatePresence(sock, jid, 'paused');
+  }
+}
+
+/**
+ * Sends a native Itsliaaa table message.
+ *
+ * This deliberately uses Itsliaaa's dedicated table payload,
+ * not a table nested inside richResponse.
+ */
+async function sendNativeTable(
+  sock,
+  jid,
+  tableMetadata,
+  quotedMessage
+) {
+  const rows = normalizeTableRows(tableMetadata.rows);
+
+  if (!rows.length) {
+    return null;
+  }
+
+  const table = toNativeTableRows(rows);
+
+  await updatePresence(sock, jid, 'composing');
+
+  try {
+    return await sock.sendMessage(
+      jid,
+      {
+        disclaimerText: DISCLAIMER,
+        title: tableMetadata.title || '',
+        table,
+        noHeading: false
+      },
+      quotedMessage
+        ? { quoted: quotedMessage }
+        : undefined
+    );
+  } finally {
+    await updatePresence(sock, jid, 'paused');
+  }
 }
 
 async function sendRichReply(
@@ -264,14 +356,36 @@ async function sendRichReply(
 
   const blocks = parseMarkdownBlocks(markdown);
 
-  if (!blocks.length) return null;
+  if (!blocks.length) {
+    return null;
+  }
 
-  // Import the public API from @itsliaaa/baileys.
+  // Itsliaaa is ESM, while this renderer remains CommonJS.
   const baileys = await import('@itsliaaa/baileys');
 
-  const richResponse = [];
+  const results = [];
+  let richResponse = [];
+
+  async function flushRichResponse() {
+    if (!richResponse.length) {
+      return;
+    }
+
+    const currentBatch = richResponse;
+    richResponse = [];
+
+    const result = await sendRichResponse(
+      sock,
+      jid,
+      currentBatch,
+      quotedMessage
+    );
+
+    results.push(result);
+  }
 
   for (const block of blocks) {
+    // Normal text
     if (block.messageType === TYPE.TEXT) {
       richResponse.push({
         text: block.messageText
@@ -280,6 +394,7 @@ async function sendRichReply(
       continue;
     }
 
+    // Code blocks
     if (block.messageType === TYPE.CODE) {
       const language = normalizeLanguage(
         block.codeMetadata.codeLanguage
@@ -290,13 +405,16 @@ async function sendRichReply(
       if (SUPPORTED_CODE_LANGUAGES.has(language)) {
         if (typeof baileys.tokenizeCode !== 'function') {
           throw new Error(
-            '@itsliaaa/baileys does not expose tokenizeCode(), required for syntax-highlighted code blocks.'
+            '@itsliaaa/baileys does not expose tokenizeCode().'
           );
         }
 
         richResponse.push({
           language,
-          code: baileys.tokenizeCode(sourceCode, language)
+          code: baileys.tokenizeCode(
+            sourceCode,
+            language
+          )
         });
       } else {
         richResponse.push({
@@ -307,43 +425,30 @@ async function sendRichReply(
       continue;
     }
 
+    // Native standalone table
     if (block.messageType === TYPE.TABLE) {
-      const table = makeTableRows(
-        block.tableMetadata.rows
+      // Send preceding text/code before the table.
+      await flushRichResponse();
+
+      const result = await sendNativeTable(
+        sock,
+        jid,
+        block.tableMetadata,
+        quotedMessage
       );
 
-      if (table.length) {
-        richResponse.push({
-          title: block.tableMetadata.title || '',
-          table
-        });
+      if (result) {
+        results.push(result);
       }
     }
   }
 
-  if (!richResponse.length) return null;
+  // Send any remaining text/code after the final table.
+  await flushRichResponse();
 
-  // Presence updates are best-effort.
-  try {
-    await sock.sendPresenceUpdate?.('composing', jid);
-  } catch (_) {}
-
-  try {
-    return await sock.sendMessage(
-      jid,
-      {
-        richResponse,
-        disclaimerText: 'Flexi Educational Consult'
-      },
-      quotedMessage
-        ? { quoted: quotedMessage }
-        : undefined
-    );
-  } finally {
-    try {
-      await sock.sendPresenceUpdate?.('paused', jid);
-    } catch (_) {}
-  }
+  return results.length === 1
+    ? results[0]
+    : results;
 }
 
 module.exports = {
