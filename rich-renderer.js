@@ -1,9 +1,6 @@
 'use strict';
 
-const {
-  generateRichMessageContent,
-  tokenizeCode
-} = require('@innovatorssoft/baileys/lib/Utils/message-composer');
+const { randomUUID } = require('node:crypto');
 
 const TYPE = { TEXT: 2, TABLE: 4, CODE: 5 };
 
@@ -30,7 +27,7 @@ function parseMarkdownBlocks(markdown) {
         messageType: TYPE.CODE,
         codeMetadata: {
           codeLanguage: language,
-          codeBlocks: tokenizeCode(code.join('\n'), language)
+          sourceCode: code.join('\n')
         }
       });
       continue;
@@ -81,37 +78,49 @@ function findRichResponse(value, seen = new Set()) {
 }
 
 async function sendRichReply(sock, jid, markdown, quotedMessage = null) {
-  if (!sock || typeof sock.relayMessage !== 'function') {
-    throw new Error('The connected Baileys socket does not expose relayMessage().');
+  if (!sock || typeof sock.sendMessage !== 'function') {
+    throw new Error('The connected Baileys socket does not expose sendMessage().');
   }
-  const submessages = parseMarkdownBlocks(markdown);
-  if (!submessages.length) return null;
+  const blocks = parseMarkdownBlocks(markdown);
+  if (!blocks.length) return null;
 
-  const generated = generateRichMessageContent(
-    submessages,
-    quotedMessage,
-    { useMarkdown: true, botJid: sock.user?.id }
-  );
-  const richPayload = findRichResponse(generated?.message);
-  if (!richPayload) {
-    throw new Error('Composer did not produce a richResponseMessage payload.');
+  // Use the documented richResponse sendMessage API. This avoids depending
+  // on private composer paths that belonged to the previous Baileys fork.
+  const baileys = await import('@itsliaaa/baileys');
+  if (typeof baileys.tokenizeCode !== 'function') {
+    throw new Error('@itsliaaa/baileys does not expose tokenizeCode(), required for rich code blocks.');
   }
 
-  // Keep the complete message produced by the composer. In particular,
-  // preserve botForwardedMessage around richResponseMessage: WhatsApp's
-  // rich-response verification expects the original wrapper and its metadata.
-  // Do not extract and rebuild the inner richResponseMessage payload.
-  const message = generated.message;
-  if (!message || typeof message !== 'object') {
-    throw new Error('Rich composer did not return a complete message payload.');
-  }
-  const messageId = generated.messageId;
-  if (!messageId) throw new Error('Rich composer did not return a message ID.');
+  const richResponse = blocks.map(block => {
+    if (block.messageType === TYPE.TEXT) {
+      return { text: block.messageText };
+    }
+    if (block.messageType === TYPE.CODE) {
+      return {
+        language: block.codeMetadata.codeLanguage,
+        code: baileys.tokenizeCode(
+          block.codeMetadata.sourceCode,
+          block.codeMetadata.codeLanguage
+        )
+      };
+    }
+    if (block.messageType === TYPE.TABLE) {
+      return {
+        title: block.tableMetadata.title,
+        table: block.tableMetadata.rows.map(row => row.items)
+      };
+    }
+    return { text: '' };
+  }).filter(item => item.text || item.code || item.table);
 
+  if (!richResponse.length) return null;
   await sock.sendPresenceUpdate?.('composing', jid);
   try {
-    const result = await sock.relayMessage(jid, message, { messageId });
-    return result || { key: { id: messageId } };
+    return await sock.sendMessage(
+      jid,
+      { richResponse, disclaimerText: 'Flexi Educational Consult' },
+      quotedMessage ? { quoted: quotedMessage } : undefined
+    );
   } finally {
     try { await sock.sendPresenceUpdate?.('paused', jid); } catch (_) {}
   }

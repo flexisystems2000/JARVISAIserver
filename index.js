@@ -1,12 +1,11 @@
-const { 
-    default: makeWASocket, 
-    useMultiFileAuthState, 
-    fetchLatestBaileysVersion, 
-    DisconnectReason,
-    downloadContentFromMessage,
-    areJidsSameUser,
-    getAggregateVotesInPollMessage
-} = require('@innovatorssoft/baileys');
+// @itsliaaa/baileys is ESM-only. Load it dynamically so this existing
+// CommonJS application can retain its current architecture.
+let makeWASocket;
+let useMultiFileAuthState;
+let fetchLatestBaileysVersion;
+let DisconnectReason;
+let downloadContentFromMessage;
+let areJidsSameUser;
 
 const { Boom } = require('@hapi/boom');
 const pino = require('pino');
@@ -17,6 +16,31 @@ const fs = require('fs');
 const path = require('path');
 
 require('dotenv').config();
+
+const baileysReady = import('@itsliaaa/baileys').then(baileys => {
+    makeWASocket = baileys.default || baileys.makeWASocket;
+    useMultiFileAuthState = baileys.useMultiFileAuthState;
+    fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+    DisconnectReason = baileys.DisconnectReason;
+    downloadContentFromMessage = baileys.downloadContentFromMessage;
+    areJidsSameUser = baileys.areJidsSameUser;
+
+    const required = {
+        makeWASocket,
+        useMultiFileAuthState,
+        fetchLatestBaileysVersion,
+        DisconnectReason,
+        downloadContentFromMessage,
+        areJidsSameUser,
+        getAggregateVotesInPollMessage: baileys.getAggregateVotesInPollMessage
+    };
+    const missing = Object.entries(required).filter(([, value]) => value == null).map(([key]) => key);
+    if (missing.length) {
+        throw new Error(`@itsliaaa/baileys is missing required exports: ${missing.join(', ')}`);
+    }
+    return baileys;
+});
+
 const quizEngine = require('./quizEngine');
 const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 const { sendRichReply } = require('./rich-renderer');
@@ -336,7 +360,7 @@ agentTools.register({
     name: 'command_menu', description: 'Show the available JARVIS WhatsApp command menu.',
     parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
     handler: async (_args, context) => {
-        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
+        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !channelquiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
         await context.sock.sendMessage(context.chatId, { text: menu });
         return { sent: true };
     }
@@ -754,13 +778,6 @@ const jarvisAgent = createAgentBrain({
     registry: agentTools,
     askModel: async (prompt, options = {}) => askAI(prompt, null, options),
     permissions: agentPermissions
-});
-
-quizEngine.configurePollQuiz({
-    aggregateVotes: getAggregateVotesInPollMessage,
-    explainAnswer: async ({ subject, question, options, answer, solution }) => askAI(
-        `Explain this ${subject} multiple-choice question to Nigerian secondary-school students in 3-5 clear sentences. Do not change the correct answer.\nQuestion: ${question}\nA: ${options?.a || ''}\nB: ${options?.b || ''}\nC: ${options?.c || ''}\nD: ${options?.d || ''}\nCorrect option: ${answer}\nALOC solution: ${solution || 'Not supplied'}\nIf the supplied solution is empty, give a concise explanation based on the question. Avoid guessing if the question is ambiguous.`
-    )
 });
 
 async function captureWebsiteScreenshot(rawUrl) {
@@ -2036,7 +2053,7 @@ async function sendWithTyping(
 // Normal outgoing messages carry Flexi newsletter attribution.
 // Control payloads (reactions, deletes, protocol operations) pass through.
 // ============================================================
-const FLEXI_NEWSLETTER_JID = '120363421353629040@newsletter';
+const FLEXI_NEWSLETTER_JID = process.env.FLEXI_CHANNEL_JID || '120363421353629040@newsletter';
 const FLEXI_NEWSLETTER_NAME = 'FLEXI EDUCATIONAL CONSULT';
 
 function buildFlexiNewsletterContext(content = {}) {
@@ -2105,7 +2122,7 @@ function installGlobalOutgoingRenderer(socket) {
         const isAudioOrPtt = Boolean(content.audio || content.ptt === true);
         // Rich composer payloads must retain their native botForwardedMessage
         // and richResponseMessage structure without newsletter context injected.
-        const isNativeRichPayload = Boolean(content.botForwardedMessage || content.richResponseMessage);
+        const isNativeRichPayload = Boolean(content.botForwardedMessage || content.richResponseMessage || content.richResponse);
         if (controlPayload || isAudioOrPtt || isNativeRichPayload || options?.skipFlexiBrand) {
             return originalSendMessage(jid, content, options);
         }
@@ -3954,6 +3971,80 @@ aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 
 
 // ============================================================
+// 📣 JARVIS WHATSAPP CHANNEL NATIVE QUIZ COMMAND
+// Usage: !channelquiz <subject> | !channelquiz off
+// Owner-only because this publishes to the public Flexi Channel.
+// ============================================================
+
+if (command === "!channelquiz") {
+    try {
+        const actorNumber = String(sender || '').split('@')[0].replace(/:\d+$/, '').replace(/\D/g, '');
+        const configuredOwner = Boolean(OWNER_NUMBER && actorNumber === OWNER_NUMBER);
+        const fromConfiguredOwnerAccount = Boolean(OWNER_NUMBER && m.key.fromMe);
+        if (!configuredOwner && !fromConfiguredOwnerAccount) {
+            await sendWithTyping(jid, {
+                text: '🔒 Only the JARVIS owner can publish quizzes to the Flexi Educational Consult Channel.'
+            }, m);
+            return;
+        }
+
+        const targetChannelJid = process.env.FLEXI_CHANNEL_JID || FLEXI_NEWSLETTER_JID;
+        const requested = args.join(' ').trim();
+
+        if (/^(off|stop)$/i.test(requested)) {
+            quizEngine.stopChannelQuiz(targetChannelJid);
+            await sendWithTyping(jid, {
+                text: '🛑 The automatic Channel quiz sequence has been stopped.'
+            }, m);
+            return;
+        }
+
+        if (!requested) {
+            const subjects = quizEngine.getAvailableSubjects().map(subject => `• ${subject.name}`).join('\n');
+            await sendWithTyping(jid, {
+                text: `📣 *JARVIS CHANNEL QUIZ*\n\nUse: *!channelquiz Mathematics*\n\nTo stop: *!channelquiz off*\n\n*Available ALOC subjects*\n${subjects}`
+            }, m);
+            return;
+        }
+
+        const resolved = quizEngine.resolveSubject(requested);
+        if (!resolved) {
+            await sendWithTyping(jid, {
+                text: `❌ Unknown ALOC subject: *${requested}*\n\nUse *!channelquiz* to see the available subjects.`
+            }, m);
+            return;
+        }
+
+        await sendWithTyping(jid, {
+            text: `⏳ Preparing a native WhatsApp Channel quiz for *${resolved.name}*...`
+        }, m);
+
+        const result = await quizEngine.fireChannelQuiz(sock, {
+            subject: resolved.slug,
+            channelJid: targetChannelJid
+        });
+
+        if (!result?.success) {
+            await sendWithTyping(jid, {
+                text: `❌ Channel quiz could not start.\n\n${result?.error || 'Unknown error'}`
+            }, m);
+            return;
+        }
+
+        await sendWithTyping(jid, {
+            text: `✅ Published the first native *${result.subject}* quiz to the Flexi Channel.\n\nA new question will be published every ${result.durationSeconds} seconds until you use *!channelquiz off*.\n\nJARVIS will not post the correct answer, explanation or vote totals.`
+        }, m);
+        return;
+    } catch (error) {
+        console.error('[CHANNEL QUIZ] Command failed:', error.message);
+        await sendWithTyping(jid, {
+            text: `⚠️ Channel quiz error: ${String(error.message || error).slice(0, 400)}`
+        }, m);
+        return;
+    }
+}
+
+// ============================================================
 // 🧠 JARVIS LIVE QUIZ COMMAND SYSTEM
 // ------------------------------------------------------------
 // Usage:
@@ -5208,7 +5299,7 @@ if (command === "!menu" || command === "!help") {
 ━━━━━━━━━━━━━━━━━━
 🧠 *AI & LEARNING*
 🔹 !ai [question] — Ask Jarvis anything (or tag Jarvis)
-🔹 !quiz [subject] — Start a subject quiz
+🔹 !quiz [subject] — Start a subject quiz in this group\n🔹 !channelquiz [subject] — Publish native quizzes to the Flexi Channel (owner only)\n🔹 !channelquiz off — Stop Channel quiz publishing
 🔹 !quiz off / !stopquiz — Stop the active quiz (group admins)
 🔹 !command list — List saved custom commands
 🔹 !command create name | description | template — Propose a safe custom command
@@ -8645,5 +8736,15 @@ function getRandomResponse(bank, param) {
 // ---------------- START ----------------
 app.listen(port, () => {
    console.log(`Server running on ${port}`);
-   startJARVIS();
+   baileysReady.then(baileys => {
+       quizEngine.configurePollQuiz({
+           aggregateVotes: baileys.getAggregateVotesInPollMessage,
+           explainAnswer: async ({ subject, question, options, answer, solution }) => askAI(
+               `Explain this ${subject} multiple-choice question to Nigerian secondary-school students in 3-5 clear sentences. Do not change the correct answer.\\nQuestion: ${question}\\nA: ${options?.a || ''}\\nB: ${options?.b || ''}\\nC: ${options?.c || ''}\\nD: ${options?.d || ''}\\nCorrect option: ${answer}\\nALOC solution: ${solution || 'Not supplied'}\\nIf the supplied solution is empty, give a concise explanation based on the question. Avoid guessing if the question is ambiguous.`
+           )
+       });
+       startJARVIS();
+   }).catch(error => {
+       console.error('❌ Failed to load @itsliaaa/baileys:', error.message);
+   });
 });

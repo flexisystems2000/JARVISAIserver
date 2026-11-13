@@ -1,16 +1,13 @@
-# Release validation — JARVIS 3.3.1
+# Release validation — JARVIS 3.4.0
 
-Validated in the source tree on Node.js 22 and the available Python runtime:
+Validated in the supplied source tree:
 
 - `npm run check` — passed (application, Agent modules and test syntax).
-- `npm test` — 64 passed, 0 failed.
-- `python -m unittest discover -s python_services -p 'test_*.py' -v` — 9 passed, 0 failed.
-- Command tests verify exactly 57 Agent-visible command forms, the two removed dictionary commands, the nine WhatsApp-only group-management commands, menu coverage and callable tool registration.
-- Planner tests cover fenced/embedded JSON, malformed plans, schema validation, discovery, one repair attempt, duplicate execution prevention, bounded prompts and HTTP 413 compaction.
-- Conversation-memory tests cover chat/user isolation, chronological context, paired user/assistant records and idempotency by WhatsApp interaction ID.
-- Approval tests cover bot-owner, system-admin and same-group WhatsApp administrator approval, cross-group rejection and ordinary-member denial.
-- File-generation tests create and validate PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML and JSON; they also check filename validation, HTML sanitization and spreadsheet formula escaping.
-- PDF regression tests cover the legacy generation and extraction routes.
-- Existing Piper router and PDF service source were preserved; the Python requirements only gained the document-generation libraries required by DOCX/XLSX/PPTX/HTML support.
+- `npm test` — 65 passed, 0 failed.
+- `python -m unittest discover -s python_services -p 'test_*.py' -v` — 7 passed, 0 failed.
+- New Channel quiz tests verify native newsletter poll payloads, automatic next-question progression, absence of answer/solution follow-up messages, and rejection of non-Channel JIDs.
+- Existing group quiz regression test still passes, including ALOC retrieval, poll vote updates, 30-second closure, explanation, automatic progression and no individual score storage.
+- Other existing Agent, approval, file-generation, conversation-memory, GitHub, Vercel and contact-name tests pass.
 
-Live WhatsApp delivery, live AI-provider requests, MongoDB connectivity, and deployment-provider integration cannot be proven by this local test run. Those still require the deployment environment and its credentials.
+Live WhatsApp delivery, ALOC API access, the installed `@itsliaaa/baileys` runtime, Gemini, MongoDB and deployment-provider integration were not exercised here. Those still require dependency installation and the deployment environment's credentials. Run a private staging test before enabling Channel publishing in production.
+

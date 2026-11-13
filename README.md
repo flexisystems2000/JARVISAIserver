@@ -1,4 +1,4 @@
-# JARVIS AI WhatsApp Bot — 3.1.0
+# JARVIS AI WhatsApp Bot — 3.4.0
 **Flexi edTech Digital Academy**
 
 JARVIS is the existing WhatsApp assistant extended with a structured AI tool registry, authorization checks, a persistent, group-admin-aware approval queue, a sandboxed development shell, GitHub repository tools, and an ALOC-based native poll quiz. Existing moderation, payments, reminders, dashboard and rich-response modules are retained.
@@ -41,6 +41,18 @@ The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz
 - Individual text-answer scoring and persistent student score storage are disabled.
 
 Poll-vote decryption depends on the installed Baileys fork emitting decrypted `pollUpdates` in `messages.update` and exporting `getAggregateVotesInPollMessage`. If the helper is unavailable, the quiz still closes, reveals the correct answer and advances, but reports that aggregate counts could not be decrypted. Test with a real staging WhatsApp group before production use.
+
+## ALOC WhatsApp Channel native quiz
+
+`!channelquiz <subject>` publishes native WhatsApp quiz polls to the configured Flexi Educational Consult Channel. `!channelquiz off` stops the automatic sequence. These commands are owner-only because they publish to the public Channel.
+
+- Uses the same `ALOC_TOKEN`, ALOC API endpoint, subject map, aliases and question retrieval as group quizzes.
+- Publishes a native newsletter quiz (`pollType: 1`) with four A-D options and ALOC's correct option supplied as native quiz metadata.
+- Publishes the next question every 30 seconds until `!channelquiz off` is used.
+- Does not publish the correct answer, ALOC solution, vote totals, AI explanation or student scores as a follow-up Channel message.
+- The native quiz message must contain the correct option metadata for WhatsApp to treat it as a quiz. WhatsApp controls any correctness feedback shown inside its own client after a follower votes; JARVIS does not send a separate answer reveal.
+
+Set `FLEXI_CHANNEL_JID` to override the default Flexi Channel JID. The default remains the existing Flexi Educational Consult newsletter ID.
 
 ## AI tools, commands and approvals
 
@@ -88,7 +100,8 @@ Security checks are intended only for repositories and systems the operator owns
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
 | `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/*` and `/files/generate` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
-| `ALOC_TOKEN` | ALOC API access token |
+| `ALOC_TOKEN` | ALOC API access token used by group and Channel quizzes |
+| `FLEXI_CHANNEL_JID` | Optional WhatsApp Channel JID; defaults to the existing Flexi Channel |
 | `GITHUB_TOKEN` | Least-privilege GitHub token |
 | `VERCEL_TOKEN` | Vercel API token used for approved production deployments |
 | `VERCEL_TEAM_ID` | Optional Vercel team ID for team-scoped deployments |

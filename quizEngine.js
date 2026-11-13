@@ -301,6 +301,158 @@ async function handlePollUpdates(sock, updates = []) {
 }
 
 
+// =====================================================
+// WHATSAPP CHANNEL NATIVE QUIZ
+// =====================================================
+// Uses the same ALOC token, endpoint, subject map and question
+// normalisation as group quizzes. Channel quizzes intentionally
+// do not publish answer keys, explanations, vote totals or scores.
+// The correct option is supplied only as the native quiz metadata
+// required by WhatsApp's newsletter quiz message type.
+// =====================================================
+
+const activeChannelQuizzes = new Map();
+
+function getChannelCorrectOption(question, values) {
+    const answer = normalizeAnswer(question?.answer);
+    const match = answer.match(/^([A-D])(?:\b|[.)\s:-])/);
+    if (!match) return null;
+    const index = match[1].charCodeAt(0) - 65;
+    return values[index] ? values[index] : null;
+}
+
+async function sendChannelQuizQuestion(sock, channelJid, quiz, prefix = '') {
+    if (!String(channelJid || '').endsWith('@newsletter')) {
+        throw new Error('A valid WhatsApp Channel JID is required.');
+    }
+
+    const optionKeys = ['a', 'b', 'c', 'd'];
+    const values = optionKeys.map((key, index) =>
+        optionLabel(String.fromCharCode(65 + index), quiz.option?.[key])
+    );
+    if (values.some(value => !value || /\. N\/A$/.test(value))) {
+        throw new Error('ALOC did not provide all four answer options for the Channel quiz.');
+    }
+
+    const correctAnswer = getChannelCorrectOption(quiz, values);
+    if (!correctAnswer) {
+        throw new Error('ALOC returned an answer that could not be mapped to options A–D.');
+    }
+
+    const name = `${prefix}${String(quiz.subject).toUpperCase()} — ${cleanHTML(quiz.question)}`.slice(0, 250);
+    const sent = await sock.sendMessage(channelJid, {
+        poll: {
+            name,
+            values,
+            correctAnswer,
+            pollType: 1
+        }
+    });
+
+    quiz.channelMessageKey = sent?.key || null;
+    quiz.channelMessage = sent?.message || null;
+    quiz.channelStartedAt = Date.now();
+    quiz.channelTimer = setTimeout(
+        () => advanceChannelQuiz(sock, channelJid),
+        POLL_DURATION_MS
+    );
+    if (typeof quiz.channelTimer.unref === 'function') quiz.channelTimer.unref();
+    activeChannelQuizzes.set(channelJid, quiz);
+    return sent;
+}
+
+async function startChannelQuiz(sock, channelJid, resolved, firstQuestion = null) {
+    if (!sock || typeof sock.sendMessage !== 'function') {
+        return { success: false, error: 'WhatsApp socket inactive.' };
+    }
+    if (!String(channelJid || '').endsWith('@newsletter')) {
+        return { success: false, error: 'A valid WhatsApp Channel JID is required.' };
+    }
+    if (activeChannelQuizzes.has(channelJid)) {
+        return { success: false, error: 'A Channel quiz is already active. Use !channelquiz off first.' };
+    }
+
+    const question = firstQuestion || await fetchQuiz(resolved.slug);
+    const quiz = {
+        mode: 'channel-quiz',
+        subject: resolved.name,
+        subjectSlug: resolved.slug,
+        question: cleanHTML(question.question),
+        option: question.option || {},
+        answer: normalizeAnswer(question.answer),
+        // Kept in memory for internal validation only. Never posted.
+        solution: cleanHTML(question.solution),
+        startedAt: Date.now(),
+        questionNumber: 1
+    };
+
+    await sendChannelQuizQuestion(sock, channelJid, quiz);
+    return {
+        success: true,
+        mode: 'channel-quiz',
+        subject: resolved.name,
+        subjectSlug: resolved.slug,
+        channelJid,
+        durationSeconds: POLL_DURATION_MS / 1000,
+        answerPublished: false
+    };
+}
+
+async function advanceChannelQuiz(sock, channelJid) {
+    const current = activeChannelQuizzes.get(channelJid);
+    if (!current || current.mode !== 'channel-quiz') return;
+    if (current.channelTimer) clearTimeout(current.channelTimer);
+
+    try {
+        const next = await fetchQuiz(current.subjectSlug);
+        if (activeChannelQuizzes.get(channelJid) !== current) return;
+        const nextQuiz = {
+            ...current,
+            question: cleanHTML(next.question),
+            option: next.option || {},
+            answer: normalizeAnswer(next.answer),
+            solution: cleanHTML(next.solution),
+            questionNumber: current.questionNumber + 1
+        };
+        delete nextQuiz.channelMessageKey;
+        delete nextQuiz.channelMessage;
+        delete nextQuiz.channelTimer;
+        await sendChannelQuizQuestion(sock, channelJid, nextQuiz, `QUESTION ${nextQuiz.questionNumber} — `);
+    } catch (error) {
+        if (activeChannelQuizzes.get(channelJid) === current) {
+            activeChannelQuizzes.delete(channelJid);
+        }
+        console.warn('[CHANNEL QUIZ] Stopped because the next ALOC question could not be published:', error.message);
+    }
+}
+
+function stopChannelQuiz(channelJid = null) {
+    if (channelJid) {
+        const current = activeChannelQuizzes.get(channelJid);
+        if (current?.channelTimer) clearTimeout(current.channelTimer);
+        activeChannelQuizzes.delete(channelJid);
+        return;
+    }
+    for (const current of activeChannelQuizzes.values()) {
+        if (current?.channelTimer) clearTimeout(current.channelTimer);
+    }
+    activeChannelQuizzes.clear();
+}
+
+function getActiveChannelQuiz(channelJid) {
+    return channelJid ? (activeChannelQuizzes.get(channelJid) || null) : null;
+}
+
+async function fireChannelQuiz(sock, quizData = {}) {
+    const resolved = resolveSubject(quizData.subject);
+    if (!resolved) {
+        const subjects = getSubjects().map(item => `• ${item.name}`).join('\n');
+        return { success: false, error: `Invalid quiz subject.\n\nAvailable subjects:\n${subjects}` };
+    }
+    return startChannelQuiz(sock, quizData.channelJid, resolved);
+}
+
+
 
 function normalizeSubjectInput(subject) {
 
@@ -871,6 +1023,10 @@ module.exports = {
     handlePollUpdates,
     getPollCreationMessage,
     closePollQuestion,
-    POLL_DURATION_MS
+    POLL_DURATION_MS,
+    fireChannelQuiz,
+    stopChannelQuiz,
+    getActiveChannelQuiz,
+    advanceChannelQuiz
 
 };

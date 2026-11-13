@@ -1,3 +1,12 @@
+## 3.4.0 — 2026-11-13
+- Replaced the CommonJS-only Innovators Soft Baileys dependency with the ESM-only `@itsliaaa/baileys` package, loaded dynamically to preserve the existing CommonJS JARVIS application structure.
+- Updated the rich-response renderer to use the new fork's public rich-message helpers instead of an Innovators Soft internal module path.
+- Added an owner-only `!channelquiz <subject>` command for native WhatsApp Channel quiz publishing, reusing the existing ALOC token, endpoint, subject map and aliases.
+- Added automatic Channel question progression every 30 seconds and `!channelquiz off` to stop it.
+- Channel quiz publishing does not post answer reveals, ALOC solutions, vote totals, explanations or individual student scores.
+- Preserved the existing WhatsApp Group quiz engine and its poll-vote aggregation flow.
+- Added mocked tests for Channel quiz payloads, answer non-disclosure and Channel JID validation.
+
 ## 3.2.0 — 2026-11-11
 - Replaced the GitHub Pages publisher with approval-gated Vercel production deployment and verified `.vercel.app` links.
 - Added repository-to-Vercel import with path and secret checks; expanded GitHub read access to authorised group admins.
