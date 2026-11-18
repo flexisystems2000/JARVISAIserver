@@ -120,3 +120,23 @@ test('Channel quiz rejects invalid newsletter JIDs and does not publish to a gro
     if (oldToken === undefined) delete process.env.ALOC_TOKEN; else process.env.ALOC_TOKEN = oldToken;
   }
 });
+
+
+test('scheduled Channel quiz stores poll keys and publishes each explanation as a quoted reply', async () => {
+  const sent = [];
+  const sock = { sendMessage: async (jid, content, options) => {
+    sent.push({ jid, content, options });
+    return { key: { remoteJid: jid, id: `scheduled-${sent.length}` }, message: content };
+  }};
+  const channel = '120363421353629040@newsletter';
+  const subject = { name: 'Mathematics', slug: 'mathematics' };
+  const item = await quiz.publishScheduledChannelQuestion(sock, channel, subject, {
+    question: 'What is 2 + 2?', option: { a: '3', b: '4', c: '5', d: '6' }, answer: 'B', solution: 'Two plus two equals four.'
+  }, 1);
+  assert.equal(sent[0].content.poll.pollType, 1);
+  assert.equal(item.messageKey.id, 'scheduled-1');
+  await quiz.publishScheduledChannelAnswer(sock, channel, subject, { ...item, number: 1 }, 'Four is the sum of two and two.');
+  assert.equal(sent[1].content.text.includes('Correct option: B'), true);
+  assert.equal(sent[1].options.quoted.key.id, 'scheduled-1');
+  assert.deepEqual(sent[1].options.quoted.message, item.message);
+});

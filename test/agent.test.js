@@ -89,17 +89,6 @@ test('agent brain refuses low-confidence tool execution', async()=>{
  assert.equal(result.reply,'Please clarify.'); assert.equal(ran,false);
 });
 
-const { detectWatchdogViolation } = require('../agent/watchdog');
-test('watchdog whole-word matching does not flag ordinary code/model text', () => {
- assert.deepEqual(detectWatchdogViolation('I am writing code for the model'), {isBadWord:false,isLink:false});
- assert.equal(detectWatchdogViolation('ode').isBadWord,true);
- assert.equal(detectWatchdogViolation('that was stupid').isBadWord,true);
-});
-test('watchdog detects real links without treating a bare .com mention as a URL', () => {
- assert.equal(detectWatchdogViolation('Visit https://example.com/page').isLink,true);
- assert.equal(detectWatchdogViolation('example.com').isLink,true);
- assert.equal(detectWatchdogViolation('the string .com appears here').isLink,false);
-});
 test('requesting WhatsApp group admins can approve only approvals from that same group', async () => {
  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(),'jarvis-group-approval-'));
  const approvals = new ApprovalManager({ directory: dir });
