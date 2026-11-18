@@ -56,7 +56,6 @@ const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName,
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
-const { detectWatchdogViolation } = require('./agent/watchdog');
 const { validateProjectFiles } = require('./agent/codeValidator');
 
 const app = express();
@@ -1811,6 +1810,8 @@ async function downloadMedia(message) {
 }
 
 let sock;
+let channelQuizScheduler = null;
+let whatsappConnectionOpen = false;
 
 // ============================================================
 // 💬 JARVIS DASHBOARD CHAT STORAGE
@@ -2169,13 +2170,16 @@ async function startJARVIS() {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
+            whatsappConnectionOpen = false;
             const shouldReconnect =
                 (lastDisconnect?.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
 
             if (shouldReconnect) startJARVIS();
 
         } else if (connection === 'open') {
+            whatsappConnectionOpen = true;
             console.log(`✅ ${BOT_NAME} Online & Synced`);
+            if (channelQuizScheduler && mongoose.connection.readyState === 1) channelQuizScheduler.start();
         }
     });
 
@@ -3992,7 +3996,7 @@ if (command === "!channelquiz") {
         if (/^(off|stop)$/i.test(requested)) {
             quizEngine.stopChannelQuiz(targetChannelJid);
             await sendWithTyping(jid, {
-                text: '🛑 The automatic Channel quiz sequence has been stopped.'
+                text: '🛑 The manually started Channel quiz sequence has been stopped. The scheduled weekly quiz remains managed by JARVIS.'
             }, m);
             return;
         }
@@ -4390,46 +4394,6 @@ if (jid.endsWith('@g.us')) {
         if (!active) return sock.sendMessage(jid, { text: 'There is no active quiz in this group.' }, { quoted: m });
         quizEngine.stopQuiz(jid);
         return sock.sendMessage(jid, { text: '🛑 The active quiz has been stopped by a group administrator.' }, { quoted: m });
-    }
-
-    // =========================
-    // WATCHDOG (FIXED SAFETY + LOWER FALSE POSITIVES)
-    // =========================
-    const watchdogSenderIsAdmin = jid.endsWith('@g.us')
-        ? (isStaff || await isCurrentWhatsAppGroupAdmin(sock, jid, sender))
-        : false;
-    if (jid.endsWith('@g.us') && !watchdogSenderIsAdmin) {
-
-        // The watchdog now uses whole-word matching and URL patterns; "code" is not "ode".
-        const { isBadWord, isLink } = detectWatchdogViolation(text);
-
-        if (isLink || isBadWord) {
-            await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
-
-            let userWarn = await Warn.findOneAndUpdate(
-                { userId: sender },
-                { $inc: { count: 1 } },
-                { upsert: true, new: true }
-            );
-
-            if (userWarn.count >= 3) {
-                await sock.sendMessage(jid, {
-                    text: `🚫 @${sender.split('@')[0]} removed (3 Strikes).`,
-                    mentions: [sender]
-                });
-
-                await sock.groupParticipantsUpdate(jid, [sender], "remove");
-                await Warn.deleteOne({ userId: sender });
-
-            } else {
-                await sock.sendMessage(jid, {
-                    text: `⚠️ *Watchdog*\n@${sender.split('@')[0]}, violation detected (${userWarn.count}/3).`,
-                    mentions: [sender]
-                });
-            }
-
-            return;
-        }
     }
 
 // --- INVOKE A PERSISTED COMMAND-INVENTOR COMMAND ---
@@ -8734,6 +8698,25 @@ function getRandomResponse(bank, param) {
 // ---------------- START ----------------
 app.listen(port, () => {
    console.log(`Server running on ${port}`);
+   // Durable progress for the autonomous Channel quiz schedule. A stale run can
+   // resume after a process restart; the unique date key prevents duplicate runs.
+   const channelQuizStateSchema = new mongoose.Schema({
+       date: { type: String, unique: true, index: true }, status: String,
+       subjectIndex: Number, phase: String, questions: [mongoose.Schema.Types.Mixed],
+       answerIndex: Number, questionIndex: Number, subjectName: String, subjectSlug: String,
+       questionCount: Number, lastHeartbeat: Date, completedAt: Date, lastError: String
+   }, { timestamps: true, collection: 'jarvis_channel_quiz_schedule' });
+   const ChannelQuizScheduleState = mongoose.models.ChannelQuizScheduleState || mongoose.model('ChannelQuizScheduleState', channelQuizStateSchema);
+   const { createChannelQuizScheduler } = require('./channelQuizScheduler');
+   channelQuizScheduler = createChannelQuizScheduler({
+       sockProvider: () => whatsappConnectionOpen ? sock : null,
+       channelJid: FLEXI_NEWSLETTER_JID,
+       quizEngine,
+       askAI: prompt => askAI(prompt),
+       StateModel: ChannelQuizScheduleState
+   });
+   mongoose.connection.once('connected', () => { if (whatsappConnectionOpen) channelQuizScheduler.start(); });
+
    baileysReady.then(baileys => {
        quizEngine.configurePollQuiz({
            aggregateVotes: baileys.getAggregateVotesInPollMessage,

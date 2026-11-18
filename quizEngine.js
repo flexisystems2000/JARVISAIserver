@@ -454,6 +454,37 @@ async function fireChannelQuiz(sock, quizData = {}) {
 
 
 
+// Scheduled Channel quiz helpers. Kept separate from the 30-second group poll timer.
+async function publishScheduledChannelQuestion(sock, channelJid, subject, question, questionNumber) {
+    if (!String(channelJid || '').endsWith('@newsletter')) throw new Error('A valid WhatsApp Channel JID is required.');
+    const quiz = {
+        subject: subject.name,
+        question: cleanHTML(question.question),
+        option: question.option || {},
+        answer: normalizeAnswer(question.answer),
+        solution: cleanHTML(question.solution || '')
+    };
+    const optionKeys = ['a', 'b', 'c', 'd'];
+    const values = optionKeys.map((key, index) => optionLabel(String.fromCharCode(65 + index), quiz.option[key]));
+    if (values.some(value => /\. N\/A$/.test(value))) throw new Error(`ALOC question ${questionNumber} for ${subject.name} is missing an option.`);
+    const correctAnswer = getChannelCorrectOption(quiz, values);
+    if (!correctAnswer) throw new Error(`ALOC answer for ${subject.name} question ${questionNumber} could not be mapped to A-D.`);
+    const name = `QUESTION ${questionNumber} — ${String(subject.name).toUpperCase()} — ${quiz.question}`.slice(0, 250);
+    const sent = await sock.sendMessage(channelJid, { poll: { name, values, correctAnswer, pollType: 1 } });
+    if (!sent?.key) throw new Error('WhatsApp did not return a message key for the Channel poll.');
+    return {
+        question: quiz.question, option: quiz.option, answer: quiz.answer, solution: quiz.solution,
+        messageKey: sent.key, message: sent.message || null
+    };
+}
+
+async function publishScheduledChannelAnswer(sock, channelJid, subject, item, explanation) {
+    if (!item?.messageKey) throw new Error('Cannot reply to a Channel question without its original message key.');
+    const text = `✅ *${subject.name} — ANSWER ${item.number}*\n\n*Correct option: ${item.answer}*\n\n${String(explanation || 'Explanation unavailable.').slice(0, 3000)}`;
+    return sock.sendMessage(channelJid, { text }, { quoted: { key: item.messageKey, message: item.message || { pollCreationMessage: {} } } });
+}
+
+
 function normalizeSubjectInput(subject) {
 
     return String(
@@ -1027,6 +1058,8 @@ module.exports = {
     fireChannelQuiz,
     stopChannelQuiz,
     getActiveChannelQuiz,
-    advanceChannelQuiz
+    advanceChannelQuiz,
+    publishScheduledChannelQuestion,
+    publishScheduledChannelAnswer
 
 };

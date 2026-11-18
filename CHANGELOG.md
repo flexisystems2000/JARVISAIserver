@@ -1,3 +1,12 @@
+## 3.5.0 — 2026-11-19
+- Added the autonomous weekly ALOC WhatsApp Channel quiz schedule in `Africa/Lagos` time, including the approved weekday and Saturday subject counts and intervals.
+- Added one-at-a-time Gemini explanations posted as replies to their original native Channel poll messages.
+- Persisted schedule progress and original poll message keys in MongoDB, with a daily atomic claim and stale-run recovery to reduce duplicate schedules after restarts.
+- Kept manual `!channelquiz <subject>` available and clarified that `!channelquiz off` stops a manually started run, not the autonomous timetable.
+- Kept the Group quiz 30-second poll timer unchanged and removed the remaining active legacy message-deletion Watchdog middleware and its unused modules.
+- Added scheduler and Channel reply regression tests; retained the existing Piper/PDF service and added schedule documentation.
+- Validation: 67 Node tests passed; JavaScript syntax checks passed; 7 Python PDF/file-generation tests passed. Live WhatsApp, ALOC, Gemini and MongoDB integration was not run in this build environment.
+
 ## 3.4.0 — 2026-11-13
 - Replaced the CommonJS-only Innovators Soft Baileys dependency with the ESM-only `@itsliaaa/baileys` package, loaded dynamically to preserve the existing CommonJS JARVIS application structure.
 - Updated the rich-response renderer to use the new fork's public rich-message helpers instead of an Innovators Soft internal module path.
