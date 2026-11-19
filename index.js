@@ -1,5 +1,5 @@
-// @itsliaaa/baileys is ESM-only. Load it dynamically so this existing
-// CommonJS application can retain its current architecture.
+// Plogme is ESM-only. It is the sole authenticated WhatsApp socket transport.
+// Itsliaaa remains a compatibility helper for poll-vote aggregation only.
 let makeWASocket;
 let useMultiFileAuthState;
 let fetchLatestBaileysVersion;
@@ -17,7 +17,10 @@ const path = require('path');
 
 require('dotenv').config();
 
-const baileysReady = import('@itsliaaa/baileys').then(baileys => {
+const baileysReady = Promise.all([
+    import('plogme'),
+    import('@itsliaaa/baileys')
+]).then(([baileys, itsliaaa]) => {
     makeWASocket = baileys.default || baileys.makeWASocket;
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
@@ -32,13 +35,16 @@ const baileysReady = import('@itsliaaa/baileys').then(baileys => {
         DisconnectReason,
         downloadContentFromMessage,
         areJidsSameUser,
-        getAggregateVotesInPollMessage: baileys.getAggregateVotesInPollMessage
+        getAggregateVotesInPollMessage: baileys.getAggregateVotesInPollMessage || itsliaaa.getAggregateVotesInPollMessage
     };
     const missing = Object.entries(required).filter(([, value]) => value == null).map(([key]) => key);
     if (missing.length) {
-        throw new Error(`@itsliaaa/baileys is missing required exports: ${missing.join(', ')}`);
+        throw new Error(`Plogme transport / Itsliaaa compatibility helper is missing required exports: ${missing.join(', ')}`);
     }
-    return baileys;
+    return {
+        ...baileys,
+        getAggregateVotesInPollMessage: required.getAggregateVotesInPollMessage
+    };
 });
 
 const quizEngine = require('./quizEngine');
@@ -8726,6 +8732,6 @@ app.listen(port, () => {
        });
        startJARVIS();
    }).catch(error => {
-       console.error('❌ Failed to load @itsliaaa/baileys:', error.message);
+       console.error('❌ Failed to load Plogme WhatsApp transport (or Itsliaaa poll helper):', error.message);
    });
 });
