@@ -1,17 +1,4 @@
-# Changelog
-
-## 3.4.3 - 2026-11-19
-- Added pinned `plogme@2.2.8` as the sole authenticated WhatsApp socket transport.
-- Retained `@itsliaaa/baileys` only for poll-vote aggregation compatibility; no second socket is created.
-- Routed assistant Markdown replies through Plogme `sendRichText()` with ordinary-text fallback.
-- Preserved native WhatsApp Channel quiz publishing and the existing persisted timetable.
-- Runtime installation, tarball/dependency audit, and live WhatsApp staging remain unverified because this environment could not reach the npm registry.
-
-## 3.4.1 — 2026-11-19
-- Added focused regression coverage for the existing rich-response renderer (prose, code blocks, native tables and nested response extraction).
-- Documented the single-socket WhatsApp integration boundary and the Plogme/ChannelQuiz verification blockers.
-- Kept `@itsliaaa/baileys` as the active transport so native newsletter quiz polls, the existing session and scheduled Channel quizzes remain on one socket. No unverified second socket or competing Baileys transport was introduced.
-
+## 3.5.0 — 2026-11-19
 - Added the autonomous weekly ALOC WhatsApp Channel quiz schedule in `Africa/Lagos` time, including the approved weekday and Saturday subject counts and intervals.
 - Added one-at-a-time Gemini explanations posted as replies to their original native Channel poll messages.
 - Persisted schedule progress and original poll message keys in MongoDB, with a daily atomic claim and stale-run recovery to reduce duplicate schedules after restarts.
@@ -109,10 +96,3 @@
 - `npm run check`: passed.
 - `npm test`: 19 tests passed.
 - Live WhatsApp moderation/admin checks, GitHub repository creation/Pages publishing, AI Link image generation, MongoDB and Render deployment were not executed in this environment.
-
-## 3.4.2 — 2026-11-19
-
-- Clarified that the publicly identified ChannelQuiz service is Telegram-only; JARVIS uses its already implemented native WhatsApp newsletter quiz publisher and persisted Flexi timetable instead.
-- Documented the existing rich-renderer feature boundary and the decision to retain one authenticated Itsliaaa socket.
-- Recorded the Plogme malware advisory and deferred installation until an exact release and dependency tree can be independently audited.
-- No existing quiz timing, command, Piper service, or WhatsApp authentication configuration was changed.

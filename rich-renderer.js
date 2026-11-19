@@ -349,30 +349,106 @@ async function sendRichReply(
   quotedMessage = null
 ) {
   if (!sock || typeof sock.sendMessage !== 'function') {
-    throw new Error('The connected WhatsApp socket does not expose sendMessage().');
+    throw new Error(
+      'The connected Baileys socket does not expose sendMessage().'
+    );
   }
 
-  const content = String(markdown || '').trim();
-  if (!content) return null;
+  const blocks = parseMarkdownBlocks(markdown);
 
-  // Plogme exposes sendRichText() for Markdown-capable GenAI rich responses.
-  // Keep the complete Markdown in one envelope so tables and fenced code are
-  // rendered by the recipient's WhatsApp client where supported.
-  if (typeof sock.sendRichText === 'function') {
-    try {
-      await updatePresence(sock, jid, 'composing');
-      return await sock.sendRichText(jid, { text: content });
-    } finally {
-      await updatePresence(sock, jid, 'paused');
+  if (!blocks.length) {
+    return null;
+  }
+
+  // Itsliaaa is ESM, while this renderer remains CommonJS.
+  const baileys = await import('@itsliaaa/baileys');
+
+  const results = [];
+  let richResponse = [];
+
+  async function flushRichResponse() {
+    if (!richResponse.length) {
+      return;
+    }
+
+    const currentBatch = richResponse;
+    richResponse = [];
+
+    const result = await sendRichResponse(
+      sock,
+      jid,
+      currentBatch,
+      quotedMessage
+    );
+
+    results.push(result);
+  }
+
+  for (const block of blocks) {
+    // Normal text
+    if (block.messageType === TYPE.TEXT) {
+      richResponse.push({
+        text: block.messageText
+      });
+
+      continue;
+    }
+
+    // Code blocks
+    if (block.messageType === TYPE.CODE) {
+      const language = normalizeLanguage(
+        block.codeMetadata.codeLanguage
+      );
+
+      const sourceCode = block.codeMetadata.sourceCode;
+
+      if (SUPPORTED_CODE_LANGUAGES.has(language)) {
+        if (typeof baileys.tokenizeCode !== 'function') {
+          throw new Error(
+            '@itsliaaa/baileys does not expose tokenizeCode().'
+          );
+        }
+
+        richResponse.push({
+          language,
+          code: baileys.tokenizeCode(
+            sourceCode,
+            language
+          )
+        });
+      } else {
+        richResponse.push({
+          text: `\`\`\`${language}\n${sourceCode}\n\`\`\``
+        });
+      }
+
+      continue;
+    }
+
+    // Native standalone table
+    if (block.messageType === TYPE.TABLE) {
+      // Send preceding text/code before the table.
+      await flushRichResponse();
+
+      const result = await sendNativeTable(
+        sock,
+        jid,
+        block.tableMetadata,
+        quotedMessage
+      );
+
+      if (result) {
+        results.push(result);
+      }
     }
   }
 
-  // Compatibility fallback for transports/clients without Plogme rich text.
-  return sock.sendMessage(
-    jid,
-    { text: content },
-    quotedMessage ? { quoted: quotedMessage } : undefined
-  );
+  // Send any remaining text/code after the final table.
+  await flushRichResponse();
+
+  return results.length === 1
+    ? results[0]
+    : results;
 }
 
 module.exports = {

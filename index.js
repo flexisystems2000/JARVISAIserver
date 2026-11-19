@@ -1,5 +1,5 @@
-// Plogme is ESM-only. It is the sole authenticated WhatsApp socket transport.
-// Itsliaaa remains a compatibility helper for poll-vote aggregation only.
+// @itsliaaa/baileys is ESM-only. Load it dynamically so this existing
+// CommonJS application can retain its current architecture.
 let makeWASocket;
 let useMultiFileAuthState;
 let fetchLatestBaileysVersion;
@@ -17,10 +17,7 @@ const path = require('path');
 
 require('dotenv').config();
 
-const baileysReady = Promise.all([
-    import('plogme'),
-    import('@itsliaaa/baileys')
-]).then(([baileys, itsliaaa]) => {
+const baileysReady = import('@itsliaaa/baileys').then(baileys => {
     makeWASocket = baileys.default || baileys.makeWASocket;
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
@@ -35,16 +32,13 @@ const baileysReady = Promise.all([
         DisconnectReason,
         downloadContentFromMessage,
         areJidsSameUser,
-        getAggregateVotesInPollMessage: baileys.getAggregateVotesInPollMessage || itsliaaa.getAggregateVotesInPollMessage
+        getAggregateVotesInPollMessage: baileys.getAggregateVotesInPollMessage
     };
     const missing = Object.entries(required).filter(([, value]) => value == null).map(([key]) => key);
     if (missing.length) {
-        throw new Error(`Plogme transport / Itsliaaa compatibility helper is missing required exports: ${missing.join(', ')}`);
+        throw new Error(`@itsliaaa/baileys is missing required exports: ${missing.join(', ')}`);
     }
-    return {
-        ...baileys,
-        getAggregateVotesInPollMessage: required.getAggregateVotesInPollMessage
-    };
+    return baileys;
 });
 
 const quizEngine = require('./quizEngine');
@@ -8732,6 +8726,6 @@ app.listen(port, () => {
        });
        startJARVIS();
    }).catch(error => {
-       console.error('❌ Failed to load Plogme WhatsApp transport (or Itsliaaa poll helper):', error.message);
+       console.error('❌ Failed to load @itsliaaa/baileys:', error.message);
    });
 });
