@@ -121,6 +121,21 @@ BanSchema.index({ groupJid: 1, userJid: 1 }, { unique: true });
 const Ban = mongoose.models.Ban || mongoose.model('Ban', BanSchema);
 
 // ============================================================
+// 🔗 EXTERNAL LINK MODERATION
+// Muted users: messages deleted + muted 5 minutes per offence.
+// Admins (group admins + bot owner) are exempt.
+// ============================================================
+const LinkMuteSchema = new mongoose.Schema({
+    groupJid: { type: String, required: true, index: true },
+    userJid: { type: String, required: true, index: true },
+    mutedBy: { type: String, default: '' },
+    until: { type: Date, required: true },
+    createdAt: { type: Date, default: Date.now }
+});
+LinkMuteSchema.index({ groupJid: 1, userJid: 1 }, { unique: true });
+const LinkMute = mongoose.models.LinkMute || mongoose.model('LinkMute', LinkMuteSchema);
+
+// ============================================================
 // 🧠 PERSISTENT JARVIS CONVERSATION MEMORY (MongoDB)
 // Stores user/assistant turns separately for each user and chat.
 // Group conversations are scoped to that group AND participant,
@@ -2522,6 +2537,59 @@ if (
         });
     }
 }
+
+    // ============================================================
+    // 🔗 EXTERNAL LINK MODERATION (groups only)
+    // Deletes any message containing a link, mutes the sender for
+    // 5 minutes, and deletes everything they post while muted.
+    // Group admins and the bot owner are exempt.
+    // ============================================================
+    if (jid?.endsWith('@g.us') && !m.key.fromMe) {
+        try {
+            // 1. Enforce active mutes: delete everything a muted user posts.
+            const activeMute = await LinkMute.findOne({ groupJid: jid, userJid: sender, until: { $gt: new Date() } }).lean();
+            if (activeMute) {
+                await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
+                return;
+            }
+
+            // 2. Detect links in text, captions and document filenames.
+            const linkScanText = [
+                m.message?.conversation,
+                m.message?.extendedTextMessage?.text,
+                m.message?.imageMessage?.caption,
+                m.message?.videoMessage?.caption,
+                m.message?.documentMessage?.caption,
+                m.message?.documentMessage?.fileName
+            ].filter(Boolean).join('\n');
+
+            const linkMatches = String(linkScanText).match(/https?:\/\/\S+|www\.\S+/gi);
+
+            if (linkMatches && linkMatches.length) {
+                const senderIsAdmin = await isCurrentWhatsAppGroupAdmin(sock, jid, sender);
+                if (!senderIsAdmin && !isConfiguredOwner) {
+                    // Delete the offending message.
+                    await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
+
+                    // Mute the sender for 5 minutes.
+                    const until = new Date(Date.now() + 5 * 60 * 1000);
+                    await LinkMute.findOneAndUpdate(
+                        { groupJid: jid, userJid: sender },
+                        { $set: { until, mutedBy: 'link-moderation' } },
+                        { upsert: true, new: true }
+                    );
+
+                    await sock.sendMessage(jid, {
+                        text: `🔗🚫 @${sender.split('@')[0]} links aren't allowed in this group.\n\n🔇 Muted for *5 minutes* — your messages will be deleted until the mute lifts.`,
+                        mentions: [sender]
+                    }, { quoted: m }).catch(() => {});
+                    return;
+                }
+            }
+        } catch (linkModError) {
+            console.warn('[LINK MODERATION] Failed:', linkModError.message);
+        }
+    }
 
        // ==========================================
     // JARVIS ONLINE STATUS CHECK
