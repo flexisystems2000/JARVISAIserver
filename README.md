@@ -94,7 +94,10 @@ Security checks are intended only for repositories and systems the operator owns
 | `OWNER_NUMBER` | Bot owner number in international digits, no `+` |
 | `ADMIN_NUMBERS` | Optional comma-separated JARVIS system-admin numbers; WhatsApp group admins are detected from live group metadata |
 | `MONGO_URI` | MongoDB connection string |
-| `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
+| `LLM_API_URL` | Base URL of the OpenAI-compatible LLM gateway (default `https://attract-female-praise-artefact.2n6.me/dahl/v1`) |
+| `LLM_API_KEY` | Bearer token for the LLM gateway |
+| `LLM_MODEL` | Chat model id (default `deepseek-ai/DeepSeek-V4-Flash-0731`) |
+| `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link (legacy; image analysis fallback and image generation) |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
