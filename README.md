@@ -7,7 +7,6 @@ JARVIS is the existing WhatsApp assistant extended with a structured AI tool reg
 
 - Node.js 20 or later
 - MongoDB (if using the existing persistent features)
-- Gemini API credentials used by the existing AI configuration
 - `ALOC_TOKEN` for ALOC questions
 - WhatsApp account for the Baileys session
 
@@ -23,7 +22,7 @@ Do not commit `.env`, `auth_info/`, audit logs, approval data, or the sandbox wo
 
 ## AI gateway and Python document service
 
-JARVIS calls the Flexieduconsult AI Link through `AI_API_URL` and authenticates every `/ai` and `/image` request with `AI_API_KEY`. Set this value to exactly the same secret as `JARVIS_API_KEY` on the AI Link deployment. The agent planner requests JSON-mode model output; the tool registry still validates tool names, arguments, permissions and approvals before execution.
+JARVIS sends text requests to an OpenAI-compatible LLM gateway (`LLM_API_URL`, default base `https://attract-female-praise-artefact.2n6.me/dahl/v1`) using `LLM_API_KEY` as a Bearer token and `LLM_MODEL` as the chat model (default `deepseek-ai/DeepSeek-V4-Flash-0731`). JSON-mode planner output is enforced with a system instruction, and the tool registry still validates tool names, arguments, permissions and approvals before execution. The chat gateway does not accept images, so image analysis sent to JARVIS in chat falls back to the legacy Flexieduconsult AI Link, and image generation uses the legacy AI Link `GET /image` endpoint exclusively. Keep `AI_API_URL` and `AI_API_KEY` configured for those image features.
 
 File creation is performed by the authenticated Python service, not by the AI Link. The JARVIS package includes `python_services/piper_pdf_router.py`; mount both its PDF and general-file routers into the existing Piper FastAPI app as described in `python_services/README.md`. The routes use `PIPER_API_KEY` and expose `/pdf/generate`, `/pdf/extract` and `/files/generate`. The general file route supports PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, HTML, JSON, XML, YAML, CSS, JavaScript, Python, PHP, Java, C++, SQL, SVG, RTF, TypeScript/TSX/JSX, C/C++, C#, Go, Rust, Ruby, shell/PowerShell, TOML, INI, configuration, LaTeX, MDX, JSONL and ZIP. Piper remains responsible for TTS/voice and its existing media services. If hosted separately, point `PIPER_DOCUMENT_API_URL` at that service's base URL.
 
@@ -35,7 +34,7 @@ The AI Link no longer provides PDF, OCR or quiz endpoints. JARVIS owns ALOC quiz
 
 - Subjects are resolved using the existing ALOC subject map.
 - Each poll has four A-D options and a 30-second voting window.
-- After voting closes, JARVIS displays aggregate vote counts (not student score tables), the correct option, and an AI-generated explanation where the Gemini service is available.
+- After voting closes, JARVIS displays aggregate vote counts (not student score tables), the correct option, and an AI-generated explanation where the LLM gateway is available.
 - JARVIS fetches and posts the next question automatically.
 - `!stopquiz` lets a group administrator or the bot owner stop the active quiz.
 - Individual text-answer scoring and persistent student score storage are disabled.
@@ -94,7 +93,10 @@ Security checks are intended only for repositories and systems the operator owns
 | `OWNER_NUMBER` | Bot owner number in international digits, no `+` |
 | `ADMIN_NUMBERS` | Optional comma-separated JARVIS system-admin numbers; WhatsApp group admins are detected from live group metadata |
 | `MONGO_URI` | MongoDB connection string |
-| `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
+| `LLM_API_URL` | Base URL of the OpenAI-compatible LLM gateway (default `https://attract-female-praise-artefact.2n6.me/dahl/v1`) |
+| `LLM_API_KEY` | Bearer token for the LLM gateway |
+| `LLM_MODEL` | Chat model id (default `deepseek-ai/DeepSeek-V4-Flash-0731`) |
+| `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link (legacy; image analysis fallback and image generation) |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
@@ -111,7 +113,7 @@ Security checks are intended only for repositories and systems the operator owns
 | `DOCKER_BIN` | Optional Docker executable name/path for sandbox execution |
 | `JARVIS_SANDBOX_WORKSPACE` | Host directory mounted into `/workspace` in the isolated container |
 
-The existing project may also require Firebase and other settings used by its pre-existing features. Gemini credentials belong only in the Flexieduconsult AI Link environment; do not put Gemini provider keys in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
+The existing project may also require Firebase and other settings used by its pre-existing features. Provider credentials for the LLM gateway belong in `LLM_API_KEY`; Gemini credentials belong only in the legacy Flexieduconsult AI Link environment, not in JARVIS. Keep all secrets in Render environment settings, not in this ZIP.
 
 ## Render deployment
 
@@ -122,7 +124,7 @@ The existing project may also require Firebase and other settings used by its pr
 5. Deploy, scan the pairing QR using the WhatsApp account intended for JARVIS, and check the service logs.
 6. Test `!quiz Mathematics`, voting, 30-second close, explanation, next-question progression, `!stopquiz`, and approval request/reject/approve in a private staging group.
 7. Test GitHub identity and repository permissions with a token limited to the repositories JARVIS should access.
-8. Deploy the authenticated AI Link with the matching `JARVIS_API_KEY`; set `AI_API_URL` and `AI_API_KEY` in JARVIS.
+8. Set `LLM_API_URL`, `LLM_API_KEY` and `LLM_MODEL` in JARVIS for the chat gateway. Deploy the authenticated legacy AI Link with the matching `JARVIS_API_KEY` and set `AI_API_URL` and `AI_API_KEY` in JARVIS only if image analysis and image generation are needed.
 9. Mount both routers from `python_services/piper_pdf_router.py` into the Piper FastAPI app (or deploy `python_services/pdf_service.py` as a companion), configure `PIPER_API_KEY`, then test PDF, DOCX, XLSX and ZIP generation in a private chat.
 10. Configure `VERCEL_TOKEN` and optional `VERCEL_TEAM_ID` in Render, then test a Vercel deployment using a non-critical test project and approve the production deployment only after reviewing it.
 
