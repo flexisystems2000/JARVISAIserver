@@ -2166,6 +2166,39 @@ async function startJARVIS() {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Baileys call events are detection-only here. This fork does not expose a
+    // verified call-answer/audio-media API, so JARVIS must never claim to answer
+    // or join a live call through this connection.
+    const notifiedCallIds = new Map();
+    sock.ev.on('call', async (updates) => {
+        const callUpdates = Array.isArray(updates) ? updates : [updates];
+        for (const call of callUpdates) {
+            if (!call || !['offer', 'ringing'].includes(String(call.status || '').toLowerCase())) continue;
+            const callId = String(call.id || '');
+            if (!callId || notifiedCallIds.has(callId)) continue;
+            notifiedCallIds.set(callId, Date.now());
+            if (notifiedCallIds.size > 200) {
+                const oldest = notifiedCallIds.keys().next().value;
+                notifiedCallIds.delete(oldest);
+            }
+
+            const callerJid = String(call.from || call.chatId || '');
+            const caller = callerJid.split('@')[0] || 'Unknown caller';
+            const callType = call.isVideo ? 'video' : 'voice';
+            console.log(`[WHATSAPP CALL] Incoming ${callType} call event detected from ${caller}.`);
+
+            if (OWNER_NUMBER) {
+                try {
+                    await sock.sendMessage(`${OWNER_NUMBER}@s.whatsapp.net`, {
+                        text: `📞 *JARVIS call alert*\nAn incoming WhatsApp ${callType} call event was detected.\nCaller: ${caller}\n\nThis Baileys connection can detect the event, but it is not configured to answer or stream live call audio. The call has not been answered by JARVIS.`
+                    });
+                } catch (error) {
+                    console.warn('[WHATSAPP CALL] Could not send owner alert:', error.message);
+                }
+            }
+        }
+    });
+
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
 
