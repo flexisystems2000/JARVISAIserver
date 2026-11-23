@@ -74,9 +74,6 @@ const POWERED_BY = "Flexi Digital Academy";
 const MONGO_URI = process.env.MONGO_URI;
 const AI_API_URL = String(process.env.AI_API_URL || 'https://flexieduconsult-ai-link-wqnb.onrender.com').trim().replace(/\/$/, '');
 const AI_API_KEY = String(process.env.AI_API_KEY || '').trim();
-const LLM_API_URL = String(process.env.LLM_API_URL || 'https://attract-female-praise-artefact.2n6.me/dahl/v1').trim().replace(/\/$/, '');
-const LLM_API_KEY = String(process.env.LLM_API_KEY || '').trim();
-const LLM_MODEL = String(process.env.LLM_MODEL || 'deepseek-ai/DeepSeek-V4-Flash-0731').trim();
 const AI_TIMEOUT_MS = Math.max(10000, Number(process.env.AI_TIMEOUT_MS || 60000));
 const PIPER_DOCUMENT_API_URL = String(process.env.PIPER_DOCUMENT_API_URL || 'https://flexi-jarvis-piper-tts.onrender.com').trim().replace(/\/$/, '');
 const PIPER_DOCUMENT_TIMEOUT_MS = Math.max(10000, Number(process.env.PIPER_DOCUMENT_TIMEOUT_MS || 90000));
@@ -119,21 +116,6 @@ const BanSchema = new mongoose.Schema({
 });
 BanSchema.index({ groupJid: 1, userJid: 1 }, { unique: true });
 const Ban = mongoose.models.Ban || mongoose.model('Ban', BanSchema);
-
-// ============================================================
-// 🔗 EXTERNAL LINK MODERATION
-// Muted users: messages deleted + muted 5 minutes per offence.
-// Admins (group admins + bot owner) are exempt.
-// ============================================================
-const LinkMuteSchema = new mongoose.Schema({
-    groupJid: { type: String, required: true, index: true },
-    userJid: { type: String, required: true, index: true },
-    mutedBy: { type: String, default: '' },
-    until: { type: Date, required: true },
-    createdAt: { type: Date, default: Date.now }
-});
-LinkMuteSchema.index({ groupJid: 1, userJid: 1 }, { unique: true });
-const LinkMute = mongoose.models.LinkMute || mongoose.model('LinkMute', LinkMuteSchema);
 
 // ============================================================
 // 🧠 PERSISTENT JARVIS CONVERSATION MEMORY (MongoDB)
@@ -1505,51 +1487,23 @@ if (MONGO_URI) {
 // --- AUTHENTICATED AI GATEWAY ---
 async function askAI(prompt, base64Media = null, options = {}) {
     try {
-        if (!LLM_API_KEY) throw new Error('LLM_API_KEY is not configured in JARVIS.');
-        const userContent = base64Media
-            ? [
-                { type: 'text', text: String(prompt || '') },
-                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64Media}` } }
-            ]
-            : String(prompt || '');
-        const systemContent = options.responseFormat === 'json'
-            ? 'You are JARVIS. Respond with exactly one JSON object and nothing else.'
-            : 'You are JARVIS, a helpful WhatsApp assistant for Flexi edTech Digital Academy.';
-        const res = await axios.post(`${LLM_API_URL}/chat/completions`, {
-            model: LLM_MODEL,
-            messages: [
-                { role: 'system', content: systemContent },
-                { role: 'user', content: userContent }
-            ],
-            max_tokens: 4000
-        }, {
+        if (!AI_API_KEY) throw new Error('AI_API_KEY is not configured in JARVIS.');
+        const payload = {
+            prompt: String(prompt || ''),
+            botName: 'Jarvis',
+            ...(base64Media ? { image: base64Media } : {}),
+            ...(options.responseFormat ? { responseFormat: options.responseFormat } : {})
+        };
+        const res = await axios.post(`${AI_API_URL}/ai`, payload, {
             timeout: AI_TIMEOUT_MS,
             maxContentLength: 12 * 1024 * 1024,
             maxBodyLength: 12 * 1024 * 1024,
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${LLM_API_KEY}` }
+            headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY }
         });
-        const text = res.data?.choices?.[0]?.message?.content;
-        if (!text) throw new Error('LLM gateway returned no content.');
-        return text.trim() || '🤖 No response from AI';
+        if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
+        return res.data?.result || '🤖 No response from AI';
     } catch (err) {
         console.error('[AI GATEWAY] Request failed:', err.response?.status || err.code || err.message);
-        if (base64Media && AI_API_KEY) {
-            try {
-                const res = await axios.post(`${AI_API_URL}/ai`, {
-                    prompt: String(prompt || ''),
-                    botName: 'Jarvis',
-                    image: base64Media
-                }, {
-                    timeout: AI_TIMEOUT_MS,
-                    maxContentLength: 12 * 1024 * 1024,
-                    maxBodyLength: 12 * 1024 * 1024,
-                    headers: { 'Content-Type': 'application/json', 'x-api-key': AI_API_KEY }
-                });
-                if (res.data?.success && res.data?.result) return res.data.result;
-            } catch (legacyErr) {
-                console.error('[AI GATEWAY] Legacy image fallback failed:', legacyErr.response?.status || legacyErr.message);
-            }
-        }
         return '⚠️ AI service unavailable. Please try again shortly.';
     }
 }
@@ -2537,59 +2491,6 @@ if (
         });
     }
 }
-
-    // ============================================================
-    // 🔗 EXTERNAL LINK MODERATION (groups only)
-    // Deletes any message containing a link, mutes the sender for
-    // 5 minutes, and deletes everything they post while muted.
-    // Group admins and the bot owner are exempt.
-    // ============================================================
-    if (jid?.endsWith('@g.us') && !m.key.fromMe) {
-        try {
-            // 1. Enforce active mutes: delete everything a muted user posts.
-            const activeMute = await LinkMute.findOne({ groupJid: jid, userJid: sender, until: { $gt: new Date() } }).lean();
-            if (activeMute) {
-                await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
-                return;
-            }
-
-            // 2. Detect links in text, captions and document filenames.
-            const linkScanText = [
-                m.message?.conversation,
-                m.message?.extendedTextMessage?.text,
-                m.message?.imageMessage?.caption,
-                m.message?.videoMessage?.caption,
-                m.message?.documentMessage?.caption,
-                m.message?.documentMessage?.fileName
-            ].filter(Boolean).join('\n');
-
-            const linkMatches = String(linkScanText).match(/https?:\/\/\S+|www\.\S+/gi);
-
-            if (linkMatches && linkMatches.length) {
-                const senderIsAdmin = await isCurrentWhatsAppGroupAdmin(sock, jid, sender);
-                if (!senderIsAdmin && !isConfiguredOwner) {
-                    // Delete the offending message.
-                    await sock.sendMessage(jid, { delete: m.key }).catch(() => {});
-
-                    // Mute the sender for 5 minutes.
-                    const until = new Date(Date.now() + 5 * 60 * 1000);
-                    await LinkMute.findOneAndUpdate(
-                        { groupJid: jid, userJid: sender },
-                        { $set: { until, mutedBy: 'link-moderation' } },
-                        { upsert: true, new: true }
-                    );
-
-                    await sock.sendMessage(jid, {
-                        text: `🔗🚫 @${sender.split('@')[0]} links aren't allowed in this group.\n\n🔇 Muted for *5 minutes* — your messages will be deleted until the mute lifts.`,
-                        mentions: [sender]
-                    }, { quoted: m }).catch(() => {});
-                    return;
-                }
-            }
-        } catch (linkModError) {
-            console.warn('[LINK MODERATION] Failed:', linkModError.message);
-        }
-    }
 
        // ==========================================
     // JARVIS ONLINE STATUS CHECK
