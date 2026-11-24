@@ -97,8 +97,8 @@ Security checks are intended only for repositories and systems the operator owns
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
-| `GEMINI_API_KEY` | Gemini Developer API key for optional Gemini Live WhatsApp calls |
-| `GEMINI_LIVE_MODEL` | Optional Gemini Live model name; defaults to the configured preview model |
+| `AI_API_KEY` | Existing shared secret used by JARVIS to authenticate with the Flexi Educational Consult AI Link, including live voice calls |
+| `AI_VOICE_URL` | Optional full WebSocket URL for the AI Link voice gateway; defaults to `wss://flexieduconsult-ai-link-wqnb.onrender.com/voice` |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
 | `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/*` and `/files/generate` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
@@ -158,7 +158,7 @@ Weekday questions are published every 4 minutes and explanations every 5 minutes
 
 JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses `@hiroosy/baileys-lite` VoIP support against the socket already created by the existing `@itsliaaa/baileys` connection; it does not create a second WhatsApp account or write a second authentication session.
 
-Set `GEMINI_API_KEY` in the hosting environment to enable automatic answering. Optionally set `GEMINI_LIVE_MODEL`; the default is `gemini-2.5-flash-native-audio-preview-12-2025`. The feature uses Google's `@google/genai` Live API SDK. Gemini credentials are not sent to WhatsApp or written to the repository.
+Set `AI_API_KEY` in the JARVIS hosting environment to the same value as `JARVIS_API_KEY` on the Flexi Educational Consult AI Link. JARVIS connects to the authenticated `/voice` WebSocket endpoint and sends/receives call audio through that service. Gemini API keys remain configured only on the AI Link server; do not add `GEMINI_API_KEY` to JARVIS.
 
 Requirements and limitations:
 - The call adapter relies on Baileys internal socket methods. Compatibility with the installed `@itsliaaa/baileys` fork must be verified in a real staging call; if setup fails, the normal JARVIS bot continues running and logs the reason.
@@ -166,5 +166,5 @@ Requirements and limitations:
 - The bridge converts WhatsApp 16 kHz Float32 audio to Gemini 16 kHz PCM16, then converts Gemini 24 kHz PCM16 responses back to 16 kHz Float32 for WhatsApp.
 - One concurrent AI call is allowed. Additional incoming calls are rejected while JARVIS is busy.
 - This is an experimental unofficial WhatsApp Web calling integration. It is not an official WhatsApp Business Calling API integration, and successful deployment is not proof of live call compatibility. Test with a non-critical account/session first.
-- If `GEMINI_API_KEY` is absent, JARVIS retains the previous incoming-call detection and owner-alert behavior only.
+- If `AI_API_KEY` is absent, JARVIS retains the previous incoming-call detection and owner-alert behavior only.
 
