@@ -112,11 +112,20 @@ async function attachGeminiCallAssistant(sock) {
             const active = activeCalls.get(callId);
             if (!active || !pcm?.length || active.gateway.readyState !== WebSocket.OPEN) return;
             try {
+                const encoded = float32ToPcm16Base64(pcm);
                 active.gateway.send(JSON.stringify({
                     type: 'audio',
-                    data: float32ToPcm16Base64(pcm),
+                    data: encoded,
                     mimeType: 'audio/pcm;rate=16000'
                 }));
+                active.stats.inFrames++;
+                active.stats.inSamples += pcm.length;
+                if (active.stats.inFrames === 1 || active.stats.inFrames % 50 === 0) {
+                    console.log('[CALL AI AUDIO] Caller audio forwarded', {
+                        callId, frames: active.stats.inFrames, samples: active.stats.inSamples,
+                        lastFrameSamples: pcm.length, gatewayState: active.gateway.readyState
+                    });
+                }
             } catch (error) {
                 console.error('[CALL AI] Could not forward caller audio to AI Link:', error.message);
             }
@@ -139,7 +148,7 @@ async function attachGeminiCallAssistant(sock) {
             let gateway;
             try {
                 gateway = await connectVoiceGateway();
-                const active = { gateway, ready: true };
+                const active = { gateway, ready: true, stats: { inFrames: 0, inSamples: 0, outFrames: 0, outSamples: 0 } };
                 activeCalls.set(callId, active);
 
                 gateway.on('message', raw => {
@@ -148,12 +157,25 @@ async function attachGeminiCallAssistant(sock) {
                     if (message.type === 'audio' && typeof message.data === 'string') {
                         try {
                             const pcm24k = pcm16Base64ToFloat32(message.data);
-                            voip.coordinator.feedLiveAudio(callId, resampleFloat32(pcm24k, 24000, 16000));
+                            const pcm16k = resampleFloat32(pcm24k, 24000, 16000);
+                            voip.coordinator.feedLiveAudio(callId, pcm16k);
+                            active.stats.outFrames++;
+                            active.stats.outSamples += pcm16k.length;
+                            if (active.stats.outFrames === 1 || active.stats.outFrames % 25 === 0) {
+                                console.log('[CALL AI AUDIO] AI audio fed to WhatsApp', {
+                                    callId, frames: active.stats.outFrames, samples: active.stats.outSamples,
+                                    lastFrameSamples: pcm16k.length, sourceSamples: pcm24k.length
+                                });
+                            }
                         } catch (error) {
                             console.error('[CALL AI] Could not play AI Link audio into WhatsApp:', error.message);
                         }
                     } else if (message.type === 'transcript' && message.text) {
-                        console.log('[CALL AI] JARVIS:', message.text);
+                        console.log('[CALL AI AUDIO] Gemini response transcript received', { callId, characters: message.text.length });
+                    } else if (message.type === 'turn_complete') {
+                        console.log('[CALL AI AUDIO] Gemini turn completed', {
+                            callId, callerFrames: active.stats.inFrames, responseFrames: active.stats.outFrames
+                        });
                     } else if (message.type === 'error') {
                         console.error('[CALL AI] AI Link voice error:', message.code || '', message.error || '');
                     } else if (message.type === 'closed') {
@@ -170,6 +192,7 @@ async function attachGeminiCallAssistant(sock) {
                 await voip.acceptCall(callId);
                 voip.coordinator.setExternalAudioMode(callId, true);
                 console.log(`[CALL AI] AI Link voice gateway connected; answering call ${callId}.`);
+                console.log('[CALL AI AUDIO] Audio diagnostics initialized', { callId, externalAudioMode: 'enabled' });
             } catch (error) {
                 console.error('[CALL AI] Could not start AI Link voice session:', error.message);
                 try { gateway?.close(); } catch {}
