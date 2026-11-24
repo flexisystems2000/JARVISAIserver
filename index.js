@@ -2170,7 +2170,7 @@ async function startJARVIS() {
     // Keep the basic call-event alert as a fallback when Gemini Live is not configured.
     const notifiedCallIds = new Map();
     sock.ev.on('call', async (updates) => {
-        if (process.env.GEMINI_API_KEY) return;
+        if (process.env.AI_API_KEY) return;
         const callUpdates = Array.isArray(updates) ? updates : [updates];
         for (const call of callUpdates) {
             if (!call || !['offer', 'ringing'].includes(String(call.status || '').toLowerCase())) continue;
@@ -2185,7 +2185,7 @@ async function startJARVIS() {
             if (OWNER_NUMBER) {
                 try {
                     await sock.sendMessage(`${OWNER_NUMBER}@s.whatsapp.net`, {
-                        text: `📞 *JARVIS call alert*\\nAn incoming WhatsApp ${callType} call was detected.\\nCaller: ${caller}\\n\\nLive answering is disabled because GEMINI_API_KEY is not configured.`
+                        text: `📞 *JARVIS call alert*\\nAn incoming WhatsApp ${callType} call was detected.\\nCaller: ${caller}\\n\\nLive answering is disabled because AI_API_KEY is not configured.`
                     });
                 } catch (error) {
                     console.warn('[WHATSAPP CALL] Could not send owner alert:', error.message);
@@ -2207,8 +2207,10 @@ async function startJARVIS() {
         } else if (connection === 'open') {
             whatsappConnectionOpen = true;
             console.log(`✅ ${BOT_NAME} Online & Synced`);
-            if (process.env.GEMINI_API_KEY) {
+            if (process.env.AI_API_KEY) {
                 attachGeminiCallAssistant(sock).catch(error => console.error('[CALL AI] Setup failed; normal JARVIS messaging remains active:', error.message));
+            } else {
+                console.warn('[CALL AI] AI_API_KEY is not configured; live calls cannot connect to Flexi AI Link.');
             }
             if (channelQuizScheduler && mongoose.connection.readyState === 1) channelQuizScheduler.start();
         }
