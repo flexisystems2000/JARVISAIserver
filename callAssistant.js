@@ -107,7 +107,9 @@ async function attachGeminiCallAssistant(sock) {
             console.log(`[CALL AI] Call ${callId} closed (${reason}).`);
         };
 
-        voip.on('call_inbound_audio', ({ call, pcm }) => {
+        // Baileys-Lite emits this event with TWO positional arguments:
+        // (callInfo, decodedPcmFloat32). Do not destructure it as one object.
+        voip.on('call_inbound_audio', (call, pcm) => {
             const callId = call?.callId;
             const active = activeCalls.get(callId);
             if (!active || !pcm?.length || active.gateway.readyState !== WebSocket.OPEN) return;
@@ -158,13 +160,14 @@ async function attachGeminiCallAssistant(sock) {
                         try {
                             const pcm24k = pcm16Base64ToFloat32(message.data);
                             const pcm16k = resampleFloat32(pcm24k, 24000, 16000);
-                            voip.coordinator.feedLiveAudio(callId, pcm16k);
+                            const acceptedSamples = voip.coordinator.feedLiveAudio(callId, pcm16k);
                             active.stats.outFrames++;
                             active.stats.outSamples += pcm16k.length;
                             if (active.stats.outFrames === 1 || active.stats.outFrames % 25 === 0) {
                                 console.log('[CALL AI AUDIO] AI audio fed to WhatsApp', {
                                     callId, frames: active.stats.outFrames, samples: active.stats.outSamples,
-                                    lastFrameSamples: pcm16k.length, sourceSamples: pcm24k.length
+                                    lastFrameSamples: pcm16k.length, sourceSamples: pcm24k.length,
+                                    acceptedSamples
                                 });
                             }
                         } catch (error) {
