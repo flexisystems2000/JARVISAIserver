@@ -36,6 +36,33 @@ function resampleFloat32(input, fromRate = 24000, toRate = 16000) {
     return output;
 }
 
+function isEndCallIntent(transcript) {
+    const text = String(transcript || '')
+        .toLowerCase()
+        .replace(/[’]/g, "'")
+        .replace(/[^a-z0-9'\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!text) return false;
+
+    const patterns = [
+        /\b(?:end|finish|hang\s*up|disconnect|terminate|close)\s+(?:the|this|our|my)?\s*(?:whatsapp\s+)?(?:call|phone|line)\b/,
+        /\bhang\s*up\b/,
+        /\b(?:disconnect|end)\s+(?:the\s+)?(?:call\s+)?(?:now|please|for\s+now)\b/,
+        /\b(?:i'm|i am|we're|we are)\s+done\b.{0,35}\b(?:call|talking|bye|goodbye)\b/,
+        /\bthat's\s+all\s+for\s+now\b.{0,25}\b(?:bye|goodbye)\b/
+    ];
+
+    for (const pattern of patterns) {
+        const match = pattern.exec(text);
+        if (!match) continue;
+        const before = text.slice(Math.max(0, match.index - 35), match.index);
+        if (/\b(?:don't|dont|do not|never|not|wait)\b[^.!?]{0,22}$/.test(before)) continue;
+        return true;
+    }
+    return false;
+}
+
 
 function configureCallPlaybackBuffer(voip, callId) {
     const session = voip?.coordinator?.manager?.calls?.get?.(callId);
@@ -289,6 +316,24 @@ async function attachGeminiCallAssistant(sock) {
                         } catch (error) {
                             console.error('[CALL AI] Could not play AI Link audio into WhatsApp:', error.message);
                         }
+                    } else if (message.type === 'caller_transcript' && message.text) {
+                        console.log('[CALL AI] Caller speech transcribed', { callId, characters: message.text.length });
+                        if (!active.endingCall && isEndCallIntent(message.text)) {
+                            active.endingCall = true;
+                            console.log('[CALL AI] Caller requested call termination; hanging up WhatsApp call.', {
+                                callId,
+                                intent: 'END_CALL'
+                            });
+                            (async () => {
+                                try {
+                                    await voip.hangup(callId);
+                                    cleanupCall(callId, 'caller requested end-call');
+                                } catch (error) {
+                                    active.endingCall = false;
+                                    console.error('[CALL AI] Could not end call on caller request:', error.message);
+                                }
+                            })();
+                        }
                     } else if (message.type === 'transcript' && message.text) {
                         console.log('[CALL AI AUDIO] Gemini response transcript received', { callId, characters: message.text.length });
                     } else if (message.type === 'turn_complete') {
@@ -303,8 +348,10 @@ async function attachGeminiCallAssistant(sock) {
                 });
                 gateway.on('close', (code, reason) => {
                     console.warn('[CALL AI] AI Link WebSocket closed:', code, String(reason || ''));
-                    if (activeCalls.get(callId)?.gateway === gateway) cleanupCall(callId, 'AI Link disconnected');
-                    try { voip.hangup(callId); } catch {}
+                    if (activeCalls.get(callId)?.gateway === gateway) {
+                        cleanupCall(callId, 'AI Link disconnected');
+                        try { voip.hangup(callId); } catch {}
+                    }
                 });
                 gateway.on('error', error => console.error('[CALL AI] AI Link WebSocket error:', error.message));
 
