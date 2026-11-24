@@ -97,6 +97,8 @@ Security checks are intended only for repositories and systems the operator owns
 | `AI_API_URL` | Base URL of the authenticated Flexieduconsult AI Link |
 | `AI_API_KEY` | Shared secret matching `JARVIS_API_KEY` on the AI Link |
 | `AI_TIMEOUT_MS` | AI gateway request timeout in milliseconds |
+| `GEMINI_API_KEY` | Gemini Developer API key for optional Gemini Live WhatsApp calls |
+| `GEMINI_LIVE_MODEL` | Optional Gemini Live model name; defaults to the configured preview model |
 | `PIPER_API_KEY` | Shared secret for Piper TTS and the Python document/file routes |
 | `PIPER_DOCUMENT_API_URL` | Base URL exposing `/pdf/*` and `/files/generate` |
 | `PIPER_DOCUMENT_TIMEOUT_MS` | Python document API timeout in milliseconds |
@@ -152,9 +154,17 @@ JARVIS runs the weekly ALOC-based native Channel quiz automatically when the Wha
 
 Weekday questions are published every 4 minutes and explanations every 5 minutes. Saturday questions and explanations are published every 3 minutes. After each subject's question phase, JARVIS announces that it is preparing the answers, asks the configured AI gateway for explanations one question at a time, and posts each answer as a reply to its original Channel poll. Progress and message keys are persisted in MongoDB collection `jarvis_channel_quiz_schedule` so an interrupted run can resume. No new environment variable is required. The existing manual `!channelquiz <subject>` command is retained; `!channelquiz off` stops that manually started sequence, not the autonomous timetable. The group quiz's 30-second timer is unchanged.
 
-## Incoming WhatsApp call detection (Baileys)
+## Gemini Live WhatsApp calls (same Baileys account)
 
-The existing Baileys connection now listens for incoming call events and sends a call alert to the configured `OWNER_NUMBER`. This is **detection and notification only**: it does not answer, reject, record, or stream call audio. The installed Baileys integration has not been verified to expose a supported call-answer and live-media transport API, so Gemini Live conversations over calls are not enabled by this change.
+JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses `@hiroosy/baileys-lite` VoIP support against the socket already created by the existing `@itsliaaa/baileys` connection; it does not create a second WhatsApp account or write a second authentication session.
 
-Existing WhatsApp messaging, pairing, reminders, quizzes, moderation and AI gateway behavior are otherwise unchanged. A true live AI call experience would require a supported WhatsApp calling/media transport; it cannot be inferred from receiving a Baileys call event.
+Set `GEMINI_API_KEY` in the hosting environment to enable automatic answering. Optionally set `GEMINI_LIVE_MODEL`; the default is `gemini-2.5-flash-native-audio-preview-12-2025`. The feature uses Google's `@google/genai` Live API SDK. Gemini credentials are not sent to WhatsApp or written to the repository.
+
+Requirements and limitations:
+- The call adapter relies on Baileys internal socket methods. Compatibility with the installed `@itsliaaa/baileys` fork must be verified in a real staging call; if setup fails, the normal JARVIS bot continues running and logs the reason.
+- The hosting runtime must support the package's Node.js requirements and WhatsApp call media networking. FFmpeg/ffprobe are documented requirements for the package's media features.
+- The bridge converts WhatsApp 16 kHz Float32 audio to Gemini 16 kHz PCM16, then converts Gemini 24 kHz PCM16 responses back to 16 kHz Float32 for WhatsApp.
+- One concurrent AI call is allowed. Additional incoming calls are rejected while JARVIS is busy.
+- This is an experimental unofficial WhatsApp Web calling integration. It is not an official WhatsApp Business Calling API integration, and successful deployment is not proof of live call compatibility. Test with a non-critical account/session first.
+- If `GEMINI_API_KEY` is absent, JARVIS retains the previous incoming-call detection and owner-alert behavior only.
 
