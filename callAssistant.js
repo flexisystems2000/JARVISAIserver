@@ -36,6 +36,32 @@ function resampleFloat32(input, fromRate = 24000, toRate = 16000) {
     return output;
 }
 
+
+function configureCallPlaybackBuffer(voip, callId) {
+    // Baileys-Lite currently uses a 60 ms prebuffer and drops queued audio
+    // above 200 ms. Gemini Live can deliver audio in bursts, so give the
+    // WhatsApp playback engine more room to absorb normal network jitter.
+    const session = voip?.coordinator?.manager?.calls?.get?.(callId);
+    const engine = session?.audioEngine;
+    if (!engine || !Number.isFinite(engine.sampleRate)) {
+        console.warn('[CALL AI AUDIO] Could not tune playback buffer; Baileys-Lite audio engine was not accessible.');
+        return false;
+    }
+
+    engine.extPreBufferSize = Math.floor(engine.sampleRate * 0.18);
+    engine.extTargetBuffer = Math.floor(engine.sampleRate * 0.24);
+    engine.extHighWater = Math.floor(engine.sampleRate * 0.8);
+
+    console.log('[CALL AI AUDIO] Playback jitter buffer configured', {
+        callId,
+        prebufferMs: Math.round(engine.extPreBufferSize / engine.sampleRate * 1000),
+        targetBufferMs: Math.round(engine.extTargetBuffer / engine.sampleRate * 1000),
+        highWaterMs: Math.round(engine.extHighWater / engine.sampleRate * 1000),
+        maxBufferMs: Math.round(engine.extMaxBuffer / engine.sampleRate * 1000)
+    });
+    return true;
+}
+
 function getVoiceUrl() {
     const configured = String(process.env.AI_VOICE_URL || '').trim();
     if (configured) return configured.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:').replace(/\/$/, '');
@@ -193,6 +219,7 @@ async function attachGeminiCallAssistant(sock) {
                 gateway.on('error', error => console.error('[CALL AI] AI Link WebSocket error:', error.message));
 
                 await voip.acceptCall(callId);
+                configureCallPlaybackBuffer(voip, callId);
                 voip.coordinator.setExternalAudioMode(callId, true);
                 console.log(`[CALL AI] AI Link voice gateway connected; answering call ${callId}.`);
                 console.log('[CALL AI AUDIO] Audio diagnostics initialized', { callId, externalAudioMode: 'enabled' });
