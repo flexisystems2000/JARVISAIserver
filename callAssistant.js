@@ -38,28 +38,117 @@ function resampleFloat32(input, fromRate = 24000, toRate = 16000) {
 
 
 function configureCallPlaybackBuffer(voip, callId) {
-    // Baileys-Lite currently uses a 60 ms prebuffer and drops queued audio
-    // above 200 ms. Gemini Live can deliver audio in bursts, so give the
-    // WhatsApp playback engine more room to absorb normal network jitter.
     const session = voip?.coordinator?.manager?.calls?.get?.(callId);
     const engine = session?.audioEngine;
     if (!engine || !Number.isFinite(engine.sampleRate)) {
         console.warn('[CALL AI AUDIO] Could not tune playback buffer; Baileys-Lite audio engine was not accessible.');
-        return false;
+        return null;
     }
 
-    engine.extPreBufferSize = Math.floor(engine.sampleRate * 0.18);
-    engine.extTargetBuffer = Math.floor(engine.sampleRate * 0.24);
-    engine.extHighWater = Math.floor(engine.sampleRate * 0.8);
+    // Keep Baileys-Lite's own buffer below its one-second capacity. The
+    // FIFO worker below feeds it gradually, so its high-water skip should
+    // never be reached during normal playback.
+    engine.extPreBufferSize = Math.floor(engine.sampleRate * 0.12);
+    engine.extTargetBuffer = Math.floor(engine.sampleRate * 0.18);
+    engine.extHighWater = Math.floor(engine.sampleRate * 0.9);
 
-    console.log('[CALL AI AUDIO] Playback jitter buffer configured', {
+    console.log('[CALL AI AUDIO] Playback buffer configured', {
         callId,
         prebufferMs: Math.round(engine.extPreBufferSize / engine.sampleRate * 1000),
         targetBufferMs: Math.round(engine.extTargetBuffer / engine.sampleRate * 1000),
         highWaterMs: Math.round(engine.extHighWater / engine.sampleRate * 1000),
         maxBufferMs: Math.round(engine.extMaxBuffer / engine.sampleRate * 1000)
     });
-    return true;
+    return engine;
+}
+
+function createAudioQueue(voip, callId, active) {
+    const sampleRate = 16000;
+    const frameSamples = Math.floor(sampleRate * 0.02); // 20 ms delivery frames
+    const targetBufferMs = 180;
+    const maxQueuedSamples = sampleRate * 20; // 20 seconds of queued speech
+    active.audioQueue = [];
+    active.audioQueueOffset = 0;
+    active.queuedSamples = 0;
+    active.queueStats = { peakQueuedMs: 0, fedSamples: 0, feedErrors: 0 };
+
+    const pump = () => {
+        if (activeCalls.get(callId) !== active) return;
+        try {
+            let bufferedMs = voip.coordinator.getLiveBufferMs(callId);
+            while (active.queuedSamples > 0 && bufferedMs < targetBufferMs) {
+                const head = active.audioQueue[0];
+                if (!head) break;
+
+                const roomSamples = Math.max(0, Math.floor((targetBufferMs - bufferedMs) * sampleRate / 1000));
+                if (!roomSamples) break;
+
+                const remaining = head.length - active.audioQueueOffset;
+                const take = Math.min(frameSamples, remaining, roomSamples);
+                if (take <= 0) {
+                    active.audioQueue.shift();
+                    active.audioQueueOffset = 0;
+                    continue;
+                }
+
+                const frame = head.subarray(active.audioQueueOffset, active.audioQueueOffset + take);
+                voip.coordinator.feedLiveAudio(callId, frame);
+                active.audioQueueOffset += take;
+                active.queuedSamples -= take;
+                active.queueStats.fedSamples += take;
+
+                if (active.audioQueueOffset >= head.length) {
+                    active.audioQueue.shift();
+                    active.audioQueueOffset = 0;
+                }
+                bufferedMs = voip.coordinator.getLiveBufferMs(callId);
+            }
+        } catch (error) {
+            active.queueStats.feedErrors++;
+            if (active.queueStats.feedErrors === 1 || active.queueStats.feedErrors % 10 === 0) {
+                console.error('[CALL AI AUDIO] Playback queue feed failed', {
+                    callId, errors: active.queueStats.feedErrors, message: error.message
+                });
+            }
+        }
+    };
+
+    const timer = setInterval(pump, 20);
+    active.stopAudioQueue = () => {
+        clearInterval(timer);
+        active.audioQueue = [];
+        active.queuedSamples = 0;
+        active.audioQueueOffset = 0;
+    };
+
+    active.enqueueAudio = samples => {
+        if (!samples?.length || activeCalls.get(callId) !== active) return;
+        if (active.queuedSamples + samples.length > maxQueuedSamples) {
+            console.error('[CALL AI AUDIO] Playback queue reached its 20-second safety limit; ending this voice stream to prevent memory growth.', {
+                callId,
+                queuedMs: Math.round(active.queuedSamples / sampleRate * 1000)
+            });
+            try { active.gateway.close(1011, 'Audio playback queue overloaded'); } catch {}
+            return;
+        }
+        active.audioQueue.push(samples);
+        active.queuedSamples += samples.length;
+        const queuedMs = Math.round(active.queuedSamples / sampleRate * 1000);
+        active.queueStats.peakQueuedMs = Math.max(active.queueStats.peakQueuedMs, queuedMs);
+        if (active.queueStats.fedSamples === 0 || active.queueStats.fedSamples % (sampleRate * 2) < frameSamples) {
+            console.log('[CALL AI AUDIO] Playback queue status', {
+                callId,
+                queuedMs,
+                whatsappBufferMs: Math.round(voip.coordinator.getLiveBufferMs(callId)),
+                peakQueuedMs: active.queueStats.peakQueuedMs
+            });
+        }
+        pump();
+    };
+
+    console.log('[CALL AI AUDIO] FIFO playback queue started', {
+        callId, frameMs: 20, targetBufferMs, maxQueueMs: 20000
+    });
 }
 
 function getVoiceUrl() {
@@ -129,6 +218,7 @@ async function attachGeminiCallAssistant(sock) {
             const active = activeCalls.get(callId);
             if (!active) return;
             activeCalls.delete(callId);
+            try { active.stopAudioQueue?.(); } catch {}
             try { active.gateway.close(1000, 'WhatsApp call ended'); } catch {}
             console.log(`[CALL AI] Call ${callId} closed (${reason}).`);
         };
@@ -186,14 +276,14 @@ async function attachGeminiCallAssistant(sock) {
                         try {
                             const pcm24k = pcm16Base64ToFloat32(message.data);
                             const pcm16k = resampleFloat32(pcm24k, 24000, 16000);
-                            const acceptedSamples = voip.coordinator.feedLiveAudio(callId, pcm16k);
+                            active.enqueueAudio(pcm16k);
                             active.stats.outFrames++;
                             active.stats.outSamples += pcm16k.length;
                             if (active.stats.outFrames === 1 || active.stats.outFrames % 25 === 0) {
-                                console.log('[CALL AI AUDIO] AI audio fed to WhatsApp', {
+                                console.log('[CALL AI AUDIO] Gemini audio queued', {
                                     callId, frames: active.stats.outFrames, samples: active.stats.outSamples,
                                     lastFrameSamples: pcm16k.length, sourceSamples: pcm24k.length,
-                                    acceptedSamples
+                                    queuedMs: Math.round(active.queuedSamples / 16)
                                 });
                             }
                         } catch (error) {
@@ -219,8 +309,9 @@ async function attachGeminiCallAssistant(sock) {
                 gateway.on('error', error => console.error('[CALL AI] AI Link WebSocket error:', error.message));
 
                 await voip.acceptCall(callId);
-                configureCallPlaybackBuffer(voip, callId);
+                const playbackEngine = configureCallPlaybackBuffer(voip, callId);
                 voip.coordinator.setExternalAudioMode(callId, true);
+                if (playbackEngine) createAudioQueue(voip, callId, active);
                 console.log(`[CALL AI] AI Link voice gateway connected; answering call ${callId}.`);
                 console.log('[CALL AI AUDIO] Audio diagnostics initialized', { callId, externalAudioMode: 'enabled' });
             } catch (error) {
