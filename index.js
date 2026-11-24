@@ -57,6 +57,7 @@ const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
+const { attachGeminiCallAssistant } = require('./callAssistant');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -2166,31 +2167,25 @@ async function startJARVIS() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Baileys call events are detection-only here. This fork does not expose a
-    // verified call-answer/audio-media API, so JARVIS must never claim to answer
-    // or join a live call through this connection.
+    // Keep the basic call-event alert as a fallback when Gemini Live is not configured.
     const notifiedCallIds = new Map();
     sock.ev.on('call', async (updates) => {
+        if (process.env.GEMINI_API_KEY) return;
         const callUpdates = Array.isArray(updates) ? updates : [updates];
         for (const call of callUpdates) {
             if (!call || !['offer', 'ringing'].includes(String(call.status || '').toLowerCase())) continue;
             const callId = String(call.id || '');
             if (!callId || notifiedCallIds.has(callId)) continue;
             notifiedCallIds.set(callId, Date.now());
-            if (notifiedCallIds.size > 200) {
-                const oldest = notifiedCallIds.keys().next().value;
-                notifiedCallIds.delete(oldest);
-            }
-
+            if (notifiedCallIds.size > 200) notifiedCallIds.delete(notifiedCallIds.keys().next().value);
             const callerJid = String(call.from || call.chatId || '');
             const caller = callerJid.split('@')[0] || 'Unknown caller';
             const callType = call.isVideo ? 'video' : 'voice';
             console.log(`[WHATSAPP CALL] Incoming ${callType} call event detected from ${caller}.`);
-
             if (OWNER_NUMBER) {
                 try {
                     await sock.sendMessage(`${OWNER_NUMBER}@s.whatsapp.net`, {
-                        text: `📞 *JARVIS call alert*\nAn incoming WhatsApp ${callType} call event was detected.\nCaller: ${caller}\n\nThis Baileys connection can detect the event, but it is not configured to answer or stream live call audio. The call has not been answered by JARVIS.`
+                        text: `📞 *JARVIS call alert*\\nAn incoming WhatsApp ${callType} call was detected.\\nCaller: ${caller}\\n\\nLive answering is disabled because GEMINI_API_KEY is not configured.`
                     });
                 } catch (error) {
                     console.warn('[WHATSAPP CALL] Could not send owner alert:', error.message);
@@ -2199,7 +2194,7 @@ async function startJARVIS() {
         }
     });
 
-    sock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
@@ -2212,6 +2207,9 @@ async function startJARVIS() {
         } else if (connection === 'open') {
             whatsappConnectionOpen = true;
             console.log(`✅ ${BOT_NAME} Online & Synced`);
+            if (process.env.GEMINI_API_KEY) {
+                attachGeminiCallAssistant(sock).catch(error => console.error('[CALL AI] Setup failed; normal JARVIS messaging remains active:', error.message));
+            }
             if (channelQuizScheduler && mongoose.connection.readyState === 1) channelQuizScheduler.start();
         }
     });
