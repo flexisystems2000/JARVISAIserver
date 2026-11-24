@@ -1,3 +1,5 @@
+const WebSocket = require('ws');
+
 const attachedSockets = new WeakMap();
 const activeCalls = new Map();
 const pendingCalls = new Set();
@@ -34,46 +36,89 @@ function resampleFloat32(input, fromRate = 24000, toRate = 16000) {
     return output;
 }
 
+function getVoiceUrl() {
+    const configured = String(process.env.AI_VOICE_URL || '').trim();
+    if (configured) return configured.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:').replace(/\/$/, '');
+    const base = String(process.env.AI_API_URL || 'https://flexieduconsult-ai-link-wqnb.onrender.com')
+        .trim().replace(/\/$/, '');
+    return base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:') + '/voice';
+}
+
+function connectVoiceGateway() {
+    const apiKey = String(process.env.AI_API_KEY || '').trim();
+    if (!apiKey) throw new Error('AI_API_KEY is not configured; JARVIS cannot authenticate to AI Link.');
+    const url = getVoiceUrl();
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url, { headers: { 'x-api-key': apiKey }, handshakeTimeout: 20000, maxPayload: 1024 * 1024 });
+        let settled = false;
+        const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { ws.terminate(); } catch {}
+            reject(new Error('Timed out connecting to the AI Link voice gateway.'));
+        }, 25000);
+        ws.on('message', raw => {
+            let message;
+            try { message = JSON.parse(raw.toString()); } catch { return; }
+            if (!settled && message.type === 'ready') {
+                settled = true;
+                clearTimeout(timeout);
+                resolve(ws);
+            } else if (!settled && message.type === 'error') {
+                settled = true;
+                clearTimeout(timeout);
+                try { ws.close(); } catch {}
+                reject(new Error(message.error || 'AI Link voice gateway rejected the session.'));
+            }
+        });
+        ws.once('error', error => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timeout);
+                reject(error);
+            }
+        });
+        ws.once('close', (code, reason) => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timeout);
+                reject(new Error('AI Link voice gateway closed before becoming ready: ' + String(reason || code)));
+            }
+        });
+    });
+}
+
 async function attachGeminiCallAssistant(sock) {
     if (!sock || typeof sock !== 'object') throw new TypeError('A connected WhatsApp socket is required.');
-    if (!process.env.GEMINI_API_KEY) {
-        console.warn('[CALL AI] GEMINI_API_KEY is not configured; live call answering remains disabled.');
-        return null;
-    }
     if (attachedSockets.has(sock)) return attachedSockets.get(sock);
 
     const setupPromise = (async () => {
-        const [{ default: Voip }, { GoogleGenAI }] = await Promise.all([
-            import('@hiroosy/baileys-lite/voip'),
-            import('@google/genai')
+        const [{ default: Voip }] = await Promise.all([
+            import('@hiroosy/baileys-lite/voip')
         ]);
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const model = String(process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-preview-12-2025').trim();
         const voip = new Voip(sock, { maxConcurrentCalls: 1, voipLogLevel: 'warn' });
-
         await voip.listen();
 
         const cleanupCall = (callId, reason = 'ended') => {
             const active = activeCalls.get(callId);
             if (!active) return;
             activeCalls.delete(callId);
-            try { active.session.close(); } catch {}
+            try { active.gateway.close(1000, 'WhatsApp call ended'); } catch {}
             console.log(`[CALL AI] Call ${callId} closed (${reason}).`);
         };
 
         voip.on('call_inbound_audio', ({ call, pcm }) => {
             const callId = call?.callId;
             const active = activeCalls.get(callId);
-            if (!active || !pcm?.length) return;
+            if (!active || !pcm?.length || active.gateway.readyState !== WebSocket.OPEN) return;
             try {
-                active.session.sendRealtimeInput({
-                    audio: {
-                        data: float32ToPcm16Base64(pcm),
-                        mimeType: 'audio/pcm;rate=16000'
-                    }
-                });
+                active.gateway.send(JSON.stringify({
+                    type: 'audio',
+                    data: float32ToPcm16Base64(pcm),
+                    mimeType: 'audio/pcm;rate=16000'
+                }));
             } catch (error) {
-                console.error('[CALL AI] Could not forward caller audio to Gemini:', error.message);
+                console.error('[CALL AI] Could not forward caller audio to AI Link:', error.message);
             }
         });
 
@@ -90,67 +135,52 @@ async function attachGeminiCallAssistant(sock) {
             }
 
             pendingCalls.add(callId);
-            console.log(`[CALL AI] Incoming call from ${call.peerJid || 'unknown caller'}; preparing Gemini Live.`);
-            let session;
+            console.log(`[CALL AI] Incoming call from ${call.peerJid || 'unknown caller'}; connecting to Flexi AI Link voice gateway.`);
+            let gateway;
             try {
-                await voip.acceptCall(callId);
-                voip.coordinator.setExternalAudioMode(callId, true);
+                gateway = await connectVoiceGateway();
+                const active = { gateway, ready: true };
+                activeCalls.set(callId, active);
 
-                session = await ai.live.connect({
-                    model,
-                    config: {
-                        responseModalities: ['AUDIO'],
-                        systemInstruction: {
-                            parts: [{
-                                text: 'You are JARVIS, the voice assistant for Flexi Educational Consult. Speak naturally, warmly, clearly and concisely. Listen carefully, answer the caller directly, and ask one clarification at a time when needed. Do not claim to perform an action unless it has actually been completed. Use Nigerian English naturally when appropriate.'
-                            }]
-                        },
-                        speechConfig: {
-                            voiceConfig: {
-                                prebuiltVoiceConfig: { voiceName: 'Aoede' }
-                            }
-                        },
-                        outputAudioTranscription: {}
-                    },
-                    callbacks: {
-                        onmessage: message => {
-                            const content = message?.serverContent;
-                            if (content?.interrupted) {
-                                try {
-                                    voip.coordinator.setExternalAudioMode(callId, false);
-                                    voip.coordinator.setExternalAudioMode(callId, true);
-                                } catch {}
-                            }
-                            for (const part of content?.modelTurn?.parts || []) {
-                                const audioBase64 = part?.inlineData?.data;
-                                if (!audioBase64) continue;
-                                try {
-                                    const pcm24k = pcm16Base64ToFloat32(audioBase64);
-                                    voip.coordinator.feedLiveAudio(callId, resampleFloat32(pcm24k, 24000, 16000));
-                                } catch (error) {
-                                    console.error('[CALL AI] Could not play Gemini audio into WhatsApp:', error.message);
-                                }
-                            }
-                            const transcript = content?.outputTranscription?.text;
-                            if (transcript) console.log('[CALL AI] JARVIS:', transcript);
-                        },
-                        onerror: error => console.error('[CALL AI] Gemini Live error:', error?.message || error),
-                        onclose: event => console.log('[CALL AI] Gemini Live connection closed:', event?.reason || 'no reason supplied')
+                gateway.on('message', raw => {
+                    let message;
+                    try { message = JSON.parse(raw.toString()); } catch { return; }
+                    if (message.type === 'audio' && typeof message.data === 'string') {
+                        try {
+                            const pcm24k = pcm16Base64ToFloat32(message.data);
+                            voip.coordinator.feedLiveAudio(callId, resampleFloat32(pcm24k, 24000, 16000));
+                        } catch (error) {
+                            console.error('[CALL AI] Could not play AI Link audio into WhatsApp:', error.message);
+                        }
+                    } else if (message.type === 'transcript' && message.text) {
+                        console.log('[CALL AI] JARVIS:', message.text);
+                    } else if (message.type === 'error') {
+                        console.error('[CALL AI] AI Link voice error:', message.code || '', message.error || '');
+                    } else if (message.type === 'closed') {
+                        console.warn('[CALL AI] AI Link voice session closed:', message.reason || '');
                     }
                 });
+                gateway.on('close', (code, reason) => {
+                    console.warn('[CALL AI] AI Link WebSocket closed:', code, String(reason || ''));
+                    if (activeCalls.get(callId)?.gateway === gateway) cleanupCall(callId, 'AI Link disconnected');
+                    try { voip.hangup(callId); } catch {}
+                });
+                gateway.on('error', error => console.error('[CALL AI] AI Link WebSocket error:', error.message));
 
-                activeCalls.set(callId, { session, model });
-                console.log(`[CALL AI] Gemini Live connected for call ${callId} using ${model}.`);
+                await voip.acceptCall(callId);
+                voip.coordinator.setExternalAudioMode(callId, true);
+                console.log(`[CALL AI] AI Link voice gateway connected; answering call ${callId}.`);
             } catch (error) {
-                console.error('[CALL AI] Could not start the live assistant:', error.message);
-                try { session?.close(); } catch {}
+                console.error('[CALL AI] Could not start AI Link voice session:', error.message);
+                try { gateway?.close(); } catch {}
+                activeCalls.delete(callId);
                 try { await voip.hangup(callId); } catch {}
             } finally {
                 pendingCalls.delete(callId);
             }
         });
 
-        console.log('[CALL AI] Baileys-Lite call media listener is ready on the existing WhatsApp socket.');
+        console.log('[CALL AI] Baileys-Lite call media listener is ready; Gemini Live is routed through Flexi AI Link.');
         return voip;
     })();
 
