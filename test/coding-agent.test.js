@@ -34,3 +34,36 @@ test('coding agent requires approval and returns the verified Vercel URL', async
   assert.equal(result.deploymentVerified, true);
   assert.equal(saved.deploymentUrl, result.liveUrl);
 });
+
+test('generic project validation accepts Python projects without index.html', () => {
+  const files = validateProjectFiles([
+    { path: 'main.py', content: 'print("hello")' },
+    { path: 'requirements.txt', content: 'requests==2.32.0' },
+    { path: '.env.example', content: 'API_KEY=replace_me' },
+    { path: 'README.md', content: '# Example' }
+  ], { requireIndexHtml: false });
+  assert.equal(files.length, 4);
+  assert.throws(() => validateProjectFiles([{ path: 'main.py', content: 'print(1)' }]), /index.html/);
+});
+
+test('coding agent creates and stores a multi-file non-website project', async () => {
+  let saved = null;
+  const coding = new CodingAgent({
+    vercel: { deployFiles: async () => { throw new Error('must not deploy'); } },
+    askModel: async prompt => {
+      assert.match(prompt, /full-stack web app/);
+      assert.doesNotMatch(prompt, /STATIC website only/);
+      return JSON.stringify({ name: 'python-tool', description: 'Python utility', projectType: 'python-cli', files: [
+        { path: 'main.py', content: 'print("hello")' },
+        { path: 'requirements.txt', content: '' },
+        { path: 'README.md', content: '# Python utility' }
+      ] });
+    },
+    projectManager: { save: async record => { saved = record; return '/tmp/project.json'; } }
+  });
+  const result = await coding.createProject({ request: 'Create a Python CLI utility', projectName: 'python-tool' });
+  assert.equal(result.projectType, 'python-cli');
+  assert.equal(result.fileCount, 3);
+  assert.equal(result.projectFiles[0].path, 'main.py');
+  assert.equal(saved.files.length, 3);
+});
