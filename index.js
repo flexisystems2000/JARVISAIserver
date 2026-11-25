@@ -71,6 +71,7 @@ const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName,
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { SupabaseAgent } = require('./agent/supabaseAgent');
+const { unwrapGroupMessage, extractGroupMessageText, formatGroupTranscript, buildConversationAwarePrompt } = require('./agent/groupConversationMemory');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
 const { attachGeminiCallAssistant } = require('./callAssistant');
@@ -171,29 +172,6 @@ GroupMessageSchema.index({ groupJid: 1, createdAt: -1 });
 const GroupMessage = mongoose.models.JarvisGroupMessage ||
     mongoose.model('JarvisGroupMessage', GroupMessageSchema);
 
-function unwrapGroupMessage(message) {
-    let current = message;
-    for (let i = 0; i < 6 && current && typeof current === 'object'; i++) {
-        const key = Object.keys(current).find(name => /^(ephemeralMessage|viewOnceMessage|viewOnceMessageV2|documentWithCaptionMessage|editedMessage)$/.test(name));
-        if (!key) break;
-        current = current[key]?.message || current[key];
-    }
-    return current || {};
-}
-function extractGroupMessageText(message) {
-    const value = unwrapGroupMessage(message);
-    const text = value.conversation ||
-        value.extendedTextMessage?.text ||
-        value.imageMessage?.caption ||
-        value.videoMessage?.caption ||
-        value.documentMessage?.caption ||
-        value.documentMessage?.fileName ||
-        value.buttonsResponseMessage?.selectedDisplayText ||
-        value.listResponseMessage?.title ||
-        value.templateButtonReplyMessage?.selectedDisplayText ||
-        '';
-    return String(text || '').replace(/\\u0000/g, '').trim().slice(0, 6000);
-}
 async function saveGroupMessage(message, groupJid, senderJid) {
     if (!groupJid?.endsWith('@g.us') || !message?.key?.id || !senderJid ||
         message.key.fromMe || mongoose.connection.readyState !== 1) return;
@@ -231,14 +209,9 @@ async function getGroupConversationContext(groupJid, limit = 45, quotedMessageId
         const messages = await GroupMessage.find({ groupJid })
             .sort({ createdAt: -1 }).limit(Math.max(5, Math.min(Number(limit) || 45, 80))).lean();
         const ordered = messages.reverse();
-        let transcript = ordered.map(item =>
-            `[${item.createdAt.toISOString()}] ${item.senderName || item.senderJid}: ${item.content}`
-        ).join('\\n');
-        if (quotedMessageId) {
-            const quoted = await GroupMessage.findOne({ groupJid, messageId: String(quotedMessageId) }).lean();
-            if (quoted) transcript += `\\n\\nEXACT QUOTED MESSAGE (message ID ${quoted.messageId}): ${quoted.senderName || quoted.senderJid}: ${quoted.content}`;
-        }
-        return transcript.slice(-24000);
+        let quoted = null;
+        if (quotedMessageId) quoted = await GroupMessage.findOne({ groupJid, messageId: String(quotedMessageId) }).lean();
+        return formatGroupTranscript(ordered, quoted);
     } catch (error) {
         console.warn('[GROUP-MEMORY] Could not read group context:', error.message);
         return '';
@@ -6041,11 +6014,7 @@ if (isAiCommand) {
         ? await getGroupConversationContext(jid, 45, quotedMessageId)
         : '';
     const quotedText = extractGroupMessageText(quoted);
-    const conversationAwarePrompt = [
-        actualPrompt,
-        quotedText ? `\\n\\nMESSAGE BEING REPLIED TO (quoted by the sender):\\n${quotedText}` : '',
-        groupHistory ? `\\n\\nRECENT SHARED GROUP DISCUSSION (messages from all participants; newest discussion context):\\n${groupHistory}` : ''
-    ].join('');
+    const conversationAwarePrompt = buildConversationAwarePrompt({ message: actualPrompt, quotedMessage: quotedText, groupHistory });
     let aiReply;
     if (base64Image) {
         aiReply = await askAIWithMemory(jid, sender, conversationAwarePrompt, base64Image);
