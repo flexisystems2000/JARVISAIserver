@@ -1,4 +1,4 @@
-// @itsliaaa/baileys is ESM-only. Load it dynamically so this existing
+// @flexisystems/baileys is ESM-only. Load it dynamically so this existing
 // CommonJS application can retain its current architecture.
 let makeWASocket;
 let useMultiFileAuthState;
@@ -17,7 +17,7 @@ const path = require('path');
 
 require('dotenv').config();
 
-const baileysReady = import('@itsliaaa/baileys').then(baileys => {
+const baileysReady = import('@flexisystems/baileys').then(baileys => {
     makeWASocket = baileys.default || baileys.makeWASocket;
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
@@ -36,7 +36,7 @@ const baileysReady = import('@itsliaaa/baileys').then(baileys => {
     };
     const missing = Object.entries(required).filter(([, value]) => value == null).map(([key]) => key);
     if (missing.length) {
-        throw new Error(`@itsliaaa/baileys is missing required exports: ${missing.join(', ')}`);
+        throw new Error(`@flexisystems/baileys is missing required exports: ${missing.join(', ')}`);
     }
     return baileys;
 });
@@ -8886,6 +8886,6 @@ app.listen(port, () => {
        });
        startJARVIS();
    }).catch(error => {
-       console.error('❌ Failed to load @itsliaaa/baileys:', error.message);
+       console.error('❌ Failed to load @flexisystems/baileys:', error.message);
    });
 });
