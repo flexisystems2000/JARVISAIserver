@@ -161,16 +161,18 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
         '                        acked = true;',
         'queue Group Status when sender key is missing'
     );
-    source = replaceOnce(source,
-        '                await upsertMessage(msg, isOfflineNode(node) ? \'append\' : \'notify\');\n            });\n        }\n        catch (error) {',
-        '                await upsertMessage(msg, isOfflineNode(node) ? \'append\' : \'notify\');\n' +
+    const upsertIndent = source.includes("                await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');")
+        ? '                '
+        : '            ';
+    const upsertLine = upsertIndent + "await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');";
+    const upsertAnchor = upsertLine + '\n            });\n        }\n        catch (error) {';
+    const upsertReplacement = upsertLine + '\n' +
         '                processed = true;\n' +
         '                if (node.tag === "status") pendingGroupStatuses.delete(groupStatusRetryKey(node));\n' +
         '            });\n' +
         '            if (processed && node.tag !== "status" && msg.message?.senderKeyDistributionMessage) await retryPendingGroupStatuses();\n' +
-        '        }\n        catch (error) {',
-        'retry queued statuses after a successfully processed message'
-    );
+        '        }\n        catch (error) {';
+    source = replaceOnce(source, upsertAnchor, upsertReplacement, 'retry queued statuses after a successfully processed message');
     return source;
 });
 console.info('[BAILEYS PATCH] Applied Group Status retry and retry-manager cleanup patches');
