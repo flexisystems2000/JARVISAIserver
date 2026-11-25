@@ -183,17 +183,17 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
     );
     source = replaceOnce(source,
         "            const { fullMessage: msg, category, author, decrypt } = decryptMessageNode(node, authState.creds.me.id, authState.creds.me.lid || '', signalRepository, logger);",
-        "            if (node.tag === 'status' && isJidGroup(node?.attrs?.from)) {\\n" +
-        "                const { senderAlt, addressingMode } = extractAddressingContext(node);\\n" +
-        "                ev.emit('group-status', {\\n" +
-        "                    groupJid: node.attrs.from,\\n" +
-        "                    statusId: node.attrs.id || null,\\n" +
-        "                    participant: node.attrs.participant || null,\\n" +
-        "                    participantAlt: senderAlt || null,\\n" +
-        "                    addressingMode: addressingMode || null,\\n" +
-        "                    timestamp: Number(node.attrs.t || 0) || null\\n" +
-        "                });\\n" +
-        "            }\\n" +
+        "            if (node.tag === 'status' && isJidGroup(node?.attrs?.from)) {\n" +
+        "                const { senderAlt, addressingMode } = extractAddressingContext(node);\n" +
+        "                ev.emit('group-status', {\n" +
+        "                    groupJid: node.attrs.from,\n" +
+        "                    statusId: node.attrs.id || null,\n" +
+        "                    participant: node.attrs.participant || null,\n" +
+        "                    participantAlt: senderAlt || null,\n" +
+        "                    addressingMode: addressingMode || null,\n" +
+        "                    timestamp: Number(node.attrs.t || 0) || null\n" +
+        "                });\n" +
+        "            }\n" +
         "            const { fullMessage: msg, category, author, decrypt } = decryptMessageNode(node, authState.creds.me.id, authState.creds.me.lid || '', signalRepository, logger);",
         'metadata-only Group Status event'
     );
