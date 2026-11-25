@@ -2956,16 +2956,29 @@ if (
                     text: `🚫 Final strike reached. Removing user...`
                 });
 
-                const result = await sock.groupParticipantsUpdate(
-    jid,
-    [target],
-    action
-);
+                // The status-notification handler uses groupJid and participant.
+                // The previous code referenced undefined variables (jid, target,
+                // action), so the third-strike removal never reached WhatsApp.
+                const targetJid = String(participant || '').trim();
+                if (!targetJid.includes('@')) {
+                    throw new Error(`Invalid participant JID for third-strike removal: ${targetJid || 'empty'}`);
+                }
 
-console.log(
-    "GROUP ACTION RESULT:",
-    JSON.stringify(result, null, 2)
-);
+                const result = await sock.groupParticipantsUpdate(
+                    groupJid,
+                    [targetJid],
+                    'remove'
+                );
+
+                console.log(
+                    '[ANTI-STATUS] THIRD-STRIKE REMOVAL RESULT:',
+                    JSON.stringify(result, null, 2)
+                );
+
+                await sock.sendMessage(groupJid, {
+                    text: `🚫 @${targetJid.split('@')[0]} has been removed after reaching 3 warnings.`,
+                    mentions: [targetJid]
+                }).catch(error => console.warn('[ANTI-STATUS] Removal notice failed:', error.message));
             }
 
             return;
