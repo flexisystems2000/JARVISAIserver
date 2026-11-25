@@ -1,3 +1,9 @@
+## 3.5.4 — 2026-11-25
+- Corrected anti-status detection to inspect WhatsApp's wrapped group-status mention protocol message (`STATUS_MENTION_MESSAGE`, type 25) instead of relying on a group notification stub that is not the normal payload.
+- Runs status-mention moderation at the start of the incoming-message handler so empty-body system notifications are not bypassed by normal text parsing.
+- Resolves the offender from the group message participant, protocol message key, or legacy stub parameters; logs deletion and removal outcomes.
+- Processes every message in a `messages.upsert` batch rather than only the first message.
+
 ## 3.5.3 — 2026-11-25
 - Made anti-status warning strikes persistent in MongoDB so they survive restarts and redeployments.
 - Scoped warning counts to each group and updated the group warning-reset action to clear only that group's count.
