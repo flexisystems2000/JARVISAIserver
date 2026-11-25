@@ -1,3 +1,7 @@
+## 3.5.2 — 2026-11-25
+- Fixed the anti-status three-warning removal handler: it now passes the actual group JID, offending participant JID and `remove` action to Baileys instead of undefined variables.
+- Added a removal result log and a group notice after the third-strike removal request.
+
 ## 3.5.1 — 2026-11-25
 - Reconnected deterministic link detection to the incoming WhatsApp group-message handler.
 - Link messages from non-admin members are deleted when JARVIS has group-admin permission; current group admins and messages sent by JARVIS are exempt.
