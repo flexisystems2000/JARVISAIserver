@@ -70,6 +70,7 @@ const { CodingAgent } = require('./agent/codingAgent');
 const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
+const { UserPlatformConnections } = require('./agent/userPlatformConnections');
 const { unwrapGroupMessage, extractGroupMessageText, formatGroupTranscript, buildConversationAwarePrompt } = require('./agent/groupConversationMemory');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
@@ -80,6 +81,18 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.get('/auth/platform/callback/:provider', async (req, res) => {
+    const provider = String(req.params.provider || '').toLowerCase();
+    try {
+        if (req.query.error) return res.status(400).send('Authorisation was cancelled or denied. Close this page and start again in WhatsApp.');
+        const result = await userPlatformConnections.callback(provider, req.query.code, req.query.state);
+        return res.status(200).send('JARVIS connection successful. ' + result.provider + ' is connected to the WhatsApp account that started this request. Return to WhatsApp.');
+    } catch (error) {
+        console.error('[PLATFORM OAUTH] Callback failed:', provider, String(error.message || error).slice(0, 240));
+        return res.status(400).send('JARVIS could not complete this connection. Return to WhatsApp and start it again.');
+    }
+});
+
 
 // --- SYSTEM GUARDS ---
 process.on('uncaughtException', (err) => console.log('⚠️ System Error:', err.message));
@@ -585,6 +598,7 @@ agentTools.register({
 const githubAgent = new GitHubAgent();
 const vercelAgent = new VercelAgent();
 const platformAuth = new PlatformAuth();
+const userPlatformConnections = new UserPlatformConnections({ mongoose, baseUrl: process.env.PLATFORM_OAUTH_BASE_URL });
 agentTools.register({
     name: 'image_generate',
     description: 'Generate an image using the existing JARVIS AI Link image endpoint and send it to the current WhatsApp chat.',
@@ -859,10 +873,24 @@ agentTools.register({
 });
 agentTools.register({
     name: 'platform_list_connectors',
-    description: 'List platform connectors supported by this JARVIS deployment. A connector is not considered connected until its provider verifies the credential.',
+    description: 'List this WhatsApp user\'s own OAuth platform connections, isolated by sender identity.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['owner'],
-    handler: async () => ({ available: platformAuth.list(), verified: platformAuth.list().map(name => platformAuth.getVerified(name)).filter(Boolean), credentialPolicy: 'Credentials must be configured in hosting environment variables; never paste passwords, private keys or one-time codes into WhatsApp.' })
+    permissions: ['user'],
+    handler: async (_args, context) => userPlatformConnections.list(context.actor)
+});
+agentTools.register({
+    name: 'platform_connect_start',
+    description: 'Start an official external-platform OAuth consent flow for the current WhatsApp user.',
+    parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['github','supabase','google','vercel'] } }, required: ['platform'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ platform }, context) => userPlatformConnections.begin(platform, context.actor)
+});
+agentTools.register({
+    name: 'platform_disconnect',
+    description: 'Disconnect one of the current WhatsApp user\'s own platform accounts.',
+    parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['github','supabase','google','vercel'] } }, required: ['platform'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ platform }, context) => userPlatformConnections.disconnect(context.actor, platform)
 });
 agentTools.register({
     name: 'platform_verify_admin',
