@@ -177,6 +177,41 @@ const PROVIDERS = {
     }
   }
 
+  ,
+  asana: {
+    label: 'Asana',
+    clientIdEnv: 'ASANA_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'ASANA_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://app.asana.com/-/oauth_authorize',
+    tokenUrl: 'https://app.asana.com/-/oauth_token',
+    userUrl: 'https://app.asana.com/api/1.0/users/me',
+    scopes: ['users:read', 'projects:read', 'projects:write', 'tasks:read', 'tasks:write'],
+    tokenAuth: 'body',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      const user = r.data.data;
+      if (!user?.gid) throw new Error('Asana did not return a verified account identity.');
+      return { id: String(user.gid), username: user.name || null, email: user.email || null };
+    }
+  },
+  atlassian: {
+    label: 'Atlassian',
+    clientIdEnv: 'ATLASSIAN_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'ATLASSIAN_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://auth.atlassian.com/authorize',
+    tokenUrl: 'https://auth.atlassian.com/oauth/token',
+    userUrl: 'https://api.atlassian.com/me',
+    scopes: ['read:me', 'read:jira-user', 'read:jira-work', 'write:jira-work', 'offline_access'],
+    tokenAuth: 'body',
+    extraAuthorize: { audience: 'api.atlassian.com', prompt: 'consent' },
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+      const id = r.data.account_id || r.data.accountId || r.data.sub;
+      if (!id) throw new Error('Atlassian did not return a verified account identity.');
+      return { id: String(id), username: r.data.name || r.data.nickname || null, email: r.data.email || null };
+    }
+  }
+
 };
 
 function b64url(value) { return Buffer.from(value).toString('base64url'); }
