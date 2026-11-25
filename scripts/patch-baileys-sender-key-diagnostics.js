@@ -167,7 +167,7 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
         '                processed = true;\n' +
         '                if (node.tag === "status") pendingGroupStatuses.delete(groupStatusRetryKey(node));\n' +
         '            });\n' +
-        '            if (processed && node.tag !== "status") await retryPendingGroupStatuses();\n' +
+        '            if (processed && node.tag !== "status" && msg.message?.senderKeyDistributionMessage) await retryPendingGroupStatuses();\n' +
         '        }\n        catch (error) {',
         'retry queued statuses after a successfully processed message'
     );
