@@ -685,7 +685,7 @@ agentTools.register({
         if (buffer.subarray(0, 4).toString('hex') !== '504b0304') throw new Error('Project archive service returned an invalid ZIP file.');
         await context.sock.sendMessage(context.chatId, {
             document: buffer, mimetype: 'application/zip', fileName: response.data.filename || filename,
-            caption: '✅ *JARVIS Coding Agent*\\n\\nProject: ' + project.name + '\\nType: ' + project.projectType + '\\nFiles: ' + project.fileCount + '\\n\\nThe project files are packaged in this ZIP. No code was executed or deployed.'
+            caption: '✅ *JARVIS Coding Agent*\n\nProject: ' + project.name + '\nType: ' + project.projectType + '\nFiles: ' + project.fileCount + '\n\nThe project files are packaged in this ZIP. No code was executed or deployed.'
         });
         return { created: true, project: project.name, projectType: project.projectType, fileCount: project.fileCount, filename: response.data.filename || filename };
     }
