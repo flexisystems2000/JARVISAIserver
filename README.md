@@ -132,7 +132,7 @@ The existing project may also require Firebase and other settings used by its pr
 
 The included automated suite covers tool validation, role checks, approval lifecycle, command-template validation, shell-command rejection, platform identity adapter validation, and the poll quiz flow using mocked ALOC/WhatsApp responses. It does not constitute a live WhatsApp, ALOC, Gemini, GitHub, MongoDB, Docker or Render integration test. Those require the operator's own credentials and staging environment.
 
-The group Watchdog remains enabled for configured blocked terms and links. It now uses whole-word matching to avoid substring false positives, and current WhatsApp group admins are excluded from moderation. Group admins are verified from live WhatsApp group metadata rather than relying only on environment variables. Universal OAuth and platform management for every service are not claimed as complete; each platform must be integrated and tested individually.
+The group link Watchdog is connected directly to incoming WhatsApp group messages. It detects HTTP/HTTPS URLs, www links, supported bare domains and WhatsApp group invite links, then deletes messages from non-admin members when JARVIS has group-admin permission. Current group admins and JARVIS's own messages are exempt. Moderation uses live WhatsApp group metadata and does not call Gemini or another AI model. If admin status cannot be verified or JARVIS lacks group-admin permission, it leaves the message in place. Blocked-word moderation is not currently enabled.
 
 See [`INTEGRATION-DEPLOYMENT.md`](INTEGRATION-DEPLOYMENT.md) for the end-to-end AI Link, Piper multi-format file service and Vercel setup.
 
