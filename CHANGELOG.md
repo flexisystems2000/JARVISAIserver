@@ -1,3 +1,9 @@
+## 3.5.1 — 2026-11-25
+- Reconnected deterministic link detection to the incoming WhatsApp group-message handler.
+- Link messages from non-admin members are deleted when JARVIS has group-admin permission; current group admins and messages sent by JARVIS are exempt.
+- If group metadata cannot be verified or JARVIS lacks admin permission, moderation fails safely without deleting the message.
+- Added regression tests for HTTP/HTTPS, www, bare-domain and WhatsApp invite links.
+
 ## 3.5.0 — 2026-11-19
 - Added the autonomous weekly ALOC WhatsApp Channel quiz schedule in `Africa/Lagos` time, including the approved weekday and Saturday subject counts and intervals.
 - Added one-at-a-time Gemini explanations posted as replies to their original native Channel poll messages.
