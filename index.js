@@ -71,6 +71,7 @@ const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName,
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { UserPlatformConnections, PROVIDERS } = require('./agent/userPlatformConnections');
+const { UserApiTokenConnections, TOKEN_PROVIDERS } = require('./agent/userApiTokenConnections');
 const { unwrapGroupMessage, extractGroupMessageText, formatGroupTranscript, buildConversationAwarePrompt } = require('./agent/groupConversationMemory');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
@@ -599,6 +600,7 @@ const githubAgent = new GitHubAgent();
 const vercelAgent = new VercelAgent();
 const platformAuth = new PlatformAuth();
 const userPlatformConnections = new UserPlatformConnections({ mongoose, baseUrl: process.env.PLATFORM_OAUTH_BASE_URL });
+const userApiTokenConnections = new UserApiTokenConnections({ mongoose });
 agentTools.register({
     name: 'image_generate',
     description: 'Generate an image using the existing JARVIS AI Link image endpoint and send it to the current WhatsApp chat.',
@@ -3043,6 +3045,51 @@ if (
     // JARVIS ONLINE STATUS CHECK
     // ==========================================
     const rawMsgCheck = m.message.conversation || m.message.extendedTextMessage?.text || "";
+
+    // API tokens are handled before the AI router. Only accept these commands
+    // in a private DM; never add the submitted secret to prompts, chat memory,
+    // dashboard records, or application logs.
+    const tokenConnectMatch = !jid?.endsWith('@g.us')
+        ? rawMsgCheck.match(/^!connect-token\\s+([a-z0-9_-]{2,40})\\s+([^\\s]+)\\s*$/i)
+        : null;
+    if (tokenConnectMatch) {
+        const provider = tokenConnectMatch[1].toLowerCase();
+        const submittedToken = tokenConnectMatch[2];
+        try {
+            try { await sock.sendMessage(jid, { delete: m.key }); }
+            catch (_) { /* Continue, but never log or echo the token. */ }
+            if (!TOKEN_PROVIDERS[provider]) {
+                await sock.sendMessage(jid, { text: `Unsupported API-token platform. Available: ${Object.keys(TOKEN_PROVIDERS).join(', ')}.` });
+                continue;
+            }
+            const result = await userApiTokenConnections.connect(sender, provider, submittedToken);
+            await sock.sendMessage(jid, { text: `✅ *${result.provider} connected successfully*\\n\\nAccount: ${result.account}\\n\\nYour token was validated and encrypted before it was saved to your WhatsApp account. I did not include it in the AI conversation.` });
+        } catch (error) {
+            await sock.sendMessage(jid, { text: `❌ API-token connection failed. ${String(error.message || 'Please check the platform and token.').slice(0, 350)}\\n\\nThe token was not saved unless validation succeeded.` });
+        }
+        continue;
+    }
+
+    const tokenDisconnectMatch = !jid?.endsWith('@g.us') ? rawMsgCheck.match(/^!disconnect-token\\s+([a-z0-9_-]{2,40})\\s*$/i) : null;
+    if (tokenDisconnectMatch) {
+        try {
+            const result = await userApiTokenConnections.disconnect(sender, tokenDisconnectMatch[1]);
+            await sock.sendMessage(jid, { text: result.disconnected ? `🔌 ${result.provider} has been disconnected from your WhatsApp account.` : `No saved ${result.provider} token connection was found.` });
+        } catch (error) {
+            await sock.sendMessage(jid, { text: `Could not disconnect that platform: ${String(error.message).slice(0, 250)}` });
+        }
+        continue;
+    }
+
+    if (!jid?.endsWith('@g.us') && /^!token-connections\\s*$/i.test(rawMsgCheck.trim())) {
+        try {
+            const rows = await userApiTokenConnections.list(sender);
+            await sock.sendMessage(jid, { text: rows.length ? `🔐 *YOUR API-TOKEN CONNECTIONS*\\n\\n${rows.map(row => `• ${row.provider} — ${row.account}\\n  Validated: ${new Date(row.validatedAt).toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })}`).join('\\n\\n')}\\n\\nDisconnect with !disconnect-token platform` : 'You have no API-token platforms connected yet.' });
+        } catch (_) {
+            await sock.sendMessage(jid, { text: 'I could not retrieve your API-token connections.' });
+        }
+        continue;
+    }
     const msgLower = rawMsgCheck.toLowerCase().trim();
 
     // Operational commands: text commands and common natural-language aliases.
