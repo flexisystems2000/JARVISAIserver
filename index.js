@@ -5451,6 +5451,7 @@ if (command === "!menu" || command === "!help") {
 🔹 !status — Jarvis health/status report
 🔹 !healthgraph — Send health graph
 🔹 !ginfo — Group information
+🔹 !groupstatus [text] — Publish a text status directly to this group (group admins)
 🔹 !listadmins — List group admins
 🔹 !listonline — View recently active members
 🔹 !getjid — Get current chat JID
