@@ -49,3 +49,10 @@ See `.env.example` and `INTEGRATION-DEPLOYMENT.md`. Do not put secrets in source
 - File generation validates JSON, spreadsheet data, PowerPoint slide data, JSONL, SVG/XML and ZIP manifests, with one AI repair attempt when output is malformed.
 - Registered MIME types now cover every advertised file extension.
 - Production deployment remains approval-gated. Direct Vercel file deployment still does not run framework builds; full framework deployment requires a build-capable deployment workflow.
+
+
+## Disposable coding sandbox
+- Added a unique task workspace under `JARVIS_SANDBOX_WORKSPACE` (or `sandbox-workspace/` by default); workspace paths are validated and the workspace is removed after checks.
+- The coding agent runs JavaScript and Python syntax checks in short-lived Docker containers using `--rm`, no network, read-only container root, dropped capabilities, no-new-privileges, PID/memory/CPU limits and bounded logs.
+- Syntax errors trigger one full-project repair attempt. If Docker is not available, output is labelled unverified rather than passed.
+- This is a syntax-check sandbox, not yet a general dependency-install/build environment. Framework build and production deployment remain separate approval-gated workflows.
