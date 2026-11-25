@@ -58,6 +58,7 @@ const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
 const { attachGeminiCallAssistant } = require('./callAssistant');
+const { containsLink } = require('./agent/watchdog');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -2413,6 +2414,39 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
     activityTracker.set(sender, Date.now());
+
+    // LINK WATCHDOG: deterministic moderation; no AI/model call is involved.
+    // Only incoming group messages are checked. Live metadata protects group
+    // admins, and deletion is attempted only when JARVIS is itself an admin.
+    if (jid?.endsWith('@g.us') && !m.key.fromMe && containsLink(earlyBody)) {
+        try {
+            const senderIsGroupAdmin = await isCurrentWhatsAppGroupAdmin(sock, jid, sender);
+            if (!senderIsGroupAdmin) {
+                const metadata = await sock.groupMetadata(jid);
+                const botJids = [sock.user?.id, sock.user?.lid].filter(Boolean);
+                const botParticipant = (metadata.participants || []).find(participant =>
+                    [participant.id, participant.phoneNumber, participant.lid].filter(Boolean)
+                        .some(candidate => botJids.some(botJid => {
+                            try { return areJidsSameUser(candidate, botJid); }
+                            catch (_) { return String(candidate).split('@')[0] === String(botJid).split('@')[0]; }
+                        }))
+                );
+
+                if (!botParticipant?.admin) {
+                    console.warn('[LINK WATCHDOG] Link detected, but JARVIS is not a group admin; cannot delete.');
+                } else {
+                    await sock.sendMessage(jid, { delete: m.key });
+                    console.log(`[LINK WATCHDOG] Deleted a link message from ${sender} in ${jid}`);
+                    await sock.sendMessage(jid, {
+                        text: '🚫 Links are not allowed in this group. Your message was removed.'
+                    }).catch(error => console.warn('[LINK WATCHDOG] Warning message failed:', error.message));
+                    return;
+                }
+            }
+        } catch (error) {
+            console.error('[LINK WATCHDOG] Moderation failed safely:', error.message);
+        }
+    }
 
     const ownerActorNumber = String(sender || '').split('@')[0].replace(/\D/g, '');
     const isConfiguredOwner = !!OWNER_NUMBER && ownerActorNumber === OWNER_NUMBER;
