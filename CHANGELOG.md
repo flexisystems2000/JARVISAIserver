@@ -1,3 +1,8 @@
+## 3.5.3 — 2026-11-25
+- Made anti-status warning strikes persistent in MongoDB so they survive restarts and redeployments.
+- Scoped warning counts to each group and updated the group warning-reset action to clear only that group's count.
+- The existing third-strike handler now uses the persisted count before requesting member removal.
+
 ## 3.5.2 — 2026-11-25
 - Fixed the anti-status three-warning removal handler: it now passes the actual group JID, offending participant JID and `remove` action to Baileys instead of undefined variables.
 - Added a removal result log and a group notice after the third-strike removal request.
