@@ -7,7 +7,7 @@ const { PROVIDERS } = require('../agent/userPlatformConnections');
 test('JARVIS exposes a broad set of user-scoped OAuth providers', () => {
   const expected = [
     'github', 'supabase', 'google', 'vercel', 'gitlab', 'netlify',
-    'discord', 'notion', 'dropbox', 'figma', 'linear'
+    'discord', 'notion', 'dropbox', 'figma', 'linear', 'asana', 'atlassian'
   ];
   for (const provider of expected) {
     assert.ok(PROVIDERS[provider], `missing provider: ${provider}`);
