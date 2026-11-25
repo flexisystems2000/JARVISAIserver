@@ -130,7 +130,7 @@ function validateGeneratedFileContent(raw, format) {
     const seen = new Set();
     for (const item of files) {
       const filePath = String(item?.path || '');
-      if (!filePath || filePath.startsWith('/') || filePath.includes('\\\\') || filePath.split('/').some(part => !part || part === '.' || part === '..') || /[\0?#]/.test(filePath)) throw new Error('ZIP contains an unsafe file path.');
+      if (!filePath || filePath.startsWith('/') || filePath.includes('\\') || filePath.split('/').some(part => !part || part === '.' || part === '..') || /[\0?#]/.test(filePath)) throw new Error('ZIP contains an unsafe file path.');
       if (seen.has(filePath)) throw new Error('ZIP contains a duplicate path: ' + filePath);
       seen.add(filePath);
       if (typeof item.content !== 'string') throw new Error('ZIP file ' + filePath + ' has no text content.');
