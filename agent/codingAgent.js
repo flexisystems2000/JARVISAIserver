@@ -11,10 +11,18 @@ class CodingAgent {
     this.projects = projectManager || new ProjectManager();
     this.deployment = new DeploymentAgent({ vercel });
   }
+  async createProject({ request, projectName }) {
+    const generated = await this.generator.generate({ request, projectName });
+    const files = validateProjectFiles(generated.files, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000, requireIndexHtml: false });
+    const name = String(projectName || generated.name || 'jarvis-project').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-project';
+    const record = { name, description: generated.description, projectType: generated.projectType || 'software', files, fileCount: files.length, createdAt: new Date().toISOString(), status: 'generated' };
+    const savedPath = await this.projects.save(record);
+    return { name, description: generated.description, projectType: record.projectType, files: files.map(file => file.path), fileCount: files.length, savedPath, status: 'generated' };
+  }
   async createAndDeploy({ request, projectName, approved = false }) {
     if (!approved) throw new Error('Explicit approval is required before deploying a production website.');
     const generated = await this.generator.generate({ request, projectName });
-    const files = validateProjectFiles(generated.files, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000 });
+    const files = validateProjectFiles(generated.files, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000, requireIndexHtml: true });
     const name = String(projectName || generated.name || 'jarvis-website').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-website';
     const deployment = await this.deployment.publish({ name, files, approved: true });
     const record = { name, description: generated.description, files: files.map(x => x.path), deploymentUrl: deployment.url, createdAt: new Date().toISOString() };
