@@ -1,0 +1,32 @@
+name: JARVIS agent tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "fileGenerator.js"
+      - "index.js"
+      - "test/**"
+      - "package.json"
+      - ".github/workflows/agent-tests.yml"
+  pull_request:
+    paths:
+      - "agent/**"
+      - "fileGenerator.js"
+      - "index.js"
+      - "test/**"
+      - "package.json"
+      - ".github/workflows/agent-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install --ignore-scripts
+      - run: npm run check
+      - run: npm test
