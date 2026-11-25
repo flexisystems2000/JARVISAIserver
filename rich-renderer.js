@@ -303,9 +303,9 @@ async function sendRichResponse(sock, jid, richResponse, quotedMessage) {
 }
 
 /**
- * Sends a native Itsliaaa table message.
+ * Sends a native Flexi Baileys table message.
  *
- * This deliberately uses Itsliaaa's dedicated table payload,
+ * This deliberately uses Flexi Baileys's dedicated table payload,
  * not a table nested inside richResponse.
  */
 async function sendNativeTable(
@@ -360,8 +360,8 @@ async function sendRichReply(
     return null;
   }
 
-  // Itsliaaa is ESM, while this renderer remains CommonJS.
-  const baileys = await import('@itsliaaa/baileys');
+  // Flexi Baileys is ESM, while this renderer remains CommonJS.
+  const baileys = await import('@flexisystems/baileys');
 
   const results = [];
   let richResponse = [];
@@ -405,7 +405,7 @@ async function sendRichReply(
       if (SUPPORTED_CODE_LANGUAGES.has(language)) {
         if (typeof baileys.tokenizeCode !== 'function') {
           throw new Error(
-            '@itsliaaa/baileys does not expose tokenizeCode().'
+            '@flexisystems/baileys does not expose tokenizeCode().'
           );
         }
 
