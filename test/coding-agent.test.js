@@ -107,3 +107,16 @@ test('coding agent reports unavailable Docker sandbox without falsely claiming t
   assert.equal(result.sandbox.status, 'unavailable');
   assert.equal(result.status, 'generated_unverified');
 });
+
+test('website deployment refuses source that still fails sandbox syntax checks', async () => {
+  let deployed = false;
+  const coding = new CodingAgent({
+    vercel: { deployFiles: async () => { deployed = true; return { url: 'https://example.vercel.app', verified: true, state: 'READY' }; } },
+    askModel: async () => JSON.stringify({ name: 'bad-site', description: 'Broken site', files: [{ path: 'index.html', content: '<h1>Hi</h1>' }, { path: 'app.js', content: 'const = ;' }] }),
+    projectManager: { save: async () => '/tmp/project.json' },
+    workspaceManager: { create: async () => ({ id: 'task', containerPath: '/workspace/task' }), cleanup: async () => {} },
+    sandboxRunner: async () => ({ exitCode: 1, stderr: 'SyntaxError', timedOut: false })
+  });
+  await assert.rejects(() => coding.createAndDeploy({ request: 'Create a static site', projectName: 'bad-site', approved: true }), /No deployment was started/);
+  assert.equal(deployed, false);
+});
