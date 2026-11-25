@@ -893,11 +893,11 @@ agentTools.register({
         const parsedUrl = new URL(started.url);
         if (parsedUrl.protocol !== 'https:') throw new Error('The platform authorisation link must use HTTPS.');
         await context.sock.sendMessage(context.chatId, {
-            text: `🔐 *Connect ${label} to JARVIS*\\n\\nTap the button below to authorise your own ${label} account. JARVIS will only access what you approve.\\n\\nThis connection belongs to your WhatsApp account.`,
+            text: `🔐 *Connect ${label} to JARVIS*\n\nTap the button below to authorise your own ${label} account. JARVIS will only access what you approve.\n\nThis connection belongs to your WhatsApp account.`,
             footer: 'Secure authorisation • You can disconnect later',
             templateButtons: [{
-                text: `Connect ${label}`,
-                url: started.url
+                index: 1,
+                urlButton: { displayText: `Connect ${label}`, url: started.url }
             }]
         }, { skipFlexiBrand: true });
         return { sent: true, platform: label, expiresInMinutes: started.expiresInMinutes || 10 };
@@ -906,7 +906,7 @@ agentTools.register({
 agentTools.register({
     name: 'platform_disconnect',
     description: 'Disconnect one of the current WhatsApp user\'s own platform accounts.',
-    parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['github','supabase','google','vercel'] } }, required: ['platform'], additionalProperties: false },
+    parameters: { type: 'object', properties: { platform: { type: 'string', enum: Object.keys(PROVIDERS) } }, required: ['platform'], additionalProperties: false },
     permissions: ['user'],
     handler: async ({ platform }, context) => userPlatformConnections.disconnect(context.actor, platform)
 });
