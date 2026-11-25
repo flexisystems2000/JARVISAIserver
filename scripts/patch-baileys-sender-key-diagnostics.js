@@ -155,21 +155,21 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
         'message processing success flag'
     );
     source = replaceOnce(source,
-        "                // message failed to decrypt\\n                if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && msg.category !== 'peer') {",
-        "                // Group Status may arrive before the sender-key distribution. Do not emit\\n" +
-        "                // an empty ciphertext placeholder to consumers; retain it and retry once\\n" +
-        "                // the sender-key distribution has been processed.\\n" +
-        "                const groupStatusDecryptError = String(msg.messageStubParameters?.[0] || '');\\n" +
-        "                const retryableGroupStatusDecryptError =\\n" +
-        "                    /No session found to decrypt message|No sender key|missing sender key|Key used already or never filled/i.test(groupStatusDecryptError);\\n" +
-        "                if (node.tag === 'status' && isJidGroup(node?.attrs?.from) &&\\n" +
-        "                    msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && retryableGroupStatusDecryptError) {\\n" +
-        "                    queueGroupStatusRetry(node);\\n" +
-        "                    logger.warn({ groupJid: msg.key?.remoteJid || node.attrs?.from, statusId: msg.key?.id || node.attrs?.id, participant: msg.key?.participant || node.attrs?.participant || null }, 'queued Group Status after sender-key decryption failure');\\n" +
-        "                    acked = true;\\n" +
-        "                    return sendMessageAck(node, NACK_REASONS.ParsingError);\\n" +
-        "                }\\n" +
-        "                // message failed to decrypt\\n" +
+        "                // message failed to decrypt\n                if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && msg.category !== 'peer') {",
+        "                // Group Status may arrive before the sender-key distribution. Do not emit\n" +
+        "                // an empty ciphertext placeholder to consumers; retain it and retry once\n" +
+        "                // the sender-key distribution has been processed.\n" +
+        "                const groupStatusDecryptError = String(msg.messageStubParameters?.[0] || '');\n" +
+        "                const retryableGroupStatusDecryptError =\n" +
+        "                    /No session found to decrypt message|No sender key|missing sender key|Key used already or never filled/i.test(groupStatusDecryptError);\n" +
+        "                if (node.tag === 'status' && isJidGroup(node?.attrs?.from) &&\n" +
+        "                    msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && retryableGroupStatusDecryptError) {\n" +
+        "                    queueGroupStatusRetry(node);\n" +
+        "                    logger.warn({ groupJid: msg.key?.remoteJid || node.attrs?.from, statusId: msg.key?.id || node.attrs?.id, participant: msg.key?.participant || node.attrs?.participant || null }, 'queued Group Status after sender-key decryption failure');\n" +
+        "                    acked = true;\n" +
+        "                    return sendMessageAck(node, NACK_REASONS.ParsingError);\n" +
+        "                }\n" +
+        "                // message failed to decrypt\n" +
         "                if (msg.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT && msg.category !== 'peer') {",
         'queue Group Status when sender-key session is missing'
     );
