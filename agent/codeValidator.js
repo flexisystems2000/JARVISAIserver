@@ -6,7 +6,7 @@ const SECRET_PATTERNS = [
   /\bAIza[0-9A-Za-z_-]{30,}\b/,
   /(?:api[_-]?key|client[_-]?secret|password|access[_-]?token)\s*[:=]\s*["'][^"'\s]{12,}["']/i
 ];
-const BLOCKED_FILES = /(^|\/)(?:\.env(?:\..*)?|\.git|id_rsa|id_ed25519|secrets?\.(?:json|ya?ml)|credentials?\.(?:json|ya?ml))$/i;
+const BLOCKED_FILES = /(^|\/)(?:\.env(?:\.(?!example$)[^/]+)?|\.git|id_rsa|id_ed25519|secrets?\.(?:json|ya?ml)|credentials?\.(?:json|ya?ml))$/i;
 
 function validateProjectFiles(files, { maxFiles = 30, maxFileBytes = 50000, maxTotalBytes = 500000, requireIndexHtml = true } = {}) {
   if (!Array.isArray(files) || files.length < 1 || files.length > maxFiles) throw new Error(`Project must contain between 1 and ${maxFiles} files.`);
