@@ -61,13 +61,17 @@ function createAgentBrain({ registry, askModel } = {}) {
       const toolMap = new Map(registry.describe().map(tool => [tool.name, tool]));
       const validateSteps = candidateSteps => {
         const counts = new Map();
+        const signatures = new Set();
         for (const step of candidateSteps) {
           if (!step || typeof step.tool !== 'string' || !toolMap.has(step.tool) || (selectedNames && !selectedNames.includes(step.tool))) throw new Error(`Tool ${step?.tool || '(missing)'} was not discovered or registered.`);
           const count = (counts.get(step.tool) || 0) + 1;
-          if (count > 4) throw new Error(`A tool may appear at most four times in one plan: ${step.tool}`);
+          if (count > 6) throw new Error(`A tool may appear at most six times in one plan: ${step.tool}`);
           counts.set(step.tool, count);
           step.arguments = normalizeToolArguments(step.tool, step.arguments, toolMap.get(step.tool).parameters);
           registry.validateArguments(toolMap.get(step.tool).parameters, step.arguments);
+          const signature = `${step.tool}:${JSON.stringify(step.arguments)}`;
+          if (signatures.has(signature)) throw new Error(`Duplicate command execution is not allowed in one plan: ${step.tool}`);
+          signatures.add(signature);
         }
       };
       try { validateSteps(steps); }
