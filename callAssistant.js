@@ -237,7 +237,7 @@ async function attachGeminiCallAssistant(sock) {
     const setupPromise = (async () => {
         // Use the VoIP engine vendored inside Flexi's Baileys fork.
         // The fork exports this class from its package root as `Voip`.
-        const { Voip } = await import('@itsliaaa/baileys');
+        const { Voip } = await import('@flexisystems/baileys');
         if (typeof Voip !== 'function') {
             throw new Error('The configured Baileys fork does not expose its Voip engine.');
         }
