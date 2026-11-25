@@ -40,3 +40,12 @@ See `.env.example` and `INTEGRATION-DEPLOYMENT.md`. Do not put secrets in source
 - Honoured the explicit WhatsApp owner context in permission checks.
 - Blocked direct Vercel file deployments for projects that require framework builds; static deployments remain supported and Vercel team scoping uses `VERCEL_TEAM_ID`.
 - Kept the existing frontend, WhatsApp architecture, `!ai`, quiz engine and reminder implementation unchanged.
+
+
+## Coding agent and file reliability upgrade
+- The coding-agent prompt now supports full project types (web, full-stack, APIs, scripts, libraries, data projects and file collections) instead of requiring every project to be a static website.
+- Project validation can validate non-website projects while retaining the root `index.html` requirement for static Vercel deployments.
+- `coding_project_create` packages validated multi-file projects into a ZIP for delivery.
+- File generation validates JSON, spreadsheet data, PowerPoint slide data, JSONL, SVG/XML and ZIP manifests, with one AI repair attempt when output is malformed.
+- Registered MIME types now cover every advertised file extension.
+- Production deployment remains approval-gated. Direct Vercel file deployment still does not run framework builds; full framework deployment requires a build-capable deployment workflow.
