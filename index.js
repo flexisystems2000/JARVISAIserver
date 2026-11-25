@@ -714,7 +714,7 @@ agentTools.register({
     name: 'github_list_repositories',
     description: 'List repositories accessible to the configured GitHub token.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['admin'],
+    permissions: ['user'],
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
@@ -740,6 +740,24 @@ agentTools.register({
     handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
 });
 agentTools.register({
+    name: 'github_repository_download',
+    description: 'Download a repository archive from GitHub and send it to the current WhatsApp chat. Public repositories are available to users; private repositories require an administrator.',
+    parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', minLength: 1, maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ owner, repo, branch }, context) => {
+        if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
+        const metadata = await githubAgent.getRepository(owner, repo);
+        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository downloads require an authorised JARVIS administrator.');
+        const archive = await githubAgent.downloadRepositoryArchive(owner, repo, branch || metadata.default_branch);
+        const filename = `${String(repo).replace(/[^A-Za-z0-9_.-]/g, '-')}-${String(archive.branch).replace(/[^A-Za-z0-9_.-]/g, '-')}.tar.gz`;
+        await context.sock.sendMessage(context.chatId, {
+            document: archive.buffer, mimetype: 'application/gzip', fileName: filename,
+            caption: `📦 *GitHub repository downloaded*\\n\\nRepository: ${archive.repository}\\nBranch: ${archive.branch}\\nArchive size: ${archive.size} bytes`
+        });
+        return { downloaded: true, repository: archive.repository, branch: archive.branch, filename, size: archive.size };
+    }
+});
+agentTools.register({
     name: 'website_create_and_deploy',
     description: 'Generate a complete website from a natural-language specification and deploy a supported static website to Vercel, or deploy supplied static files. Production deployment requires explicit approval. Framework projects that need a build are not sent through the static uploader.',
     parameters: { type: 'object', properties: { repo: { type: 'string', maxLength: 100 }, request: { type: 'string', minLength: 10, maxLength: 10000 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 1000000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo'], additionalProperties: false },
@@ -758,7 +776,7 @@ agentTools.register({
     name: 'coding_project_create',
     description: 'Build a complete multi-file software project from a natural-language request (website, full-stack app, API, Python/Node project, script, library, data project or source files), validate it, save a project record and deliver all files as a ZIP archive. Does not deploy or execute untrusted project code.',
     parameters: { type: 'object', properties: { request: { type: 'string', minLength: 10, maxLength: 10000 }, projectName: { type: 'string', maxLength: 80 } }, required: ['request'], additionalProperties: false },
-    permissions: ['admin'],
+    permissions: ['user'],
     handler: async ({ request, projectName }, context) => {
         if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
         const coding = new CodingAgent({ vercel: vercelAgent, askModel: prompt => askAIWithMemory(context.chatId, context.actor, prompt) });
