@@ -1,3 +1,8 @@
+# Unreleased — 2026-11-25
+- Added metadata-only Group Status moderation: JARVIS identifies the group and author from the incoming status stanza before decryption, exempts group admins, and sends the fork's Group Status-specific revoke request for non-admin posts.
+- Reuses the existing persistent group-scoped anti-status warning counter and third-strike removal flow; deduplicates repeated status stanzas by group and status ID.
+- Keeps personal status mentions and the installed Baileys package version unchanged. Live WhatsApp deletion still requires a staging-group confirmation.
+
 ## 3.5.4 — 2026-11-25
 - Corrected anti-status detection to inspect WhatsApp's wrapped group-status mention protocol message (`STATUS_MENTION_MESSAGE`, type 25) instead of relying on a group notification stub that is not the normal payload.
 - Runs status-mention moderation at the start of the incoming-message handler so empty-body system notifications are not bypassed by normal text parsing.
