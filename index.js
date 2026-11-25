@@ -733,17 +733,25 @@ agentTools.register({
 });
 agentTools.register({
     name: 'github_inspect_tree',
-    description: 'List paths in a GitHub repository tree.',
+    description: 'List paths in a public GitHub repository tree. Private repositories require an administrator.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
-    permissions: ['admin'],
-    handler: async args => githubAgent.getTree(args.owner, args.repo, args.branch)
+    permissions: ['user'],
+    handler: async (args, context) => {
+        const metadata = await githubAgent.getRepository(args.owner, args.repo);
+        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository inspection requires an authorised JARVIS administrator.');
+        return githubAgent.getTree(args.owner, args.repo, args.branch);
+    }
 });
 agentTools.register({
     name: 'github_read_file',
-    description: 'Read a file from a GitHub repository.',
+    description: 'Read a file from a public GitHub repository. Private repositories require an administrator.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
-    permissions: ['admin'],
-    handler: async args => githubAgent.readFile(args.owner, args.repo, args.path, args.ref)
+    permissions: ['user'],
+    handler: async (args, context) => {
+        const metadata = await githubAgent.getRepository(args.owner, args.repo);
+        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository file access requires an authorised JARVIS administrator.');
+        return githubAgent.readFile(args.owner, args.repo, args.path, args.ref);
+    }
 });
 agentTools.register({
     name: 'github_repository_download',
