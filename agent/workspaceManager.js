@@ -14,7 +14,7 @@ class WorkspaceManager {
     try {
       for (const file of files) {
         const relative = String(file.path || '');
-        if (!relative || path.isAbsolute(relative) || relative.includes('\\\\') || relative.split('/').some(part => !part || part === '.' || part === '..')) {
+        if (!relative || path.isAbsolute(relative) || relative.includes('\\') || relative.split('/').some(part => !part || part === '.' || part === '..')) {
           throw new Error('Unsafe project path while creating sandbox workspace.');
         }
         const target = path.resolve(hostPath, relative);
