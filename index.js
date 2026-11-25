@@ -2164,7 +2164,7 @@ async function startJARVIS() {
         version,
         auth: state,
         printQRInTerminal: true,
-        logger: pino({ level: 'silent' }),
+        logger: pino({ level: process.env.BAILEYS_LOG_LEVEL || 'silent' }),
         browser: ["Mac OS", "Chrome", "125.0.0"],
         keepAliveIntervalMs: 30000,
         connectTimeoutMs: 60000,
