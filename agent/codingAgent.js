@@ -17,7 +17,7 @@ class CodingAgent {
     const name = String(projectName || generated.name || 'jarvis-project').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-project';
     const record = { name, description: generated.description, projectType: generated.projectType || 'software', files, fileCount: files.length, createdAt: new Date().toISOString(), status: 'generated' };
     const savedPath = await this.projects.save(record);
-    return { name, description: generated.description, projectType: record.projectType, files: files.map(file => file.path), fileCount: files.length, savedPath, status: 'generated' };
+    return { name, description: generated.description, projectType: record.projectType, files: files.map(file => file.path), projectFiles: files, fileCount: files.length, savedPath, status: 'generated' };
   }
   async createAndDeploy({ request, projectName, approved = false }) {
     if (!approved) throw new Error('Explicit approval is required before deploying a production website.');
