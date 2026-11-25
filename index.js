@@ -880,10 +880,29 @@ agentTools.register({
 });
 agentTools.register({
     name: 'platform_connect_start',
-    description: 'Start an official external-platform OAuth consent flow for the current WhatsApp user.',
+    description: 'Send a native WhatsApp URL button labelled Connect {Platform}. Tapping it opens that platform official OAuth consent page and connects the current WhatsApp user account.',
     parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['github','supabase','google','vercel'] } }, required: ['platform'], additionalProperties: false },
     permissions: ['user'],
-    handler: async ({ platform }, context) => userPlatformConnections.begin(platform, context.actor)
+    handler: async ({ platform }, context) => {
+        if (!context.sock || !context.chatId || !context.actor) {
+            throw new Error('WhatsApp sender and chat context are required to create a personal platform connection.');
+        }
+        const started = await userPlatformConnections.begin(platform, context.actor);
+        const labels = { github: 'GitHub', supabase: 'Supabase', google: 'Google / Firebase', vercel: 'Vercel' };
+        const label = labels[String(platform).toLowerCase()];
+        if (!started?.url || !label) throw new Error('The platform did not return a valid authorisation URL.');
+        const parsedUrl = new URL(started.url);
+        if (parsedUrl.protocol !== 'https:') throw new Error('The platform authorisation link must use HTTPS.');
+        await context.sock.sendMessage(context.chatId, {
+            text: `🔐 *Connect ${label} to JARVIS*\\n\\nTap the button below to authorise your own ${label} account. JARVIS will only access what you approve.\\n\\nThis connection belongs to your WhatsApp account.`,
+            footer: 'Secure authorisation • You can disconnect later',
+            templateButtons: [{
+                text: `Connect ${label}`,
+                url: started.url
+            }]
+        }, { skipFlexiBrand: true });
+        return { sent: true, platform: label, expiresInMinutes: started.expiresInMinutes || 10 };
+    }
 });
 agentTools.register({
     name: 'platform_disconnect',
