@@ -6327,7 +6327,7 @@ if (command === "!reset") {
         }, { quoted: m });
     }
 
-    await Warn.deleteOne({ userId: target });
+    await Warn.deleteOne({ userId: `${jid}:${target}` });
 
     // 🌟 USE THE RANDOM RESPONSE BANK HERE 🌟
     const responseText = getRandomResponse(resetResponses, target.split('@')[0]);
