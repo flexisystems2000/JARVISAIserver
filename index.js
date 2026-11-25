@@ -361,7 +361,7 @@ agentTools.register({
     name: 'command_menu', description: 'Show the available JARVIS WhatsApp command menu.',
     parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
     handler: async (_args, context) => {
-        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !channelquiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
+        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !channelquiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !groupstatus · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
         await context.sock.sendMessage(context.chatId, { text: menu });
         return { sent: true };
     }
@@ -4525,7 +4525,7 @@ if (jid.endsWith('@g.us')) {
 
         // Always fetch fresh metadata if cache is older than 5 mins, 
         // OR force an immediate re-fetch if someone attempts an administrative action
-        const isTryingAdminAction = ["!kick", "!ban", "!unban", "!promote", "!mute", "!unmute", "!reset", "!add", "!remove"].includes(command);
+        const isTryingAdminAction = ["!kick", "!ban", "!unban", "!promote", "!mute", "!unmute", "!reset", "!add", "!remove", "!groupstatus"].includes(command);
 
         if (!metadata || Date.now() - (metadata.lastFetch || 0) > 3000 || isTryingAdminAction) {
             metadata = await sock.groupMetadata(jid);
@@ -6188,6 +6188,30 @@ if (command === "!addxxjarvis") {
 if (command === "!getjid") {
     return sendWithTyping(jid, { text: `🎯 This group's JID is:\n\n*${jid}*` }, m);
 }
+// --- DIRECT GROUP STATUS PUBLISHING ---
+if (command === "!groupstatus") {
+    if (!jid.endsWith('@g.us')) {
+        return sock.sendMessage(jid, { text: "❌ Use !groupstatus inside the group where the status should appear." }, { quoted: m });
+    }
+    if (!isStaff) {
+        return sock.sendMessage(jid, { text: "❌ Only a current group admin can publish a group status." }, { quoted: m });
+    }
+    const statusText = args.join(" ").trim();
+    if (!statusText) {
+        return sock.sendMessage(jid, { text: "Usage: !groupstatus [text]\nExample: !groupstatus Welcome to today's meeting." }, { quoted: m });
+    }
+    if (typeof sock.sendGroupStatus !== 'function') {
+        return sock.sendMessage(jid, { text: "❌ Group-status publishing is unavailable. Update JARVIS to @flexisystems/baileys 0.5.9 or later." }, { quoted: m });
+    }
+    try {
+        await sock.sendGroupStatus(jid, { text: statusText });
+        return sock.sendMessage(jid, { text: "✅ Group status published." }, { quoted: m });
+    } catch (error) {
+        console.error("[GROUP STATUS] Publish failed:", error);
+        return sock.sendMessage(jid, { text: `❌ Could not publish group status: ${String(error.message || error).slice(0, 250)}` }, { quoted: m });
+    }
+}
+
 // --- GROUP INFO ---
 if (command === "!ginfo") {
     return sock.sendMessage(jid, {
