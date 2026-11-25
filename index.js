@@ -4032,7 +4032,6 @@ if (hasReaction) {
             key: m.key,
             text: selectedReaction
         }
-    }
     });
 
     return;
