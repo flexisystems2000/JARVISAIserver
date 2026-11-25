@@ -181,7 +181,7 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
             throw new Error('Could not uniquely locate successful message upsert for Group Status diagnostic');
         }
         const lineStart = source.lastIndexOf('\n', upsertIndex) + 1;
-        const indent = source.slice(lineStart, upsertIndex).match(/^\\s*/)?.[0] || '';
+        const indent = source.slice(lineStart, upsertIndex).match(/^\s*/)?.[0] || '';
         const diagnostic = "\n" + indent + "if (node.tag === 'status' && isJidGroup(msg.key?.remoteJid)) {\n" +
             indent + "    logger.info({ groupJid: msg.key.remoteJid, statusId: msg.key.id, participant: msg.key.participant || node.attrs?.participant || null, messageTypes: Object.keys(msg.message || {}) }, 'GROUP_STATUS_DIAGNOSTIC decrypted and emitted messages.upsert');\n" +
             indent + "}\n" + indent;
