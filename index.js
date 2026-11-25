@@ -2403,11 +2403,137 @@ We wish you success ahead from *${groupName}* 🎓`,
         return null;
     }
 
+    function findGroupStatusPayload(root) {
+        const queue = [root];
+        const seen = new Set();
+        const statusKeys = ['groupStatusMessageV2', 'groupStatusMessage'];
+        const wrapperKeys = [
+            'ephemeralMessage',
+            'viewOnceMessage',
+            'viewOnceMessageV2',
+            'viewOnceMessageV2Extension',
+            'documentWithCaptionMessage'
+        ];
+        while (queue.length) {
+            const current = queue.shift();
+            if (!current || typeof current !== 'object' || seen.has(current)) continue;
+            seen.add(current);
+            for (const key of statusKeys) {
+                if (current[key] && typeof current[key] === 'object') return current[key];
+            }
+            for (const key of wrapperKeys) {
+                const wrapper = current[key];
+                if (wrapper && typeof wrapper === 'object') queue.push(wrapper.message || wrapper);
+            }
+            if (current.message && typeof current.message === 'object') queue.push(current.message);
+        }
+        return null;
+    }
+
+    function findGroupStatusAuthor(root) {
+        const queue = [root];
+        const seen = new Set();
+        while (queue.length) {
+            const current = queue.shift();
+            if (!current || typeof current !== 'object' || seen.has(current)) continue;
+            seen.add(current);
+            if (typeof current.participant === 'string' && current.participant.includes('@')) {
+                return current.participant;
+            }
+            const participant = current.contextInfo?.participant || current.contextInfo?.participantAlt;
+            if (typeof participant === 'string' && participant.includes('@')) return participant;
+            for (const value of Object.values(current)) {
+                if (value && typeof value === 'object') queue.push(value);
+            }
+        }
+        return null;
+    }
+
     sock.ev.on('messages.upsert', async ({ messages, type: upsertType }) => {
     for (const m of messages || []) {
     if (!m?.message) continue;
 
     const jid = m.key.remoteJid;
+
+    // Direct group-status posts are separate status stanzas decoded by the
+    // patched Baileys transport as groupStatusMessageV2. Delete the status
+    // itself, then apply the same group-scoped three-strike warning policy.
+    if (jid?.endsWith('@g.us') && !m.key.fromMe) {
+        const groupStatus = findGroupStatusPayload(m.message);
+        if (groupStatus) {
+            const offender = m.key.participant || findGroupStatusAuthor(groupStatus);
+            if (!offender || !String(offender).includes('@')) {
+                console.warn('[ANTI-STATUS] Group status received but its author could not be resolved.', {
+                    groupJid: jid, messageId: m.key.id
+                });
+                continue;
+            }
+
+            try {
+                try {
+                    await sock.sendMessage(jid, {
+                        delete: { ...m.key, isGroupStatus: true }
+                    });
+                    console.log('[ANTI-STATUS] Deleted direct group status', {
+                        groupJid: jid, offender, messageId: m.key.id
+                    });
+                } catch (deleteError) {
+                    console.error('[ANTI-STATUS] Could not delete direct group status:', deleteError.message);
+                }
+
+                if (mongoose.connection.readyState !== 1) {
+                    await sock.sendMessage(jid, {
+                        text: `⚠️ @${offender.split('@')[0]}, your group status was removed, but the warning could not be saved because the warning database is unavailable.`,
+                        mentions: [offender]
+                    }).catch(() => {});
+                    continue;
+                }
+
+                const warningKey = `${jid}:${offender}`;
+                const warningRecord = await Warn.findOneAndUpdate(
+                    { userId: warningKey },
+                    { $inc: { count: 1 } },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                ).lean();
+                const warnCount = Number(warningRecord?.count || 0);
+
+                await sock.sendMessage(jid, {
+                    text: `⚠️ *JARVIS ANTI-STATUS WARNING*\n\n@${offender.split('@')[0]}, posting a status in this group is not allowed.\n\n*Strike: ${warnCount}/3*`,
+                    mentions: [offender]
+                });
+
+                if (warnCount >= 3) {
+                    const botJids = [sock.user?.id, sock.user?.lid].filter(Boolean);
+                    let botIsAdmin = false;
+                    for (const botJid of botJids) {
+                        if (await isCurrentWhatsAppGroupAdmin(sock, jid, botJid)) {
+                            botIsAdmin = true;
+                            break;
+                        }
+                    }
+
+                    if (!botIsAdmin) {
+                        await sock.sendMessage(jid, {
+                            text: '🚫 Third strike recorded, but I cannot remove the member because JARVIS is not a group admin.'
+                        });
+                        console.warn('[ANTI-STATUS] Third strike recorded; removal skipped because bot is not admin.', { groupJid: jid, offender });
+                    } else {
+                        const removalResult = await sock.groupParticipantsUpdate(jid, [offender], 'remove');
+                        console.log('[ANTI-STATUS] Third-strike removal result:', JSON.stringify(removalResult));
+                        await sock.sendMessage(jid, {
+                            text: `🚫 @${offender.split('@')[0]} has been removed after reaching 3 anti-status warnings.`,
+                            mentions: [offender]
+                        });
+                    }
+                }
+            } catch (antiStatusError) {
+                console.error('[ANTI-STATUS] Direct group-status enforcement failed:', antiStatusError.message, {
+                    groupJid: jid, offender, messageId: m.key.id
+                });
+            }
+            continue;
+        }
+    }
 
     // Status mentions arrive as a wrapped protocolMessage (type 25), not as
     // group_mention_notification message stubs. Handle them before normal
