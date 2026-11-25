@@ -38,6 +38,20 @@ const baileysReady = import('@flexisystems/baileys').then(baileys => {
     if (missing.length) {
         throw new Error(`@flexisystems/baileys is missing required exports: ${missing.join(', ')}`);
     }
+
+    // Print the exact installed Baileys version in Render logs so deployments
+    // can be verified instead of relying only on package.json's version range.
+    try {
+        const baileysPackagePath = path.resolve(
+            path.dirname(require.resolve('@flexisystems/baileys')),
+            '../package.json'
+        );
+        const installedBaileysVersion = JSON.parse(fs.readFileSync(baileysPackagePath, 'utf8')).version;
+        console.info(`[BAILEYS] Loaded @flexisystems/baileys v${installedBaileysVersion}`);
+    } catch (versionError) {
+        console.warn('[BAILEYS] Loaded @flexisystems/baileys; could not read installed package version:', versionError.message);
+    }
+
     return baileys;
 });
 
