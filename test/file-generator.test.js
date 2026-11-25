@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { CREATE_FILE_FORMATS, validateCreateFileRequest, inferCreateFileFormat, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt } = require('../fileGenerator');
+const { CREATE_FILE_FORMATS, validateCreateFileRequest, inferCreateFileFormat, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('../fileGenerator');
 
 test('file generator supports document, office, data, code, vector and archive formats', () => {
   for (const format of ['pdf','docx','xlsx','pptx','csv','txt','md','html','json','xml','yaml','yml','css','js','py','php','java','cpp','sql','svg','zip','rtf','ts','tsx','jsx','c','h','cs','go','rs','rb','sh','ps1','bat','toml','ini','conf','properties','tex','mdx','jsonl']) assert.ok(CREATE_FILE_FORMATS[format], `Missing ${format}`);
@@ -38,4 +38,15 @@ test('format-specific prompts request valid machine-readable content', () => {
 test('unsupported filename extensions are rejected', () => {
   assert.throws(() => validateCreateFileRequest('Create a report and save as report.exe'), /Unsupported file format: \.exe/);
   assert.equal(validateCreateFileRequest('Create a report and save as report.pdf'), true);
+});
+
+test('generated files are validated and malformed structured output is rejected', () => {
+  assert.equal(validateGeneratedFileContent('{"ok":true}', 'json').content, '{\n  "ok": true\n}');
+  assert.throws(() => validateGeneratedFileContent('{bad json}', 'json'), /not valid JSON/);
+  assert.throws(() => validateGeneratedFileContent('not json', 'pptx'), /not valid JSON/);
+  assert.throws(() => validateGeneratedFileContent('{"slides":[]}', 'pptx'), /non-empty slides array/);
+  assert.throws(() => validateGeneratedFileContent('{"files":[{"path":"../escape.txt","content":"x"}]}', 'zip'), /unsafe file path/);
+  assert.throws(() => validateGeneratedFileContent('{"files":[{"path":"ok.txt","content":"x"},{"path":"ok.txt","content":"y"}]}', 'zip'), /duplicate path/);
+  assert.equal(validateGeneratedFileContent('{"slides":[{"title":"Intro","bullets":["One"]}]}', 'pptx').files, null);
+  assert.equal(validateGeneratedFileContent('{"files":[{"path":"src/main.py","content":"print(1)"}]}', 'zip').files.length, 1);
 });
