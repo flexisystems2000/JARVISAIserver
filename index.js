@@ -70,6 +70,7 @@ const { CodingAgent } = require('./agent/codingAgent');
 const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
+const { SupabaseAgent } = require('./agent/supabaseAgent');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
 const { attachGeminiCallAssistant } = require('./callAssistant');
@@ -612,6 +613,38 @@ agentTools.register({
 const githubAgent = new GitHubAgent();
 const vercelAgent = new VercelAgent();
 const platformAuth = new PlatformAuth();
+const supabaseAgent = new SupabaseAgent();
+agentTools.register({
+    name: 'supabase_connection_check',
+    description: 'Verify the configured Supabase project connection and list its exposed REST tables. Read-only; administrator access required.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    permissions: ['admin'],
+    handler: async () => supabaseAgent.checkConnection()
+});
+agentTools.register({
+    name: 'supabase_table_read',
+    description: 'Read up to 100 rows from an exposed Supabase table. Read-only; administrator access required.',
+    parameters: { type: 'object', properties: { table: { type: 'string', minLength: 1, maxLength: 63 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['table'], additionalProperties: false },
+    permissions: ['admin'],
+    handler: async ({ table, limit }) => supabaseAgent.readTable(table, limit)
+});
+agentTools.register({
+    name: 'firestore_collection_read',
+    description: 'Read up to 100 documents from a Firestore collection using the configured Firebase Admin connection. Read-only; administrator access required.',
+    parameters: { type: 'object', properties: { collection: { type: 'string', minLength: 1, maxLength: 240 }, limit: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['collection'], additionalProperties: false },
+    permissions: ['admin'],
+    handler: async ({ collection, limit }) => {
+        const segments = String(collection).split('/');
+        if (segments.length % 2 !== 1 || segments.some(segment => !segment || segment === '.' || segment === '..')) throw new Error('Firestore collection path must contain an odd number of safe path segments.');
+        const firebaseAdmin = require('firebase-admin');
+        if (!firebaseAdmin.apps.length) throw new Error('Firebase Admin is not initialised. Configure FIREBASE_SERVICE_ACCOUNT in the hosting environment.');
+        const snapshot = await firebaseAdmin.firestore().collection(collection).limit(Math.max(1, Math.min(Number(limit) || 25, 100))).get();
+        const documents = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+        const encoded = JSON.stringify(documents);
+        if (encoded.length > 180000) throw new Error('The selected Firestore result is too large. Retry with a smaller limit or narrower collection.');
+        return { collection, count: documents.length, documents };
+    }
+});
 agentTools.register({
     name: 'image_generate',
     description: 'Generate an image using the existing JARVIS AI Link image endpoint and send it to the current WhatsApp chat.',
