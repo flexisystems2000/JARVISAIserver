@@ -152,6 +152,98 @@ MemoryMessageSchema.index({ conversationKey: 1, createdAt: -1 });
 const MemoryMessage = mongoose.models.JarvisMemoryMessage ||
     mongoose.model('JarvisMemoryMessage', MemoryMessageSchema);
 
+// Shared, read-only group conversation timeline. Unlike private AI memory, this
+// stores ordinary text messages from all participants so tagged follow-ups can
+// resolve references to discussions that happened between other members.
+const GroupMessageSchema = new mongoose.Schema({
+    groupJid: { type: String, required: true, index: true },
+    messageId: { type: String, required: true },
+    senderJid: { type: String, required: true },
+    senderName: { type: String, default: '' },
+    content: { type: String, required: true, maxlength: 6000 },
+    quotedMessageId: { type: String, default: '' },
+    quotedParticipant: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now, index: true }
+});
+GroupMessageSchema.index({ groupJid: 1, messageId: 1 }, { unique: true });
+GroupMessageSchema.index({ groupJid: 1, createdAt: -1 });
+const GroupMessage = mongoose.models.JarvisGroupMessage ||
+    mongoose.model('JarvisGroupMessage', GroupMessageSchema);
+
+function unwrapGroupMessage(message) {
+    let current = message;
+    for (let i = 0; i < 6 && current && typeof current === 'object'; i++) {
+        const key = Object.keys(current).find(name => /^(ephemeralMessage|viewOnceMessage|viewOnceMessageV2|documentWithCaptionMessage|editedMessage)$/.test(name));
+        if (!key) break;
+        current = current[key]?.message || current[key];
+    }
+    return current || {};
+}
+function extractGroupMessageText(message) {
+    const value = unwrapGroupMessage(message);
+    const text = value.conversation ||
+        value.extendedTextMessage?.text ||
+        value.imageMessage?.caption ||
+        value.videoMessage?.caption ||
+        value.documentMessage?.caption ||
+        value.documentMessage?.fileName ||
+        value.buttonsResponseMessage?.selectedDisplayText ||
+        value.listResponseMessage?.title ||
+        value.templateButtonReplyMessage?.selectedDisplayText ||
+        '';
+    return String(text || '').replace(/\\u0000/g, '').trim().slice(0, 6000);
+}
+async function saveGroupMessage(message, groupJid, senderJid) {
+    if (!groupJid?.endsWith('@g.us') || !message?.key?.id || !senderJid ||
+        message.key.fromMe || mongoose.connection.readyState !== 1) return;
+    const content = extractGroupMessageText(message.message);
+    if (!content) return;
+    const wrapped = unwrapGroupMessage(message.message);
+    const contextInfo = wrapped.extendedTextMessage?.contextInfo ||
+        wrapped.imageMessage?.contextInfo || wrapped.videoMessage?.contextInfo ||
+        wrapped.documentMessage?.contextInfo || {};
+    const timestamp = Number(message.messageTimestamp?.toNumber?.() ?? message.messageTimestamp);
+    const createdAt = Number.isFinite(timestamp) && timestamp > 0
+        ? new Date(timestamp * 1000) : new Date();
+    try {
+        await GroupMessage.updateOne(
+            { groupJid, messageId: String(message.key.id) },
+            { $setOnInsert: {
+                groupJid, messageId: String(message.key.id), senderJid,
+                senderName: String(message.pushName || '').slice(0, 100),
+                content, quotedMessageId: String(contextInfo.stanzaId || ''),
+                quotedParticipant: String(contextInfo.participant || ''), createdAt
+            } },
+            { upsert: true }
+        );
+        // Bound each group's history while retaining a useful discussion window.
+        const stale = await GroupMessage.find({ groupJid })
+            .sort({ createdAt: -1 }).skip(1500).select('_id').lean();
+        if (stale.length) await GroupMessage.deleteMany({ _id: { $in: stale.map(item => item._id) } });
+    } catch (error) {
+        console.warn('[GROUP-MEMORY] Could not save group message:', error.message);
+    }
+}
+async function getGroupConversationContext(groupJid, limit = 45, quotedMessageId = '') {
+    if (!groupJid?.endsWith('@g.us') || mongoose.connection.readyState !== 1) return '';
+    try {
+        const messages = await GroupMessage.find({ groupJid })
+            .sort({ createdAt: -1 }).limit(Math.max(5, Math.min(Number(limit) || 45, 80))).lean();
+        const ordered = messages.reverse();
+        let transcript = ordered.map(item =>
+            `[${item.createdAt.toISOString()}] ${item.senderName || item.senderJid}: ${item.content}`
+        ).join('\\n');
+        if (quotedMessageId) {
+            const quoted = await GroupMessage.findOne({ groupJid, messageId: String(quotedMessageId) }).lean();
+            if (quoted) transcript += `\\n\\nEXACT QUOTED MESSAGE (message ID ${quoted.messageId}): ${quoted.senderName || quoted.senderJid}: ${quoted.content}`;
+        }
+        return transcript.slice(-24000);
+    } catch (error) {
+        console.warn('[GROUP-MEMORY] Could not read group context:', error.message);
+        return '';
+    }
+}
+
 
 // Persistent per-chat voice reply preference. Defaults to text mode.
 const TTSPreferenceSchema = new mongoose.Schema({
@@ -1690,16 +1782,9 @@ const AI_SESSION_IDLE_TIMEOUT = 10 * 60 * 1000;
 const aiSessionActivity = new Map();
 
 async function clearAISession(chatJid) {
-    if (!chatJid) return;
-    try {
-        if (mongoose.connection.readyState === 1) {
-            // Group memory is stored per participant, so clear every participant's
-            // saved turns for this chat when the shared AI session expires.
-            await MemoryMessage.deleteMany({ chatJid: String(chatJid) });
-        }
-    } catch (err) {
-        console.log('⚠️ AI session cleanup error:', err.message);
-    }
+    // Expire only the short-lived activity marker. Conversation records remain
+    // searchable; an idle chat must never erase its own history.
+    if (chatJid) aiSessionActivity.delete(String(chatJid));
 }
 
 // JARVIS response policy. This is prepended to every AI request so the
@@ -1721,7 +1806,9 @@ RESPONSE LENGTH AND STYLE:
 
 UNDERSTANDING:
 - Understand natural language, Nigerian English, Pidgin, informal expressions, abbreviations, typos and differently worded requests.
-- Use the recent conversation to understand references and follow-up questions. Do not ask users to repeat information already provided.
+- Use the recent conversation to understand references and follow-up questions. In WhatsApp groups, use the supplied SHARED GROUP DISCUSSION as the conversation among all participants, even when they were not addressing you. Resolve "it", "that", "the website", "the plan" and similar references from that discussion. Do not ask users to repeat information already provided.
+- If the current message replies to a quoted message, treat the exact quoted message as primary context and combine it with relevant surrounding group discussion. Preserve speaker attribution; never pretend one participant said another participant's words.
+- For engineering requests, inspect the available coding, GitHub, sandbox, database and deployment tools before claiming you cannot build or modify software. Use a multi-step engineering plan when appropriate; inspect existing repositories before proposing a rebuild.
 - Distinguish ordinary questions from requests to perform an action.
 - If a request is ambiguous and the missing detail matters, ask one brief clarification question.
 - Never claim that you executed a command, accessed an account, changed a setting or completed an action unless the available system actually did it.
@@ -1751,7 +1838,7 @@ async function askAIWithMemory(chatJid, userJid, userPrompt, base64Media = null)
 
     if (lastActivity && now - lastActivity >= AI_SESSION_IDLE_TIMEOUT) {
         await clearAISession(sessionKey);
-        console.log(`🧹 [AI SESSION] Cleared inactive session for ${sessionKey}`);
+        console.log(`🕒 [AI SESSION] Expired short-term activity marker for ${sessionKey}; saved history retained.`);
     }
 
     // Refresh activity immediately so concurrent requests extend the session.
@@ -2713,6 +2800,12 @@ We wish you success ahead from *${groupName}* 🎓`,
     }
 
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
+
+    // Persist all ordinary group discussion messages, not only messages directed
+    // at JARVIS. This is the shared context used when a participant later tags it.
+    if (jid?.endsWith('@g.us') && !m.key.fromMe) {
+        await saveGroupMessage(m, jid, sender);
+    }
 
     activityTracker.set(sender, Date.now());
 
@@ -5892,15 +5985,25 @@ if (isAiCommand) {
     }
 
     const actualPrompt = prompt || "Analyze this image clearly.";
+    const quotedMessageId = String(aiContextInfo.stanzaId || '');
+    const groupHistory = jid?.endsWith('@g.us')
+        ? await getGroupConversationContext(jid, 45, quotedMessageId)
+        : '';
+    const quotedText = extractGroupMessageText(quoted);
+    const conversationAwarePrompt = [
+        actualPrompt,
+        quotedText ? `\\n\\nMESSAGE BEING REPLIED TO (quoted by the sender):\\n${quotedText}` : '',
+        groupHistory ? `\\n\\nRECENT SHARED GROUP DISCUSSION (messages from all participants; newest discussion context):\\n${groupHistory}` : ''
+    ].join('');
     let aiReply;
     if (base64Image) {
-        aiReply = await askAIWithMemory(jid, sender, actualPrompt, base64Image);
+        aiReply = await askAIWithMemory(jid, sender, conversationAwarePrompt, base64Image);
     } else {
         try {
             const history = await getConversationContext(jid, sender);
             const result = await jarvisAgent.handle({
-                message: actualPrompt,
-                history,
+                message: conversationAwarePrompt,
+                history: [history, groupHistory ? `SHARED GROUP DISCUSSION:\\n${groupHistory}` : ''].filter(Boolean).join('\\n\\n'),
                 actor: sender,
                 chatId: jid,
                 isGroup: jid.endsWith('@g.us'),
@@ -5910,7 +6013,7 @@ if (isAiCommand) {
                 isOwner: String(sender).split('@')[0].replace(/\D/g, '') === OWNER_NUMBER
             });
             aiReply = result.reply;
-            await saveConversationTurn(jid, sender, actualPrompt, aiReply);
+            await saveConversationTurn(jid, sender, conversationAwarePrompt, aiReply);
         } catch (agentErr) {
             console.error('[AGENT] Request failed:', agentErr.message);
             aiReply = `⚠️ I couldn't complete that request through the Agent: ${String(agentErr.message || 'Agent error').slice(0, 240)}. No action is being reported as completed. Please try again.`;
