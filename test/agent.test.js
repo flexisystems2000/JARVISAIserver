@@ -124,3 +124,24 @@ test('agent returns a clean verified Vercel deployment response instead of raw t
   assert.match(result.reply, /Deployment verified/);
   assert.doesNotMatch(result.reply, /\{"success"/);
 });
+
+test('agent brain supports longer plans and repeated tools for distinct steps', async () => {
+  const registry = createToolRegistry();
+  registry.register({ name: 'step_tool', description: 'record a step', parameters: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'], additionalProperties: false }, handler: async ({ value }) => value });
+  let calls = 0;
+  const brain = createAgentBrain({ registry, askModel: async () => {
+    calls++;
+    if (calls === 1) return JSON.stringify({ action: 'plan', confidence: 0.99, steps: [
+      { tool: 'step_tool', arguments: { value: 'inspect' } },
+      { tool: 'step_tool', arguments: { value: 'edit' } },
+      { tool: 'step_tool', arguments: { value: 'verify' } },
+      { tool: 'step_tool', arguments: { value: 'summarise' } },
+      { tool: 'step_tool', arguments: { value: 'package' } },
+      { tool: 'step_tool', arguments: { value: 'finish' } }
+    ] });
+    return 'Completed six distinct steps.';
+  }});
+  const result = await brain.handle({ message: 'Complete a multi-stage coding task', actor: 'coding-admin' });
+  assert.equal(result.outcomes.length, 6);
+  assert.deepEqual(result.outcomes.map(item => item.outcome.result), ['inspect','edit','verify','summarise','package','finish']);
+});
