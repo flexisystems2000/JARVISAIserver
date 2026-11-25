@@ -72,6 +72,19 @@ The Command Inventor supports `!command list` and `!command create name | descri
 
 The Agent exposes `coding_project_create` to generate multi-file projects, check JavaScript/Python syntax in disposable Docker containers when Docker is available, and deliver the project as a ZIP archive. `website_create_and_deploy` generates a site from a natural-language specification or accepts supplied static files; `github_repository_deploy_to_vercel` imports an authorised GitHub repository's files into a Vercel deployment. Both are approval-gated and return a `.vercel.app` URL only after Vercel reports the deployment READY and the public URL responds successfully. Direct file deployment supports up to 100 files, 1 MB per file and 8 MB total. It does not run framework dependency installation/build steps; framework projects should use a linked Vercel Git integration or Vercel CLI workflow. Configure `VERCEL_TOKEN` and optional `VERCEL_TEAM_ID` in protected hosting environment variables.
 
+## Engineering integrations
+
+The WhatsApp agent can now use shared group-discussion context when answering a tagged request. Ordinary text messages from all participants are stored in a group-scoped timeline (bounded to the latest 1,500 messages per group); quoted-message IDs are resolved against that timeline. Private user/assistant memory remains separate and is no longer erased by the 10-minute activity timeout.
+
+Read-only engineering tools include multi-file project generation, GitHub repository archive downloads (public repositories for regular users; private repositories restricted to administrators), and administrator-only Supabase and Firestore collection reads.
+
+Configure platform credentials only as protected Render environment variables:
+- `GITHUB_TOKEN`: GitHub token with only the repository access JARVIS needs. `GITHUB_ALLOWED_REPOS` can further restrict repository access.
+- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: Supabase project URL and service-role key. The service-role key bypasses Row Level Security; keep it private and grant JARVIS access only to trusted administrators.
+- `FIREBASE_SERVICE_ACCOUNT`: existing Firebase Admin service-account JSON used by this JARVIS deployment.
+
+Supabase and Firestore tools added here are read-only. Database writes, schema changes, production deployments and repository writes remain separate privileged actions and must not be inferred from a successful read.
+
 ## Platform authentication and GitHub
 
 `GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
