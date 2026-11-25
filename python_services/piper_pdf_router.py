@@ -202,11 +202,23 @@ def _make_general_file(payload: GeneralFileRequest, ext: str) -> bytes:
             raise HTTPException(status_code=400, detail="ZIP creation requires a files array")
         output = BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            seen_paths = set()
+            total_bytes = 0
             for item in payload.files:
                 rel = str(item.get("path", ""))
-                if not rel or rel.startswith("/") or ".." in Path(rel).parts or "\\" in rel:
+                value = str(item.get("content", ""))
+                if not rel or rel.startswith("/") or "\\" in rel or "\0" in rel or any(part in {"", ".", ".."} for part in Path(rel).parts):
                     raise HTTPException(status_code=400, detail="ZIP contains an unsafe file path")
-                archive.writestr(rel, str(item.get("content", "")))
+                if rel in seen_paths:
+                    raise HTTPException(status_code=400, detail="ZIP contains a duplicate file path")
+                seen_paths.add(rel)
+                item_bytes = len(value.encode("utf-8"))
+                if item_bytes > 1_000_000:
+                    raise HTTPException(status_code=413, detail="A ZIP member exceeds the 1 MB limit")
+                total_bytes += item_bytes
+                if total_bytes > 8 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="ZIP source files exceed the 8 MB total limit")
+                archive.writestr(rel, value)
         return output.getvalue()
     if ext == "docx":
         from docx import Document
