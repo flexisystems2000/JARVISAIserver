@@ -14,6 +14,18 @@ class GitHubAgent {
   assertAllowedRepository(owner,repo) { const fullName=`${owner || this.owner || ''}/${repo || ''}`.toLowerCase(); const configured=String(process.env.GITHUB_ALLOWED_REPOS || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean); if(configured.length && !configured.includes(fullName)) throw new Error(`Repository ${fullName} is outside GITHUB_ALLOWED_REPOS.`); }
   async listRepositories() { const r=await this.client().get('/user/repos',{params:{per_page:100,sort:'updated'}}); return r.data.map(x=>({full_name:x.full_name,private:x.private,default_branch:x.default_branch,html_url:x.html_url})); }
   async getRepository(owner,repo) { const p=this.repo(owner,repo); this.assertAllowedRepository(p.owner,p.repo); return (await this.client().get(`/repos/${p.owner}/${p.repo}`)).data; }
+  async downloadRepositoryArchive(owner, repo, ref) {
+    const info = await this.getRepository(owner, repo);
+    const branch = ref || info.default_branch;
+    if (typeof branch !== 'string' || !/^[A-Za-z0-9._/-]{1,200}$/.test(branch) || branch.includes('..')) throw new Error('Invalid GitHub branch or tag.');
+    const response = await this.client().get(`/repos/${info.owner.login}/${info.name}/tarball/${encodeURIComponent(branch)}`, {
+      responseType: 'arraybuffer', maxContentLength: 25 * 1024 * 1024, maxBodyLength: 25 * 1024 * 1024,
+      headers: { Accept: 'application/vnd.github+json' }
+    });
+    const buffer = Buffer.from(response.data);
+    if (buffer.length < 2 || buffer[0] !== 0x1f || buffer[1] !== 0x8b) throw new Error('GitHub did not return a valid gzip repository archive.');
+    return { buffer, repository: info.full_name, branch, size: buffer.length, private: !!info.private };
+  }
   async assertRepositoryPermission(owner,repo,required='push') { const info=await this.getRepository(owner,repo); const granted=info.permissions || {}; if (required==='admin' ? granted.admin !== true : !(granted.push === true || granted.admin === true)) throw new Error(`The configured GitHub account (${info.full_name}) does not have ${required} permission on this repository.`); return info; }
   async getTree(owner,repo,branch) { const c=this.client(), p=this.repo(owner,repo); this.assertAllowedRepository(p.owner,p.repo); const ref=branch|| (await c.get(`/repos/${p.owner}/${p.repo}`)).data.default_branch; const r=await c.get(`/repos/${p.owner}/${p.repo}/git/trees/${encodeURIComponent(ref)}`,{params:{recursive:1}}); return r.data.tree.map(x=>({path:x.path,type:x.type,size:x.size})); }
   async readFile(owner,repo,filePath,ref) { const c=this.client(),p=this.repo(owner,repo); this.assertAllowedRepository(p.owner,p.repo); const safePath=this.safePath(filePath); const r=await c.get(`/repos/${p.owner}/${p.repo}/contents/${safePath}`,{params:ref?{ref}:undefined}); if(r.data.encoding!=='base64') throw new Error('Unsupported GitHub content encoding'); return Buffer.from(r.data.content,'base64').toString('utf8'); }
