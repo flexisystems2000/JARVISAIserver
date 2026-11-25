@@ -67,3 +67,43 @@ test('coding agent creates and stores a multi-file non-website project', async (
   assert.equal(result.projectFiles[0].path, 'main.py');
   assert.equal(saved.files.length, 3);
 });
+
+test('coding agent checks project source in a disposable task workspace and cleans it', async () => {
+  let cleaned = false;
+  const workspaceManager = {
+    create: async () => ({ id: 'task123', containerPath: '/workspace/task123' }),
+    cleanup: async () => { cleaned = true; }
+  };
+  const coding = new CodingAgent({
+    vercel: { deployFiles: async () => { throw new Error('must not deploy'); } },
+    askModel: async () => JSON.stringify({ name: 'node-tool', description: 'Node utility', projectType: 'node-cli', files: [
+      { path: 'main.js', content: 'console.log("ok")' },
+      { path: 'README.md', content: '# Node tool' }
+    ] }),
+    projectManager: { save: async () => '/tmp/project.json' },
+    workspaceManager,
+    sandboxRunner: async (command, options) => {
+      assert.equal(command, 'node --check "main.js"');
+      assert.equal(options.cwd, '/workspace/task123');
+      assert.equal(options.image, 'node:20-alpine');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }
+  });
+  const result = await coding.createProject({ request: 'Create a Node.js command-line utility', projectName: 'node-tool' });
+  assert.equal(result.sandbox.status, 'passed');
+  assert.equal(result.status, 'generated');
+  assert.equal(cleaned, true);
+});
+
+test('coding agent reports unavailable Docker sandbox without falsely claiming tests passed', async () => {
+  const coding = new CodingAgent({
+    vercel: { deployFiles: async () => ({}) },
+    askModel: async () => JSON.stringify({ name: 'node-tool', description: 'Node utility', files: [{ path: 'main.js', content: 'console.log(1)' }] }),
+    projectManager: { save: async () => '/tmp/project.json' },
+    workspaceManager: { create: async () => ({ id: 'task', containerPath: '/workspace/task' }), cleanup: async () => {} },
+    sandboxRunner: async () => { throw new Error('Sandbox unavailable (Docker required): daemon not reachable'); }
+  });
+  const result = await coding.createProject({ request: 'Create a Node.js utility' });
+  assert.equal(result.sandbox.status, 'unavailable');
+  assert.equal(result.status, 'generated_unverified');
+});
