@@ -2471,8 +2471,8 @@ We wish you success ahead from *${groupName}* 🎓`,
             const warnCount = Number(warningRecord?.count || 0);
 
             await sock.sendMessage(groupJid, {
-                text: '⚠️ *JARVIS GROUP STATUS WARNING*\\n\\n@' + String(offender).split('@')[0] +
-                    ', posting a Group Status in this group is not allowed for non-admin members.\\n\\n*Strike: ' +
+                text: '⚠️ *JARVIS GROUP STATUS WARNING*\n\n@' + String(offender).split('@')[0] +
+                    ', posting a Group Status in this group is not allowed for non-admin members.\n\n*Strike: ' +
                     warnCount + '/3*',
                 mentions: [offender]
             });
