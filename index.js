@@ -6378,6 +6378,7 @@ if (command === "!reset") {
     }, { quoted: m });
 }
 }
+    }
 });
 }
 
