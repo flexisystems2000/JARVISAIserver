@@ -2452,7 +2452,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 const warnCount = Number(warningRecord?.count || 0);
 
                 await sock.sendMessage(jid, {
-                    text: `⚠️ *JARVIS ANTI-STATUS WARNING*\n\n@\${offender.split('@')[0]}, mentioning this group in your WhatsApp status is not allowed.\n\n*Strike: ${warnCount}/3*`,
+                    text: `⚠️ *JARVIS ANTI-STATUS WARNING*\n\n@${offender.split('@')[0]}, mentioning this group in your WhatsApp status is not allowed.\n\n*Strike: ${warnCount}/3*`,
                     mentions: [offender]
                 });
 
@@ -2483,7 +2483,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                         const removalResult = await sock.groupParticipantsUpdate(jid, [offender], 'remove');
                         console.log('[ANTI-STATUS] Third-strike removal result:', JSON.stringify(removalResult));
                         await sock.sendMessage(jid, {
-                            text: `🚫 @\${offender.split('@')[0]} has been removed after reaching 3 anti-status warnings.`,
+                            text: `🚫 @${offender.split('@')[0]} has been removed after reaching 3 anti-status warnings.`,
                             mentions: [offender]
                         });
                     }
