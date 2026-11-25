@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { TOKEN_PROVIDERS } = require('../agent/userApiTokenConnections');
 
 test('API-token registry includes common developer and cloud providers', () => {
-  for (const name of ['cloudflare', 'render', 'railway', 'digitalocean', 'stripe', 'resend', 'openai']) {
+  for (const name of ['cloudflare', 'render', 'railway', 'digitalocean', 'stripe', 'resend', 'openai', 'github', 'gitlab', 'netlify', 'supabase']) {
     assert.ok(TOKEN_PROVIDERS[name], `missing token provider: ${name}`);
   }
 });
