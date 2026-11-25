@@ -66,7 +66,7 @@ const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
 const { VercelAgent } = require('./agent/vercelAgent');
-const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt } = require('./fileGenerator');
+const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
 const { auditGitHubRepository } = require('./agent/securityAudit');
@@ -1559,16 +1559,27 @@ async function createFileForChat({ request, chatId, actor, sock, quotedMessage =
     const extension = format === 'yml' ? 'yaml' : format;
     const safeTitle = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_File';
     const filename = requestedName || `${safeTitle}.${extension}`;
-    const generated = await askAIWithMemory(chatId, actor, buildCreateFilePrompt(request, format, title));
-    if (!generated || generated.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
-    let content = String(generated).trim().replace(/^```(?:[a-z0-9_-]+)?\s*/i, '').replace(/```\s*$/i, '');
+    let content = '';
     let files = null;
-    if (format === 'zip') {
-        let parsed;
-        try { parsed = JSON.parse(content); } catch { throw new Error('The AI did not return a valid file collection for the ZIP archive.'); }
-        files = parsed.files;
-        if (!Array.isArray(files) || !files.length || files.length > 100) throw new Error('The ZIP archive must contain between 1 and 100 files.');
+    let validationError = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const prompt = attempt === 0
+            ? buildCreateFilePrompt(request, format, title)
+            : buildCreateFilePrompt(request, format, title) + '\n\nREPAIR REQUIRED: Your previous output failed validation: ' + String(validationError?.message || 'invalid format') + '. Regenerate the complete content in the exact required format. Return only the corrected content.';
+        const generated = await askAIWithMemory(chatId, actor, prompt);
+        if (!generated || generated.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
+        try {
+            const validated = validateGeneratedFileContent(generated, format);
+            content = validated.content;
+            files = validated.files;
+            validationError = null;
+            break;
+        } catch (error) {
+            validationError = error;
+            if (attempt === 1) throw new Error('Could not create a valid ' + format.toUpperCase() + ' file after one repair attempt: ' + error.message);
+        }
     }
+    if (validationError) throw validationError;
     const apiKey = String(process.env.PIPER_API_KEY || '').trim();
     if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
     const response = await axios.post(`${PIPER_DOCUMENT_API_URL}/files/generate`, { filename, title, content, ...(files ? { files } : {}) }, {
@@ -1578,6 +1589,9 @@ async function createFileForChat({ request, chatId, actor, sock, quotedMessage =
     if (!response.data?.success || !response.data?.fileBase64) throw new Error(response.data?.error || 'File service returned no generated file.');
     const buffer = Buffer.from(response.data.fileBase64, 'base64');
     if (!buffer.length) throw new Error('The generated file was empty.');
+    if (format === 'pdf' && buffer.subarray(0, 5).toString('ascii') !== '%PDF-') throw new Error('The file service returned an invalid PDF payload.');
+    if (['docx','xlsx','pptx','zip'].includes(format) && buffer.subarray(0, 4).toString('hex') !== '504b0304') throw new Error('The file service returned an invalid Office/ZIP archive.');
+    if (format === 'rtf' && !buffer.toString('utf8', 0, 6).startsWith('{\\rtf')) throw new Error('The file service returned an invalid RTF payload.');
     await sock.sendMessage(chatId, { document: buffer, mimetype: response.data.mimeType || CREATE_FILE_FORMATS[format] || 'application/octet-stream', fileName: response.data.filename || filename,
         caption: `✅ *JARVIS File Creator*\n\nYour ${format.toUpperCase()} file is ready.` }, quotedMessage ? { quoted: quotedMessage } : undefined);
     return { created: true, filename: response.data.filename || filename, format, bytes: buffer.length };
