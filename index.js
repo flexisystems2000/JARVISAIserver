@@ -2431,8 +2431,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 processedGroupStatusModeration.delete(processedGroupStatusModeration.keys().next().value);
             }
 
-            const offender = author.id || authorJid;
-            const botJid = sock.user?.id || sock.user?.lid;
+            const offender = authorJid; // Keep the same LID/PN identity key used by existing anti-status strikes.
             const botParticipant = (metadata.participants || []).find(person =>
                 [person.id, person.phoneNumber, person.lid].filter(Boolean)
                     .some(candidate => sameWhatsAppUser(candidate, sock.user?.id) || sameWhatsAppUser(candidate, sock.user?.lid))
