@@ -70,7 +70,7 @@ const { CodingAgent } = require('./agent/codingAgent');
 const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
-const { UserPlatformConnections } = require('./agent/userPlatformConnections');
+const { UserPlatformConnections, PROVIDERS } = require('./agent/userPlatformConnections');
 const { unwrapGroupMessage, extractGroupMessageText, formatGroupTranscript, buildConversationAwarePrompt } = require('./agent/groupConversationMemory');
 const { auditGitHubRepository } = require('./agent/securityAudit');
 const { validateProjectFiles } = require('./agent/codeValidator');
@@ -881,15 +881,14 @@ agentTools.register({
 agentTools.register({
     name: 'platform_connect_start',
     description: 'Send a native WhatsApp URL button labelled Connect {Platform}. Tapping it opens that platform official OAuth consent page and connects the current WhatsApp user account.',
-    parameters: { type: 'object', properties: { platform: { type: 'string', enum: ['github','supabase','google','vercel'] } }, required: ['platform'], additionalProperties: false },
+    parameters: { type: 'object', properties: { platform: { type: 'string', enum: Object.keys(PROVIDERS) } }, required: ['platform'], additionalProperties: false },
     permissions: ['user'],
     handler: async ({ platform }, context) => {
         if (!context.sock || !context.chatId || !context.actor) {
             throw new Error('WhatsApp sender and chat context are required to create a personal platform connection.');
         }
         const started = await userPlatformConnections.begin(platform, context.actor);
-        const labels = { github: 'GitHub', supabase: 'Supabase', google: 'Google / Firebase', vercel: 'Vercel' };
-        const label = labels[String(platform).toLowerCase()];
+        const label = PROVIDERS[String(platform).toLowerCase()]?.label;
         if (!started?.url || !label) throw new Error('The platform did not return a valid authorisation URL.');
         const parsedUrl = new URL(started.url);
         if (parsedUrl.protocol !== 'https:') throw new Error('The platform authorisation link must use HTTPS.');
