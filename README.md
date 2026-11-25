@@ -156,7 +156,7 @@ Weekday questions are published every 4 minutes and explanations every 5 minutes
 
 ## Gemini Live WhatsApp calls (same Baileys account)
 
-JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses `@hiroosy/baileys-lite` VoIP support against the socket already created by the existing `@itsliaaa/baileys` connection; it does not create a second WhatsApp account or write a second authentication session.
+JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses the HirooSy VoIP engine vendored in Flexi's own `@itsliaaa/baileys` fork, against the existing WhatsApp socket; it does not install a separate calling package, create a second WhatsApp account, or write a second authentication session.
 
 Set `AI_API_KEY` in the JARVIS hosting environment to the same value as `JARVIS_API_KEY` on the Flexi Educational Consult AI Link. JARVIS connects to the authenticated `/voice` WebSocket endpoint and sends/receives call audio through that service. Gemini API keys remain configured only on the AI Link server; do not add `GEMINI_API_KEY` to JARVIS.
 
