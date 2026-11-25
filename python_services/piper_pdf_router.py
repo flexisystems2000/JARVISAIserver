@@ -170,7 +170,7 @@ MIME_TYPES = {
     "html": "text/html; charset=utf-8", "json": "application/json; charset=utf-8", "xml": "application/xml; charset=utf-8",
     "yaml": "text/yaml; charset=utf-8", "yml": "text/yaml; charset=utf-8", "css": "text/css; charset=utf-8", "js": "text/javascript; charset=utf-8",
     "py": "text/x-python; charset=utf-8", "php": "application/x-httpd-php; charset=utf-8", "java": "text/x-java-source; charset=utf-8",
-    "cpp": "text/x-c++src; charset=utf-8", "sql": "application/sql; charset=utf-8", "svg": "image/svg+xml", "zip": "application/zip"
+    "cpp": "text/x-c++src; charset=utf-8", "sql": "application/sql; charset=utf-8", "svg": "image/svg+xml", "zip": "application/zip",\n    "rtf": "application/rtf; charset=utf-8", "ts": "text/typescript; charset=utf-8", "tsx": "text/typescript; charset=utf-8", "jsx": "text/javascript; charset=utf-8",\n    "c": "text/x-c; charset=utf-8", "h": "text/x-c; charset=utf-8", "cs": "text/plain; charset=utf-8", "go": "text/plain; charset=utf-8",\n    "rs": "text/plain; charset=utf-8", "rb": "text/plain; charset=utf-8", "sh": "text/x-shellscript; charset=utf-8", "ps1": "text/plain; charset=utf-8",\n    "bat": "text/plain; charset=utf-8", "toml": "application/toml; charset=utf-8", "ini": "text/plain; charset=utf-8", "conf": "text/plain; charset=utf-8",\n    "properties": "text/plain; charset=utf-8", "tex": "application/x-tex; charset=utf-8", "mdx": "text/markdown; charset=utf-8", "jsonl": "application/x-ndjson; charset=utf-8"
 }
 
 def _safe_general_name(value: str) -> str:
