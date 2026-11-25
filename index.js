@@ -319,7 +319,7 @@ agentTools.register({
         const saved = await Config.findOne({ keyName: `timetable:${department}` }).lean();
         if (!saved?.keyValue) throw new Error(`No ${department} timetable has been configured yet.`);
         const labels = { science: '🔬 SCIENCE DEPARTMENT', commercial: '💼 COMMERCIAL DEPARTMENT', art: '📖 ART DEPARTMENT' };
-        await context.sock.sendMessage(context.chatId, { text: `🗓️ *${labels[department]} TIMETABLE*\\n\\n${saved.keyValue}` });
+        await context.sock.sendMessage(context.chatId, { text: `🗓️ *${labels[department]} TIMETABLE*\n\n${saved.keyValue}` });
         return { sent: true, department };
     }
 });
@@ -455,7 +455,7 @@ agentTools.register({
     name: 'command_menu', description: 'Show the available JARVIS WhatsApp command menu.',
     parameters: { type: 'object', properties: {}, additionalProperties: false }, permissions: ['user'],
     handler: async (_args, context) => {
-        const menu = `🤖 *JARVIS AI — COMMAND MENU*\\n\\n*AI & LEARNING*\\n!ai · !quiz · !channelquiz · !timetable · !image · !createfile · !vv\\n\\n*WEB & MEDIA*\\n!crawl · !sitecheck · !yt · !video\\n\\n*REMINDERS & VOICE*\\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\\n\\n*GROUP & BOT*\\n!status · !healthgraph · !ginfo · !groupstatus · !listadmins · !listonline · !getjid · !groupids · !groupname\\n\\n*GROUP MANAGEMENT*\\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\\n\\n*FLEXI*\\n!pay · !name · !addxxjarvis\\n\\nUse !menu for the full usage details.`;
+        const menu = `🤖 *JARVIS AI — COMMAND MENU*\n\n*AI & LEARNING*\n!ai · !quiz · !channelquiz · !timetable · !image · !createfile · !vv\n\n*WEB & MEDIA*\n!crawl · !sitecheck · !yt · !video\n\n*REMINDERS & VOICE*\n!remind · !reminders · !cancelreminder · !tts · !quiet · !unquiet\n\n*GROUP & BOT*\n!status · !healthgraph · !ginfo · !groupstatus · !listadmins · !listonline · !getjid · !groupids · !groupname\n\n*GROUP MANAGEMENT*\n!add · !kick · !remove all · !ban · !unban · !promote · !mute · !unmute · !reset\n\n*FLEXI*\n!pay · !name · !addxxjarvis\n\nUse !menu for the full usage details.`;
         await context.sock.sendMessage(context.chatId, { text: menu });
         return { sent: true };
     }
@@ -749,7 +749,7 @@ agentTools.register({
         const filename = `${String(repo).replace(/[^A-Za-z0-9_.-]/g, '-')}-${String(archive.branch).replace(/[^A-Za-z0-9_.-]/g, '-')}.tar.gz`;
         await context.sock.sendMessage(context.chatId, {
             document: archive.buffer, mimetype: 'application/gzip', fileName: filename,
-            caption: `📦 *GitHub repository downloaded*\\n\\nRepository: ${archive.repository}\\nBranch: ${archive.branch}\\nArchive size: ${archive.size} bytes`
+            caption: `📦 *GitHub repository downloaded*\n\nRepository: ${archive.repository}\nBranch: ${archive.branch}\nArchive size: ${archive.size} bytes`
         });
         return { downloaded: true, repository: archive.repository, branch: archive.branch, filename, size: archive.size };
     }
@@ -2384,7 +2384,7 @@ async function startJARVIS() {
             if (OWNER_NUMBER) {
                 try {
                     await sock.sendMessage(`${OWNER_NUMBER}@s.whatsapp.net`, {
-                        text: `📞 *JARVIS call alert*\\nAn incoming WhatsApp ${callType} call was detected.\\nCaller: ${caller}\\n\\nLive answering is disabled because AI_API_KEY is not configured.`
+                        text: `📞 *JARVIS call alert*\nAn incoming WhatsApp ${callType} call was detected.\nCaller: ${caller}\n\nLive answering is disabled because AI_API_KEY is not configured.`
                     });
                 } catch (error) {
                     console.warn('[WHATSAPP CALL] Could not send owner alert:', error.message);
@@ -3050,7 +3050,7 @@ if (
     // in a private DM; never add the submitted secret to prompts, chat memory,
     // dashboard records, or application logs.
     const tokenConnectMatch = !jid?.endsWith('@g.us')
-        ? rawMsgCheck.match(/^!connect-token\\s+([a-z0-9_-]{2,40})\\s+([^\\s]+)\\s*$/i)
+        ? rawMsgCheck.match(/^!connect-token\s+([a-z0-9_-]{2,40})\s+([^\s]+)\s*$/i)
         : null;
     if (tokenConnectMatch) {
         const provider = tokenConnectMatch[1].toLowerCase();
@@ -3063,14 +3063,14 @@ if (
                 continue;
             }
             const result = await userApiTokenConnections.connect(sender, provider, submittedToken);
-            await sock.sendMessage(jid, { text: `✅ *${result.provider} connected successfully*\\n\\nAccount: ${result.account}\\n\\nYour token was validated and encrypted before it was saved to your WhatsApp account. I did not include it in the AI conversation.` });
+            await sock.sendMessage(jid, { text: `✅ *${result.provider} connected successfully*\n\nAccount: ${result.account}\n\nYour token was validated and encrypted before it was saved to your WhatsApp account. I did not include it in the AI conversation.` });
         } catch (error) {
-            await sock.sendMessage(jid, { text: `❌ API-token connection failed. ${String(error.message || 'Please check the platform and token.').slice(0, 350)}\\n\\nThe token was not saved unless validation succeeded.` });
+            await sock.sendMessage(jid, { text: `❌ API-token connection failed. ${String(error.message || 'Please check the platform and token.').slice(0, 350)}\n\nThe token was not saved unless validation succeeded.` });
         }
         continue;
     }
 
-    const tokenDisconnectMatch = !jid?.endsWith('@g.us') ? rawMsgCheck.match(/^!disconnect-token\\s+([a-z0-9_-]{2,40})\\s*$/i) : null;
+    const tokenDisconnectMatch = !jid?.endsWith('@g.us') ? rawMsgCheck.match(/^!disconnect-token\s+([a-z0-9_-]{2,40})\s*$/i) : null;
     if (tokenDisconnectMatch) {
         try {
             const result = await userApiTokenConnections.disconnect(sender, tokenDisconnectMatch[1]);
@@ -3081,10 +3081,10 @@ if (
         continue;
     }
 
-    if (!jid?.endsWith('@g.us') && /^!token-connections\\s*$/i.test(rawMsgCheck.trim())) {
+    if (!jid?.endsWith('@g.us') && /^!token-connections\s*$/i.test(rawMsgCheck.trim())) {
         try {
             const rows = await userApiTokenConnections.list(sender);
-            await sock.sendMessage(jid, { text: rows.length ? `🔐 *YOUR API-TOKEN CONNECTIONS*\\n\\n${rows.map(row => `• ${row.provider} — ${row.account}\\n  Validated: ${new Date(row.validatedAt).toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })}`).join('\\n\\n')}\\n\\nDisconnect with !disconnect-token platform` : 'You have no API-token platforms connected yet.' });
+            await sock.sendMessage(jid, { text: rows.length ? `🔐 *YOUR API-TOKEN CONNECTIONS*\n\n${rows.map(row => `• ${row.provider} — ${row.account}\n  Validated: ${new Date(row.validatedAt).toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })}`).join('\n\n')}\n\nDisconnect with !disconnect-token platform` : 'You have no API-token platforms connected yet.' });
         } catch (_) {
             await sock.sendMessage(jid, { text: 'I could not retrieve your API-token connections.' });
         }
@@ -4497,7 +4497,7 @@ for (const identity of botIdentities) {
     const local = jidLocalPart(identity);
     if (!local) continue;
     const escaped = local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    aiPromptText = aiPromptText.replace(new RegExp(`@${escaped}(?=\\s|$|[.,!?])`, 'g'), '');
+    aiPromptText = aiPromptText.replace(new RegExp(`@${escaped}(?=\s|$|[.,!?])`, 'g'), '');
 }
 aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 
@@ -6091,7 +6091,7 @@ if (isAiCommand) {
             const history = await getConversationContext(jid, sender);
             const result = await jarvisAgent.handle({
                 message: conversationAwarePrompt,
-                history: [history, groupHistory ? `SHARED GROUP DISCUSSION:\\n${groupHistory}` : ''].filter(Boolean).join('\\n\\n'),
+                history: [history, groupHistory ? `SHARED GROUP DISCUSSION:\n${groupHistory}` : ''].filter(Boolean).join('\n\n'),
                 actor: sender,
                 chatId: jid,
                 isGroup: jid.endsWith('@g.us'),
@@ -8556,7 +8556,7 @@ function escapeJs(value){
         .replace(/\\\\/g,'\\\\\\\\')
         .replace(/'/g,"\\\\'")
         .replace(/"/g,'&quot;')
-        .replace(/\\n/g,'\\\\n')
+        .replace(/\n/g,'\\\n')
         .replace(/\\r/g,'\\\\r');
 
 }
@@ -9281,7 +9281,7 @@ app.listen(port, () => {
        quizEngine.configurePollQuiz({
            aggregateVotes: baileys.getAggregateVotesInPollMessage,
            explainAnswer: async ({ subject, question, options, answer, solution }) => askAI(
-               `Explain this ${subject} multiple-choice question to Nigerian secondary-school students in 3-5 clear sentences. Do not change the correct answer.\\nQuestion: ${question}\\nA: ${options?.a || ''}\\nB: ${options?.b || ''}\\nC: ${options?.c || ''}\\nD: ${options?.d || ''}\\nCorrect option: ${answer}\\nALOC solution: ${solution || 'Not supplied'}\\nIf the supplied solution is empty, give a concise explanation based on the question. Avoid guessing if the question is ambiguous.`
+               `Explain this ${subject} multiple-choice question to Nigerian secondary-school students in 3-5 clear sentences. Do not change the correct answer.\nQuestion: ${question}\nA: ${options?.a || ''}\nB: ${options?.b || ''}\nC: ${options?.c || ''}\nD: ${options?.d || ''}\nCorrect option: ${answer}\nALOC solution: ${solution || 'Not supplied'}\nIf the supplied solution is empty, give a concise explanation based on the question. Avoid guessing if the question is ambiguous.`
            )
        });
        startJARVIS();
