@@ -48,6 +48,10 @@
 
 # Changelog
 
+## Unreleased
+- Add admin-only `!groupstatus [text]` to publish directly to the current WhatsApp group using Flexi Baileys 0.5.9.
+
+
 ## 3.0.0 - 2026-11-08
 - Removed the obsolete local keyword/regex natural-language router from the runtime and package; natural-language requests go through the AI planner and registered tool registry.
 - Added explicit AI tool-plan confidence validation; low-confidence plans are clarified instead of executed.
