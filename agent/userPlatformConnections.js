@@ -135,7 +135,8 @@ class UserPlatformConnections {
     const url = new URL(p.authorizeUrl);
     const params = { client_id: clientId, redirect_uri: redirectUri, response_type: 'code', state, code_challenge: sha(verifier), code_challenge_method: 'S256' };
     if (provider !== 'supabase') params.scope = p.scopes.join(' ');
-    if (provider === 'supabase') params.scope = 'all';
+    // Supabase scopes are configured on the registered OAuth app; its docs mark
+    // the request-time scope parameter as deprecated.
     Object.assign(params, p.extraAuthorize || {});
     for (const [k,v] of Object.entries(params)) if (v !== undefined && v !== '') url.searchParams.set(k, v);
     return { url: url.toString(), provider: p.label, expiresInMinutes: 10 };
