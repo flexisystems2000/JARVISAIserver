@@ -6,6 +6,7 @@ function parseGeneratedProject(raw) {
   return {
     name: String(parsed.name || '').trim(),
     description: String(parsed.description || '').trim(),
+    projectType: String(parsed.projectType || 'software').trim(),
     files: parsed.files.map(file => ({ path: file.path, content: file.content }))
   };
 }
