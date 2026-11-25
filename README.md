@@ -82,6 +82,18 @@ JARVIS now has a user-scoped OAuth connection foundation for **GitHub, Supabase,
 
 This is an extensible integration foundation, not a claim that every provider's read/write API adapter is already complete. Each platform still needs its own resource-aware read/write tools, scope checks, audit events, token revocation handling, and approval gates for consequential changes. Supabase data access must respect the user's database/RLS identity; Firebase must use Google OAuth/IAM grants rather than silently using the bot's Admin identity. Platforms that use API tokens or provider-specific auth instead of OAuth (for example Cloudflare, Render, Railway, AWS, and payment/email APIs) need a separate secure credential-connection flow and must not be presented as OAuth-connected until implemented.
 
+## User-owned API-token connections
+
+In a private JARVIS DM, a user can connect a supported API-token platform with:
+
+```text
+!connect-token <platform> <API_TOKEN>
+```
+
+The current token-validation registry includes Cloudflare, Render, Railway, DigitalOcean, Stripe, Resend and OpenAI. JARVIS handles this command before the AI planner, attempts to delete the incoming WhatsApp message, refuses to save if deletion fails, validates the token against the provider API, then encrypts it with AES-256-GCM and stores it under the sender's WhatsApp identity. The token is never passed to the AI model or included in ordinary application logs. The same sender can use `!token-connections` to list saved connections and `!disconnect-token <platform>` to remove one.
+
+Tokens are accepted only in private DMs; group submissions are deleted and rejected before group-history persistence. Deletion cannot guarantee removal from WhatsApp notifications, backups, linked devices or copies made before deletion. Users should create dedicated, least-privilege tokens, avoid master/root credentials, and revoke any token that may have been exposed. API-token validation confirms the configured verification endpoint accepts the token; it does not prove that every future action or resource scope is authorised. A token adapter still needs explicit, resource-scoped read/write tools before JARVIS can operate that platform.
+
 ## Platform authentication and GitHub
 
 `GITHUB_TOKEN` is verified against GitHub's authenticated-user endpoint. JARVIS can list repositories, inspect repository trees, read files, search code, inspect issues/PRs, verify repository-admin access, and run a read-only static security triage. `GITHUB_ALLOWED_REPOS` can optionally restrict repository access to a comma-separated list such as `owner/repo,another-owner/project`.
