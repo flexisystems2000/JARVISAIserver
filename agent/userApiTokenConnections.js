@@ -134,7 +134,7 @@ class UserApiTokenConnections {
     if (!definition) throw new Error(`Unsupported token platform. Available: ${Object.keys(TOKEN_PROVIDERS).join(', ')}.`);
     if (secret.length < 12 || secret.length > 4096 || /[\\r\\n]/.test(secret)) throw new Error('The token format is not valid. Send one token on a single line.');
     // Validate before persisting. Never include the submitted token in errors or logs.
-    const identity = await definition.validate(secret);
+    let identity;\n    try { identity = await definition.validate(secret); }\n    catch (_) { throw new Error(`Could not validate the ${definition.label} token. Check that it is active and has permission to read your account details.`); }
     await this.Connection.findOneAndUpdate(
       { actor: owner, provider: name },
       { $set: {
