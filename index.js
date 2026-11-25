@@ -2374,11 +2374,128 @@ We wish you success ahead from *${groupName}* 🎓`,
         }
     }
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-    const m = messages[0];
-    if (!m?.message) return;
+    function findStatusMentionProtocolMessage(root) {
+        const queue = [root];
+        const seen = new Set();
+        const wrapperKeys = [
+            'groupStatusMentionMessage',
+            'statusMentionMessage',
+            'ephemeralMessage',
+            'viewOnceMessage',
+            'viewOnceMessageV2',
+            'viewOnceMessageV2Extension',
+            'documentWithCaptionMessage'
+        ];
+        while (queue.length) {
+            const current = queue.shift();
+            if (!current || typeof current !== 'object' || seen.has(current)) continue;
+            seen.add(current);
+            const protocol = current.protocolMessage;
+            if (protocol && Number(protocol.type) === 25) return protocol;
+            for (const key of wrapperKeys) {
+                const wrapper = current[key];
+                if (wrapper && typeof wrapper === 'object') {
+                    queue.push(wrapper.message || wrapper);
+                }
+            }
+            if (current.message && typeof current.message === 'object') queue.push(current.message);
+        }
+        return null;
+    }
+
+    sock.ev.on('messages.upsert', async ({ messages, type: upsertType }) => {
+    for (const m of messages || []) {
+    if (!m?.message) continue;
 
     const jid = m.key.remoteJid;
+
+    // Status mentions arrive as a wrapped protocolMessage (type 25), not as
+    // group_mention_notification message stubs. Handle them before normal
+    // message parsing so empty-body system messages are not skipped.
+    if (jid?.endsWith('@g.us') && !m.key.fromMe) {
+        const statusMentionProtocol = findStatusMentionProtocolMessage(m.message);
+        const legacyStubType = m.messageStubType || m.message?.messageStubType;
+        const isStatusMention = Number(statusMentionProtocol?.type) === 25 ||
+            legacyStubType === 'group_mention_notification' ||
+            Number(legacyStubType) === 156;
+        if (isStatusMention) {
+            const offender = m.key.participant || statusMentionProtocol?.key?.participant;
+            if (!offender || !String(offender).includes('@')) {
+                console.warn('[ANTI-STATUS] Detected status mention but could not resolve its sender.', {
+                    groupJid: jid, messageId: m.key.id, stubType: legacyStubType,
+                    protocolType: statusMentionProtocol?.type
+                });
+                continue;
+            }
+
+            try {
+                if (mongoose.connection.readyState !== 1) {
+                    throw new Error('MongoDB is not connected; cannot persist anti-status warning.');
+                }
+
+                // Attempt deletion of the notification message in the group chat.
+                try {
+                    await sock.sendMessage(jid, { delete: m.key });
+                    console.log('[ANTI-STATUS] Deleted group status-mention notification', {
+                        groupJid: jid, offender, messageId: m.key.id
+                    });
+                } catch (deleteError) {
+                    console.error('[ANTI-STATUS] Could not delete status-mention notification:', deleteError.message);
+                }
+
+                const warningKey = `${jid}:${offender}`;
+                const warningRecord = await Warn.findOneAndUpdate(
+                    { userId: warningKey },
+                    { $inc: { count: 1 } },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                ).lean();
+                const warnCount = Number(warningRecord?.count || 0);
+
+                await sock.sendMessage(jid, {
+                    text: `⚠️ *JARVIS ANTI-STATUS WARNING*\n\n@\${offender.split('@')[0]}, mentioning this group in your WhatsApp status is not allowed.\n\n*Strike: ${warnCount}/3*`,
+                    mentions: [offender]
+                });
+
+                if (warnCount >= 3) {
+                    let botIsAdmin = false;
+                    try {
+                        const metadata = await sock.groupMetadata(jid);
+                        const botJids = [sock.user?.id, sock.user?.lid].filter(Boolean);
+                        const botParticipant = (metadata.participants || []).find(person =>
+                            [person.id, person.phoneNumber, person.lid].filter(Boolean).some(candidate =>
+                                botJids.some(botJid => {
+                                    try { return areJidsSameUser(candidate, botJid); }
+                                    catch (_) { return String(candidate).split('@')[0] === String(botJid).split('@')[0]; }
+                                })
+                            )
+                        );
+                        botIsAdmin = Boolean(botParticipant?.admin);
+                    } catch (metadataError) {
+                        console.error('[ANTI-STATUS] Could not verify bot admin status:', metadataError.message);
+                    }
+
+                    if (!botIsAdmin) {
+                        await sock.sendMessage(jid, {
+                            text: '🚫 Third strike recorded, but I cannot remove the member because JARVIS is not a group admin.'
+                        });
+                        console.warn('[ANTI-STATUS] Third strike recorded; removal skipped because bot is not admin.', { groupJid: jid, offender });
+                    } else {
+                        const removalResult = await sock.groupParticipantsUpdate(jid, [offender], 'remove');
+                        console.log('[ANTI-STATUS] Third-strike removal result:', JSON.stringify(removalResult));
+                        await sock.sendMessage(jid, {
+                            text: `🚫 @\${offender.split('@')[0]} has been removed after reaching 3 anti-status warnings.`,
+                            mentions: [offender]
+                        });
+                    }
+                }
+            } catch (antiStatusError) {
+                console.error('[ANTI-STATUS] Enforcement failed:', antiStatusError.message, {
+                    groupJid: jid, offender, messageId: m.key.id
+                });
+            }
+            continue;
+        }
+    }
     const earlyBody =
         m.message?.conversation ||
         m.message?.extendedTextMessage?.text ||
@@ -2906,90 +3023,6 @@ if (
 
         await sendWithTyping(jid, { text: replyText }, m);
         return;
-    }
-
-    // =========================
-    // ANTI STATUS MENTION SYSTEM (FIXED SAFETY)
-    // =========================
-    try {
-        const type = m.messageStubType || m.message?.messageStubType;
-
-        const isStatusMention =
-            type === 'group_mention_notification' ||
-            type === 156 ||
-            type === 0x9c;
-
-        if (isStatusMention) {
-            const participant = m.messageStubParameters?.[0];
-            const groupJid = jid;
-
-            if (!participant) return;
-
-            await sock.sendMessage(groupJid, {
-                delete: m.key
-            }).catch(() => {});
-
-            // Keep strikes persistent across restarts and isolated per group.
-            // The third offence must still be recognised after a JARVIS redeploy.
-            if (mongoose.connection.readyState !== 1) {
-                throw new Error('MongoDB is not connected; cannot safely record anti-status warning.');
-            }
-            const warningKey = `${groupJid}:${participant}`;
-            const warningRecord = await Warn.findOneAndUpdate(
-                { userId: warningKey },
-                { $inc: { count: 1 } },
-                { upsert: true, new: true, setDefaultsOnInsert: true }
-            ).lean();
-
-            const warnCount = Number(warningRecord?.count || 0);
-            const maxWarns = 3;
-
-            const msg =
-`*⚠️ JARVIS AI SAFETY SYSTEM ⚠️*
-
-@${participant.split('@')[0]}, tagging this group in status is not allowed.
-
-*Strike:* ${warnCount}/${maxWarns}`;
-
-            await sock.sendMessage(groupJid, {
-                text: msg,
-                mentions: [participant]
-            });
-
-            if (warnCount >= maxWarns) {
-                await sock.sendMessage(groupJid, {
-                    text: `🚫 Final strike reached. Removing user...`
-                });
-
-                // The status-notification handler uses groupJid and participant.
-                // The previous code referenced undefined variables (jid, target,
-                // action), so the third-strike removal never reached WhatsApp.
-                const targetJid = String(participant || '').trim();
-                if (!targetJid.includes('@')) {
-                    throw new Error(`Invalid participant JID for third-strike removal: ${targetJid || 'empty'}`);
-                }
-
-                const result = await sock.groupParticipantsUpdate(
-                    groupJid,
-                    [targetJid],
-                    'remove'
-                );
-
-                console.log(
-                    '[ANTI-STATUS] THIRD-STRIKE REMOVAL RESULT:',
-                    JSON.stringify(result, null, 2)
-                );
-
-                await sock.sendMessage(groupJid, {
-                    text: `🚫 @${targetJid.split('@')[0]} has been removed after reaching 3 warnings.`,
-                    mentions: [targetJid]
-                }).catch(error => console.warn('[ANTI-STATUS] Removal notice failed:', error.message));
-            }
-
-            return;
-        }
-    } catch (err) {
-        console.log("Anti-status error:", err.message);
     }
 
     // =========================
@@ -3958,6 +3991,7 @@ if (hasReaction) {
             key: m.key,
             text: selectedReaction
         }
+    }
     });
 
     return;
