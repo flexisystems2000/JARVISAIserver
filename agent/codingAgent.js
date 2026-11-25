@@ -16,14 +16,14 @@ class CodingAgent {
     this.workspaces = workspaceManager || new WorkspaceManager();
   }
   async checkInSandbox(files) {
-    const candidates = files.filter(file => /\\.(?:js|cjs|mjs|py)$/i.test(file.path) && /^[A-Za-z0-9_./-]+$/.test(file.path));
+    const candidates = files.filter(file => /\.(?:js|cjs|mjs|py)$/i.test(file.path) && /^[A-Za-z0-9_./-]+$/.test(file.path));
     if (!candidates.length) return { status: 'not_applicable', checks: [], message: 'No JavaScript or Python source files were available for syntax checks.' };
     let workspace;
     try {
       workspace = await this.workspaces.create(files);
       const checks = [];
       for (const file of candidates) {
-        const isPython = /\\.py$/i.test(file.path);
+        const isPython = /\.py$/i.test(file.path);
         const command = isPython ? 'python3 -m py_compile "' + file.path + '"' : 'node --check "' + file.path + '"';
         const result = await this.sandboxRunner(command, {
           cwd: workspace.containerPath,
@@ -53,7 +53,7 @@ class CodingAgent {
       files = validateProjectFiles(generated.files, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000, requireIndexHtml: false });
       sandbox = await this.checkInSandbox(files);
       if (sandbox.status !== 'failed' || attempt === 1) break;
-      currentRequest += '\\n\\nCORRECTION REQUIRED: The disposable syntax-check sandbox reported these errors. Fix the affected source files and return the complete corrected project: ' + JSON.stringify(sandbox.checks);
+      currentRequest += '\n\nCORRECTION REQUIRED: The disposable syntax-check sandbox reported these errors. Fix the affected source files and return the complete corrected project: ' + JSON.stringify(sandbox.checks);
     }
     const name = String(projectName || generated.name || 'jarvis-project').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || 'jarvis-project';
     const status = sandbox.status === 'failed' ? 'generated_with_errors' : sandbox.status === 'unavailable' ? 'generated_unverified' : 'generated';
