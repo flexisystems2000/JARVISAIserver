@@ -170,6 +170,10 @@ Requirements and limitations:
 
 
 
+## Group Status moderation
+
+JARVIS inspects incoming Group Status stanza metadata before message decryption. It identifies the group and author without reading status text or media, leaves group-admin statuses untouched, and uses the Group Status-specific revoke metadata supported by the Flexi Baileys fork for non-admin posts. Each offending status is deduplicated by group JID and status ID, then recorded through the existing persistent group-scoped anti-status warning counter and three-strike removal flow. JARVIS must be a group admin to revoke the status or remove a member. This is an unofficial WhatsApp Web protocol feature and must be validated in a private staging group; a sent revoke request is not proof that WhatsApp removed the status.
+
 ## Direct WhatsApp group status publishing
 
 Group administrators can publish a text status directly to the current group with `!groupstatus [text]`. The command uses `sock.sendGroupStatus()` from `@flexisystems/baileys` and is distinct from personal status mentions.
