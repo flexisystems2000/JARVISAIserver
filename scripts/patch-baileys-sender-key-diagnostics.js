@@ -161,7 +161,7 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
         'queue Group Status when sender key is missing'
     );
     source = replaceOnce(source,
-        '            await upsertMessage(msg, isOfflineNode(node) ? \'append\' : \'notify\');\n            });\n        }\n        catch (error) {',
+        '                await upsertMessage(msg, isOfflineNode(node) ? \'append\' : \'notify\');\n            });\n        }\n        catch (error) {',
         '            await upsertMessage(msg, isOfflineNode(node) ? \'append\' : \'notify\');\n' +
         '                processed = true;\n' +
         '                if (node.tag === "status") pendingGroupStatuses.delete(groupStatusRetryKey(node));\n' +
