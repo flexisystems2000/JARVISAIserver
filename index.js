@@ -2419,9 +2419,18 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     sock.ev.on('messages.upsert', async ({ messages, type: upsertType }) => {
     for (const m of messages || []) {
+    const jid = m?.key?.remoteJid;
+    if (jid?.endsWith('@g.us')) {
+        console.log('[GROUP_STATUS_DIAGNOSTIC] JARVIS messages.upsert received group message', {
+            groupJid: jid,
+            messageId: m.key?.id || null,
+            participant: m.key?.participant || null,
+            fromMe: Boolean(m.key?.fromMe),
+            messageTypes: Object.keys(m.message || {})
+        });
+    }
     if (!m?.message) continue;
 
-    const jid = m.key.remoteJid;
 
     // Status mentions arrive as a wrapped protocolMessage (type 25), not as
     // group_mention_notification message stubs. Handle them before normal
