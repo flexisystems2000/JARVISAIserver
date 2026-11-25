@@ -104,11 +104,53 @@ function buildCreateFilePrompt(request, format, title) {
   return `${base}\n\nFORMAT RULE: Return a readable document using Markdown headings and lists. This content will be rendered as ${format.toUpperCase()}.`;
 }
 
+
+function validateGeneratedFileContent(raw, format) {
+  let content = String(raw ?? '').trim().replace(/^(\x60{3})(?:[a-z0-9_-]+)?\s*/i, '').replace(/\s*\x60{3}$/i, '');
+  if (!content) throw new Error('The AI returned an empty file.');
+  let files = null;
+  const parseJson = label => { try { return JSON.parse(content); } catch (_) { throw new Error('Generated ' + label + ' content is not valid JSON.'); } };
+  if (format === 'json') content = JSON.stringify(parseJson('JSON'), null, 2);
+  if (format === 'csv' || format === 'xlsx') {
+    const data = parseJson(format.toUpperCase());
+    if (Array.isArray(data)) {
+      if (data.length && !Array.isArray(data[0]) && (typeof data[0] !== 'object' || data[0] === null)) throw new Error('Tabular data must be an array of rows or objects.');
+    } else if (!data || typeof data !== 'object' || !(Array.isArray(data.headers) || Array.isArray(data.sheets))) {
+      throw new Error('Tabular data must contain headers/rows or a sheets array.');
+    }
+  }
+  if (format === 'pptx') {
+    const data = parseJson('PowerPoint');
+    if (!data || !Array.isArray(data.slides) || !data.slides.length) throw new Error('PowerPoint content must contain a non-empty slides array.');
+  }
+  if (format === 'zip') {
+    const data = parseJson('ZIP archive');
+    files = data.files;
+    if (!Array.isArray(files) || !files.length || files.length > 100) throw new Error('ZIP content must contain between 1 and 100 files.');
+    const seen = new Set();
+    for (const item of files) {
+      const filePath = String(item?.path || '');
+      if (!filePath || filePath.startsWith('/') || filePath.includes('\\\\') || filePath.split('/').some(part => !part || part === '.' || part === '..') || /[\0?#]/.test(filePath)) throw new Error('ZIP contains an unsafe file path.');
+      if (seen.has(filePath)) throw new Error('ZIP contains a duplicate path: ' + filePath);
+      seen.add(filePath);
+      if (typeof item.content !== 'string') throw new Error('ZIP file ' + filePath + ' has no text content.');
+    }
+  }
+  if (format === 'jsonl') {
+    for (const line of content.split(/\r?\n/)) if (line.trim()) { try { JSON.parse(line); } catch (_) { throw new Error('JSONL must contain one valid JSON value per non-empty line.'); } }
+  }
+  if (format === 'svg' && !/<svg(?:\s|>)/i.test(content)) throw new Error('SVG output must contain an svg root element.');
+  if (format === 'xml' && !/^\s*<\?xml[\s\S]*?>/i.test(content) && !/^\s*<[A-Za-z_][\w:.-]*(?:\s|>)/.test(content)) throw new Error('XML output must contain a root element.');
+  if (/\0/.test(content)) throw new Error('Generated text contains a null byte.');
+  return { content, files };
+}
+
 module.exports = {
   CREATE_FILE_FORMATS,
   validateCreateFileRequest,
   inferCreateFileFormat,
   extractCreateFileName,
   deriveCreateFileTitle,
-  buildCreateFilePrompt
+  buildCreateFilePrompt,
+  validateGeneratedFileContent
 };
