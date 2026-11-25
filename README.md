@@ -76,14 +76,11 @@ The Agent exposes `coding_project_create` to generate multi-file projects, check
 
 The WhatsApp agent can now use shared group-discussion context when answering a tagged request. Ordinary text messages from all participants are stored in a group-scoped timeline (bounded to the latest 1,500 messages per group); quoted-message IDs are resolved against that timeline. Private user/assistant memory remains separate and is no longer erased by the 10-minute activity timeout.
 
-Read-only engineering tools include multi-file project generation, GitHub repository archive downloads (public repositories for regular users; private repositories restricted to administrators), and administrator-only Supabase and Firestore collection reads.
+Engineering tools include multi-file project generation and GitHub repository archive downloads (public repositories for regular users; private repositories restricted to administrators).
 
-Configure platform credentials only as protected Render environment variables:
-- `GITHUB_TOKEN`: GitHub token with only the repository access JARVIS needs. `GITHUB_ALLOWED_REPOS` can further restrict repository access.
-- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: Supabase project URL and service-role key. The service-role key bypasses Row Level Security; keep it private and grant JARVIS access only to trusted administrators.
-- `FIREBASE_SERVICE_ACCOUNT`: existing Firebase Admin service-account JSON used by this JARVIS deployment.
+**User-scoped platform connections are not yet implemented.** The earlier Supabase and Firestore tools that relied on shared Render service credentials have been removed. JARVIS must not expose one operator's Supabase service-role key or Firebase Admin service account as if it were each WhatsApp user's own connection. The existing `GITHUB_TOKEN` / `VERCEL_TOKEN` integrations are deployment-level credentials, not per-user Auth Agent Connections. Do not treat them as user-authorised connections.
 
-Supabase and Firestore tools added here are read-only. Database writes, schema changes, production deployments and repository writes remain separate privileged actions and must not be inferred from a successful read.
+The next integration stage must provide provider-specific OAuth/consent flows (or an officially supported connection broker), encrypted per-user token storage, refresh/revocation handling, strict WhatsApp-sender ownership checks, read and write adapters, audit records, and resource-bound approval for sensitive changes. Supabase data access must respect the user's database/RLS identity; Firebase must use Google OAuth/IAM grants rather than silently using the bot's Admin identity. Until those flows are configured and tested, Supabase and Firestore read/write operations are intentionally unavailable from JARVIS.
 
 ## Platform authentication and GitHub
 
@@ -122,7 +119,7 @@ Security checks are intended only for repositories and systems the operator owns
 | `VERCEL_TEAM_ID` | Optional Vercel team ID for team-scoped deployments |
 | `GITHUB_OWNER` | Optional default GitHub owner/org |
 | `GITHUB_ALLOWED_REPOS` | Optional comma-separated repository allowlist |
-| `JARVIS_PLATFORM_ADAPTERS` | Optional JSON array of provider HTTPS identity adapters |
+| `JARVIS_PLATFORM_ADAPTERS` | Legacy deployment-level identity verification adapters only; not per-user Auth Agent Connections |
 | `DOCKER_BIN` | Optional Docker executable name/path for sandbox execution |
 | `JARVIS_SANDBOX_WORKSPACE` | Host directory mounted into `/workspace` in the isolated container |
 
