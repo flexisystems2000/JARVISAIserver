@@ -2848,6 +2848,13 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
+    // Never accept or retain API credentials posted in a group.
+    if (jid?.endsWith('@g.us') && /^!connect-token\\b/i.test(earlyBody.trim())) {
+        try { await sock.sendMessage(jid, { delete: m.key }); } catch (_) {}
+        await sock.sendMessage(jid, { text: '🔒 API tokens can only be connected in a private DM with JARVIS. I will not process or save credentials posted in a group.' });
+        continue;
+    }
+
     // Persist all ordinary group discussion messages, not only messages directed
     // at JARVIS. This is the shared context used when a participant later tags it.
     if (jid?.endsWith('@g.us') && !m.key.fromMe) {
@@ -3056,8 +3063,10 @@ if (
         const provider = tokenConnectMatch[1].toLowerCase();
         const submittedToken = tokenConnectMatch[2];
         try {
-            try { await sock.sendMessage(jid, { delete: m.key }); }
-            catch (_) { /* Continue, but never log or echo the token. */ }
+            let messageDeleted = false;
+            try { await sock.sendMessage(jid, { delete: m.key }); messageDeleted = true; }
+            catch (_) { /* Never log or echo the token. */ }
+            if (!messageDeleted) throw new Error('I could not delete the message, so I did not save the token. Revoke that token in the provider dashboard before trying again.');
             if (!TOKEN_PROVIDERS[provider]) {
                 await sock.sendMessage(jid, { text: `Unsupported API-token platform. Available: ${Object.keys(TOKEN_PROVIDERS).join(', ')}.` });
                 continue;
