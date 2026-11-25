@@ -83,6 +83,48 @@ const TOKEN_PROVIDERS = {
       return { id: 'openai-api-key', account: 'OpenAI API account' };
     }
   }
+  ,
+  github: {
+    label: 'GitHub',
+    validate: async token => {
+      const r = await axios.get('https://api.github.com/user', {
+        timeout: 15000, headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }
+      });
+      if (!r.data?.id) throw new Error('GitHub did not return an authenticated account.');
+      return { id: String(r.data.id), account: r.data.login || 'GitHub account' };
+    }
+  },
+  gitlab: {
+    label: 'GitLab',
+    validate: async token => {
+      const r = await axios.get('https://gitlab.com/api/v4/user', {
+        timeout: 15000, headers: { 'PRIVATE-TOKEN': token }
+      });
+      if (!r.data?.id) throw new Error('GitLab did not return an authenticated account.');
+      return { id: String(r.data.id), account: r.data.username || r.data.name || 'GitLab account' };
+    }
+  },
+  netlify: {
+    label: 'Netlify',
+    validate: async token => {
+      const r = await axios.get('https://api.netlify.com/api/v1/user', {
+        timeout: 15000, headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!r.data?.id) throw new Error('Netlify did not return an authenticated account.');
+      return { id: String(r.data.id), account: r.data.full_name || r.data.email || 'Netlify account' };
+    }
+  },
+  supabase: {
+    label: 'Supabase',
+    validate: async token => {
+      const r = await axios.get('https://api.supabase.com/v1/projects', {
+        timeout: 15000, headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+      });
+      if (!Array.isArray(r.data)) throw new Error('Supabase did not return an authenticated projects response.');
+      return { id: 'supabase-pat', account: 'Supabase account' };
+    }
+  }
+
 };
 
 class UserApiTokenConnections {
