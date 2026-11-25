@@ -235,9 +235,12 @@ async function attachGeminiCallAssistant(sock) {
     if (attachedSockets.has(sock)) return attachedSockets.get(sock);
 
     const setupPromise = (async () => {
-        const [{ default: Voip }] = await Promise.all([
-            import('@hiroosy/baileys-lite/voip')
-        ]);
+        // Use the VoIP engine vendored inside Flexi's Baileys fork.
+        // The fork exports this class from its package root as `Voip`.
+        const { Voip } = await import('@itsliaaa/baileys');
+        if (typeof Voip !== 'function') {
+            throw new Error('The configured Baileys fork does not expose its Voip engine.');
+        }
         const voip = new Voip(sock, { maxConcurrentCalls: 1, voipLogLevel: 'warn' });
         await voip.listen();
 
