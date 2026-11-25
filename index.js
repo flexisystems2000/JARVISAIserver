@@ -720,7 +720,7 @@ agentTools.register({
     name: 'github_list_repositories',
     description: 'List repositories accessible to the configured GitHub token.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['user'],
+    permissions: ['admin'],
     handler: async () => githubAgent.listRepositories()
 });
 agentTools.register({
