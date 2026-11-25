@@ -4,6 +4,7 @@
   "description": "JARVIS AI WhatsApp agent with Vercel deployments, multi-format file creation, approval-gated tools, GitHub integration and Piper services",
   "main": "index.js",
   "scripts": {
+    "postinstall": "node scripts/patch-baileys-sender-key-diagnostics.js",
     "start": "node index.js",
     "check": "node --check index.js && node --check quizEngine.js && node --check channelQuizScheduler.js && node --check paymentHandler.js && node --check rich-renderer.js && for f in agent/*.js test/*.js; do node --check \"$f\" || exit 1; done",
     "test": "node --test"
