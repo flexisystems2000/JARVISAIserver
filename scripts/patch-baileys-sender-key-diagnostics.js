@@ -174,11 +174,11 @@ patchFile(path.join('lib', 'Socket', 'messages-recv.js'), source => {
         '        }\n        catch (error) {';
     source = replaceOnce(source, upsertAnchor, upsertReplacement, 'retry queued statuses after a successfully processed message');
     source = replaceOnce(source,
-        "                await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');\\n                processed = true;",
-        "                await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');\\n" +
-        "                if (node.tag === 'status' && isJidGroup(msg.key?.remoteJid)) {\\n" +
-        "                    logger.info({ groupJid: msg.key.remoteJid, statusId: msg.key.id, participant: msg.key.participant || node.attrs?.participant || null, messageTypes: Object.keys(msg.message || {}) }, 'GROUP_STATUS_DIAGNOSTIC decrypted and emitted messages.upsert');\\n" +
-        "                }\\n" +
+        "                await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');\n                processed = true;",
+        "                await upsertMessage(msg, isOfflineNode(node) ? 'append' : 'notify');\n" +
+        "                if (node.tag === 'status' && isJidGroup(msg.key?.remoteJid)) {\n" +
+        "                    logger.info({ groupJid: msg.key.remoteJid, statusId: msg.key.id, participant: msg.key.participant || node.attrs?.participant || null, messageTypes: Object.keys(msg.message || {}) }, 'GROUP_STATUS_DIAGNOSTIC decrypted and emitted messages.upsert');\n" +
+        "                }\n" +
         "                processed = true;",
         'temporary Group Status successful-decrypt diagnostic'
     );
