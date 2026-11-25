@@ -21,11 +21,11 @@ const packageRoot = findPackageRoot(entry);
 const target = path.join(packageRoot, 'lib', 'Signal', 'libsignal.js');
 let source = fs.readFileSync(target, 'utf8');
 
-if (source.includes('group sender-key lookup diagnostics')) {
+const senderKeyDiagnosticsPresent = source.includes('group sender-key lookup diagnostics');
+if (senderKeyDiagnosticsPresent) {
     console.info('[BAILEYS PATCH] Sender-key diagnostics already present');
-    process.exit(0);
 }
-
+else {
 const oldDecrypt = `        decryptGroupMessage({ group, authorJid, msg }) {
             const senderName = jidToSignalSenderKeyName(group, authorJid);
             const cipher = new GroupCipher(storage, senderName);
@@ -90,6 +90,7 @@ if (!source.includes(oldDecrypt) || !source.includes(oldDistribution)) {
 source = source.replace(oldDecrypt, newDecrypt).replace(oldDistribution, newDistribution);
 fs.writeFileSync(target, source, 'utf8');
 console.info('[BAILEYS PATCH] Applied sender-key diagnostics without changing the package version');
+}
 
 function replaceOnce(source, before, after, label) {
     const count = source.split(before).length - 1;
