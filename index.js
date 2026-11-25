@@ -2849,7 +2849,7 @@ We wish you success ahead from *${groupName}* 🎓`,
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
     // Never accept or retain API credentials posted in a group.
-    if (jid?.endsWith('@g.us') && /^!connect-token\\b/i.test(earlyBody.trim())) {
+    if (jid?.endsWith('@g.us') && /^!connect-token\b/i.test(earlyBody.trim())) {
         try { await sock.sendMessage(jid, { delete: m.key }); } catch (_) {}
         await sock.sendMessage(jid, { text: '🔒 API tokens can only be connected in a private DM with JARVIS. I will not process or save credentials posted in a group.' });
         continue;
