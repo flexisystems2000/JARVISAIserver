@@ -2579,7 +2579,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 const warnCount = Number(warningRecord?.count || 0);
 
                 await sock.sendMessage(jid, {
-                    text: `⚠️ *JARVIS LINK WARNING*\\n\\n@\${String(sender).split('@')[0]}, posting links is not allowed in this group.\\n\\n*Strike: \${warnCount}/3*\\n\\nA third link offence results in removal.`,
+                    text: `⚠️ *JARVIS LINK WARNING*\n\n@${String(sender).split('@')[0]}, posting links is not allowed in this group.\n\n*Strike: ${warnCount}/3*\n\nA third link offence results in removal.`,
                     mentions: [sender]
                 });
 
@@ -2592,7 +2592,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                         const removalResult = await sock.groupParticipantsUpdate(jid, [sender], 'remove');
                         console.log('[LINK WATCHDOG] Third-strike removal result:', JSON.stringify(removalResult));
                         await sock.sendMessage(jid, {
-                            text: `🚫 @\${String(sender).split('@')[0]} has been removed after 3 link offences.`,
+                            text: `🚫 @${String(sender).split('@')[0]} has been removed after 3 link offences.`,
                             mentions: [sender]
                         });
                     }
