@@ -404,7 +404,7 @@ agentTools.register({
 agentTools.register({
     name: 'group_reset_warnings', description: 'Reset a participant warning count. Requires group admin permission.',
     parameters: { type: 'object', properties: { participant: { type: 'string', minLength: 7, maxLength: 100 } }, required: ['participant'], additionalProperties: false }, permissions: ['admin'],
-    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; const result = await Warn.deleteOne({ userId: target }); return { reset: result.deletedCount > 0, participant: target }; }
+    handler: async ({ participant }, context) => { await assertAgentGroupAdmin(context); const target = participant.includes('@') ? participant : `${participant.replace(/\D/g,'')}@s.whatsapp.net`; const result = await Warn.deleteOne({ userId: `${context.chatId}:${target}` }); return { reset: result.deletedCount > 0, participant: target }; }
 });
 
 agentTools.register({
@@ -2929,14 +2929,19 @@ if (
                 delete: m.key
             }).catch(() => {});
 
-            if (!global.db) global.db = { data: { users: {} } };
-            if (!global.db.data.users[participant]) {
-                global.db.data.users[participant] = { warn: 0 };
+            // Keep strikes persistent across restarts and isolated per group.
+            // The third offence must still be recognised after a JARVIS redeploy.
+            if (mongoose.connection.readyState !== 1) {
+                throw new Error('MongoDB is not connected; cannot safely record anti-status warning.');
             }
+            const warningKey = `${groupJid}:${participant}`;
+            const warningRecord = await Warn.findOneAndUpdate(
+                { userId: warningKey },
+                { $inc: { count: 1 } },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            ).lean();
 
-            global.db.data.users[participant].warn += 1;
-
-            const warnCount = global.db.data.users[participant].warn;
+            const warnCount = Number(warningRecord?.count || 0);
             const maxWarns = 3;
 
             const msg =
