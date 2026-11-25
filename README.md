@@ -156,15 +156,20 @@ Weekday questions are published every 4 minutes and explanations every 5 minutes
 
 ## Gemini Live WhatsApp calls (same Baileys account)
 
-JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses the HirooSy VoIP engine vendored in Flexi's own `@itsliaaa/baileys` fork, against the existing WhatsApp socket; it does not install a separate calling package, create a second WhatsApp account, or write a second authentication session.
+JARVIS can optionally answer incoming WhatsApp voice calls using the existing WhatsApp socket and a separate call-media adapter. The adapter uses the HirooSy VoIP engine vendored in Flexi's own `@flexisystems/baileys` package, against the existing WhatsApp socket; it does not install a separate calling package, create a second WhatsApp account, or write a second authentication session.
 
 Set `AI_API_KEY` in the JARVIS hosting environment to the same value as `JARVIS_API_KEY` on the Flexi Educational Consult AI Link. JARVIS connects to the authenticated `/voice` WebSocket endpoint and sends/receives call audio through that service. Gemini API keys remain configured only on the AI Link server; do not add `GEMINI_API_KEY` to JARVIS.
 
 Requirements and limitations:
-- The call adapter relies on Baileys internal socket methods. Compatibility with the installed `@itsliaaa/baileys` fork must be verified in a real staging call; if setup fails, the normal JARVIS bot continues running and logs the reason.
+- The call adapter relies on Baileys internal socket methods. Compatibility with the installed `@flexisystems/baileys` fork must be verified in a real staging call; if setup fails, the normal JARVIS bot continues running and logs the reason.
 - The hosting runtime must support the package's Node.js requirements and WhatsApp call media networking. FFmpeg/ffprobe are documented requirements for the package's media features.
 - The bridge converts WhatsApp 16 kHz Float32 audio to Gemini 16 kHz PCM16, then converts Gemini 24 kHz PCM16 responses back to 16 kHz Float32 for WhatsApp.
 - One concurrent AI call is allowed. Additional incoming calls are rejected while JARVIS is busy.
 - This is an experimental unofficial WhatsApp Web calling integration. It is not an official WhatsApp Business Calling API integration, and successful deployment is not proof of live call compatibility. Test with a non-critical account/session first.
 - If `AI_API_KEY` is absent, JARVIS retains the previous incoming-call detection and owner-alert behavior only.
 
+
+
+## Direct WhatsApp group status publishing
+
+Group administrators can publish a text status directly to the current group with `!groupstatus [text]`. The command uses `sock.sendGroupStatus()` from `@flexisystems/baileys` and is distinct from personal status mentions.
