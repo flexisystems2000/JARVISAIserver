@@ -51,6 +51,10 @@ class GeneralFileGeneratorTests(unittest.TestCase):
             if ext == 'pdf':
                 self.assertTrue(output.startswith(b'%PDF-'))
 
+    def test_every_advertised_extension_has_a_mime_type(self):
+        expected = 'pdf docx xlsx pptx csv txt md html json xml yaml yml css js py php java cpp sql svg zip rtf ts tsx jsx c h cs go rs rb sh ps1 bat toml ini conf properties tex mdx jsonl'.split()
+        self.assertEqual(set(expected) - set(MIME_TYPES), set())
+
     def test_csv_and_json_are_validated(self):
         payload = GeneralFileRequest(filename='table.csv', content=json.dumps({'headers': ['Name', 'Score'], 'rows': [['Ada', 95]]}))
         output = _make_general_file(payload, 'csv').decode('utf-8-sig')
