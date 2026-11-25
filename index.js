@@ -2388,6 +2388,118 @@ We wish you success ahead from *${groupName}* 🎓`,
         }
     }
 
+    // Moderate Group Status directly from the raw stanza metadata. This event is
+    // emitted before Baileys attempts decryption, so status media/content is not needed.
+    const processedGroupStatusModeration = new Map();
+    sock.ev.on('group-status', async (statusEvent) => {
+        const groupJid = statusEvent?.groupJid;
+        const statusId = statusEvent?.statusId;
+        const authorJid = statusEvent?.participant;
+        const authorAlt = statusEvent?.participantAlt;
+        if (!groupJid?.endsWith('@g.us') || !statusId || !authorJid || !String(authorJid).includes('@')) return;
+
+        try {
+            const metadata = await sock.groupMetadata(groupJid);
+            const sameWhatsAppUser = (left, right) => {
+                if (!left || !right) return false;
+                try { return areJidsSameUser(left, right); }
+                catch (_) { return String(left).split('@')[0] === String(right).split('@')[0]; }
+            };
+            const author = (metadata.participants || []).find(person =>
+                [person.id, person.phoneNumber, person.lid, authorAlt].filter(Boolean)
+                    .some(candidate => sameWhatsAppUser(candidate, authorJid) || sameWhatsAppUser(candidate, authorAlt))
+            );
+            if (!author) {
+                console.warn('[GROUP STATUS MODERATION] Author was not found in current group metadata; leaving status untouched.', {
+                    groupJid, statusId, addressingMode: statusEvent.addressingMode || null
+                });
+                return;
+            }
+            if (author.admin) {
+                console.info('[GROUP STATUS MODERATION] Admin Group Status exempted.', { groupJid, statusId });
+                return;
+            }
+
+            const moderationKey = groupJid + '::' + statusId;
+            const now = Date.now();
+            for (const [key, expiresAt] of processedGroupStatusModeration) {
+                if (expiresAt <= now) processedGroupStatusModeration.delete(key);
+            }
+            if (processedGroupStatusModeration.has(moderationKey)) return;
+            processedGroupStatusModeration.set(moderationKey, now + 24 * 60 * 60 * 1000);
+            while (processedGroupStatusModeration.size > 1000) {
+                processedGroupStatusModeration.delete(processedGroupStatusModeration.keys().next().value);
+            }
+
+            const offender = author.id || authorJid;
+            const botJid = sock.user?.id || sock.user?.lid;
+            const botParticipant = (metadata.participants || []).find(person =>
+                [person.id, person.phoneNumber, person.lid].filter(Boolean)
+                    .some(candidate => sameWhatsAppUser(candidate, sock.user?.id) || sameWhatsAppUser(candidate, sock.user?.lid))
+            );
+            const botIsAdmin = Boolean(botParticipant?.admin);
+
+            if (botIsAdmin) {
+                try {
+                    await sock.sendMessage(groupJid, {
+                        delete: {
+                            remoteJid: groupJid,
+                            id: statusId,
+                            participant: authorJid,
+                            fromMe: false,
+                            isGroupStatus: true
+                        }
+                    });
+                    console.info('[GROUP STATUS MODERATION] Group Status revoke request sent.', { groupJid, statusId });
+                } catch (deleteError) {
+                    console.error('[GROUP STATUS MODERATION] Group Status revoke failed:', deleteError.message, { groupJid, statusId });
+                }
+            } else {
+                console.warn('[GROUP STATUS MODERATION] JARVIS is not a group admin; cannot revoke this status.', { groupJid, statusId });
+            }
+
+            if (mongoose.connection.readyState !== 1) {
+                console.error('[GROUP STATUS MODERATION] MongoDB unavailable; warning strike was not recorded.', { groupJid, statusId });
+                return;
+            }
+
+            const warningKey = groupJid + ':' + offender;
+            const warningRecord = await Warn.findOneAndUpdate(
+                { userId: warningKey },
+                { $inc: { count: 1 } },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            ).lean();
+            const warnCount = Number(warningRecord?.count || 0);
+
+            await sock.sendMessage(groupJid, {
+                text: '⚠️ *JARVIS GROUP STATUS WARNING*\\n\\n@' + String(offender).split('@')[0] +
+                    ', posting a Group Status in this group is not allowed for non-admin members.\\n\\n*Strike: ' +
+                    warnCount + '/3*',
+                mentions: [offender]
+            });
+
+            if (warnCount >= 3) {
+                if (!botIsAdmin) {
+                    await sock.sendMessage(groupJid, {
+                        text: '🚫 Third Group Status strike recorded, but I cannot remove the member because JARVIS is not a group admin.'
+                    });
+                    console.warn('[GROUP STATUS MODERATION] Third strike recorded; removal skipped because JARVIS is not admin.', { groupJid, statusId });
+                } else {
+                    const removalResult = await sock.groupParticipantsUpdate(groupJid, [offender], 'remove');
+                    console.info('[GROUP STATUS MODERATION] Third-strike removal result:', JSON.stringify(removalResult));
+                    await sock.sendMessage(groupJid, {
+                        text: '🚫 @' + String(offender).split('@')[0] + ' has been removed after reaching 3 Group Status warnings.',
+                        mentions: [offender]
+                    });
+                }
+            }
+        } catch (moderationError) {
+            console.error('[GROUP STATUS MODERATION] Enforcement failed:', moderationError.message, {
+                groupJid, statusId
+            });
+        }
+    });
+
     function findStatusMentionProtocolMessage(root) {
         const queue = [root];
         const seen = new Set();
