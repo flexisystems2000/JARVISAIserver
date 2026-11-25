@@ -2419,7 +2419,7 @@ We wish you success ahead from *${groupName}* 🎓`,
             legacyStubType === 'group_mention_notification' ||
             Number(legacyStubType) === 156;
         if (isStatusMention) {
-            const offender = m.key.participant || statusMentionProtocol?.key?.participant;
+            const offender = m.key.participant || statusMentionProtocol?.key?.participant || m.messageStubParameters?.[0];
             if (!offender || !String(offender).includes('@')) {
                 console.warn('[ANTI-STATUS] Detected status mention but could not resolve its sender.', {
                     groupJid: jid, messageId: m.key.id, stubType: legacyStubType,
