@@ -66,6 +66,7 @@ const { ApprovalManager } = require('./agent/approvals');
 const { runSandboxed } = require('./agent/shellAgent');
 const { GitHubAgent } = require('./agent/githubAgent');
 const { VercelAgent } = require('./agent/vercelAgent');
+const { CodingAgent } = require('./agent/codingAgent');
 const { inferCreateFileFormat, validateCreateFileRequest, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('./fileGenerator');
 const { DynamicCommandBuilder } = require('./agent/dynamicCommandBuilder');
 const { PlatformAuth } = require('./agent/platformAuth');
@@ -648,11 +649,46 @@ agentTools.register({
 });
 agentTools.register({
     name: 'website_create_and_deploy',
-    description: 'Deploy a website project to Vercel and return its verified .vercel.app URL. Requires explicit JARVIS approval.',
-    parameters: { type: 'object', properties: { repo: { type: 'string', maxLength: 100 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 1000000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo','files'], additionalProperties: false },
+    description: 'Generate a complete website from a natural-language specification and deploy a supported static website to Vercel, or deploy supplied static files. Production deployment requires explicit approval. Framework projects that need a build are not sent through the static uploader.',
+    parameters: { type: 'object', properties: { repo: { type: 'string', maxLength: 100 }, request: { type: 'string', minLength: 10, maxLength: 10000 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 1000000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo'], additionalProperties: false },
     permissions: ['admin'],
     requiresApproval: true,
-    handler: async ({ repo, files }) => vercelAgent.deployFiles({ name: repo, files, production: true })
+    handler: async ({ repo, request, files }, context) => {
+        if (request) {
+            const coding = new CodingAgent({ vercel: vercelAgent, askModel: prompt => askAIWithMemory(context.chatId, context.actor, prompt) });
+            return coding.createAndDeploy({ request, projectName: repo, approved: true });
+        }
+        if (!Array.isArray(files) || !files.length) throw new Error('Provide a website specification or a list of website files.');
+        return vercelAgent.deployFiles({ name: repo, files, production: true });
+    }
+});
+agentTools.register({
+    name: 'coding_project_create',
+    description: 'Build a complete multi-file software project from a natural-language request (website, full-stack app, API, Python/Node project, script, library, data project or source files), validate it, save a project record and deliver all files as a ZIP archive. Does not deploy or execute untrusted project code.',
+    parameters: { type: 'object', properties: { request: { type: 'string', minLength: 10, maxLength: 10000 }, projectName: { type: 'string', maxLength: 80 } }, required: ['request'], additionalProperties: false },
+    permissions: ['admin'],
+    handler: async ({ request, projectName }, context) => {
+        if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
+        const coding = new CodingAgent({ vercel: vercelAgent, askModel: prompt => askAIWithMemory(context.chatId, context.actor, prompt) });
+        const project = await coding.createProject({ request, projectName });
+        const apiKey = String(process.env.PIPER_API_KEY || '').trim();
+        if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
+        const filename = project.name + '.zip';
+        const response = await axios.post(PIPER_DOCUMENT_API_URL + '/files/generate', {
+            filename, title: project.name, files: project.projectFiles
+        }, {
+            timeout: PIPER_DOCUMENT_TIMEOUT_MS, maxContentLength: 20 * 1024 * 1024, maxBodyLength: 20 * 1024 * 1024,
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+        });
+        if (!response.data?.success || !response.data?.fileBase64) throw new Error(response.data?.error || 'Project archive service returned no ZIP file.');
+        const buffer = Buffer.from(response.data.fileBase64, 'base64');
+        if (buffer.subarray(0, 4).toString('hex') !== '504b0304') throw new Error('Project archive service returned an invalid ZIP file.');
+        await context.sock.sendMessage(context.chatId, {
+            document: buffer, mimetype: 'application/zip', fileName: response.data.filename || filename,
+            caption: '✅ *JARVIS Coding Agent*\\n\\nProject: ' + project.name + '\\nType: ' + project.projectType + '\\nFiles: ' + project.fileCount + '\\n\\nThe project files are packaged in this ZIP. No code was executed or deployed.'
+        });
+        return { created: true, project: project.name, projectType: project.projectType, fileCount: project.fileCount, filename: response.data.filename || filename };
+    }
 });
 agentTools.register({
     name: 'github_repository_deploy_to_vercel',
