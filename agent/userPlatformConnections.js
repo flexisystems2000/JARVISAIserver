@@ -65,6 +65,118 @@ const PROVIDERS = {
       return { id: String(r.data.sub), username: r.data.preferred_username || r.data.name || null, email: r.data.email || null };
     }
   }
+  ,
+  gitlab: {
+    label: 'GitLab',
+    clientIdEnv: 'GITLAB_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'GITLAB_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://gitlab.com/oauth/authorize',
+    tokenUrl: 'https://gitlab.com/oauth/token',
+    userUrl: 'https://gitlab.com/api/v4/user',
+    scopes: ['read_user', 'api'],
+    tokenAuth: 'body',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      if (!r.data.id) throw new Error('GitLab did not return a verified account identity.');
+      return { id: String(r.data.id), username: r.data.username || r.data.name || null, email: r.data.email || null };
+    }
+  },
+  netlify: {
+    label: 'Netlify',
+    clientIdEnv: 'NETLIFY_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'NETLIFY_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://app.netlify.com/authorize',
+    tokenUrl: 'https://api.netlify.com/oauth/token',
+    userUrl: 'https://api.netlify.com/api/v1/user',
+    scopes: [],
+    pkce: false,
+    tokenAuth: 'body',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      if (!r.data.id) throw new Error('Netlify did not return a verified account identity.');
+      return { id: String(r.data.id), username: r.data.full_name || r.data.slug || r.data.email || null, email: r.data.email || null };
+    }
+  },
+  discord: {
+    label: 'Discord',
+    clientIdEnv: 'DISCORD_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'DISCORD_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://discord.com/oauth2/authorize',
+    tokenUrl: 'https://discord.com/api/oauth2/token',
+    userUrl: 'https://discord.com/api/users/@me',
+    scopes: ['identify', 'email'],
+    tokenAuth: 'body',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      if (!r.data.id) throw new Error('Discord did not return a verified account identity.');
+      return { id: String(r.data.id), username: r.data.global_name || r.data.username || null, email: r.data.email || null };
+    }
+  },
+  notion: {
+    label: 'Notion',
+    clientIdEnv: 'NOTION_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'NOTION_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://api.notion.com/v1/oauth/authorize',
+    tokenUrl: 'https://api.notion.com/v1/oauth/token',
+    userUrl: 'https://api.notion.com/v1/users/me',
+    scopes: [],
+    pkce: false,
+    tokenAuth: 'basic',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}`, 'Notion-Version': '2022-06-28' } });
+      const id = r.data.id || r.data.owner?.user?.id || r.data.workspace_id;
+      if (!id) throw new Error('Notion did not return a verified account identity.');
+      return { id: String(id), username: r.data.name || r.data.owner?.user?.name || r.data.workspace_name || null, email: r.data.person?.email || r.data.owner?.user?.person?.email || null };
+    }
+  },
+  dropbox: {
+    label: 'Dropbox',
+    clientIdEnv: 'DROPBOX_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'DROPBOX_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://www.dropbox.com/oauth2/authorize',
+    tokenUrl: 'https://api.dropboxapi.com/oauth2/token',
+    userUrl: 'https://api.dropboxapi.com/2/users/get_current_account',
+    scopes: [],
+    tokenAuth: 'basic',
+    async identify(token) {
+      const r = await axios.post(this.userUrl, null, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      if (!r.data.account_id) throw new Error('Dropbox did not return a verified account identity.');
+      return { id: String(r.data.account_id), username: r.data.name?.display_name || null, email: r.data.email || null };
+    }
+  },
+  figma: {
+    label: 'Figma',
+    clientIdEnv: 'FIGMA_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'FIGMA_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://www.figma.com/oauth',
+    tokenUrl: 'https://api.figma.com/v1/oauth/token',
+    userUrl: 'https://api.figma.com/v1/me',
+    scopes: ['current_user:read', 'file_content:read', 'file_metadata:read'],
+    pkce: false,
+    tokenAuth: 'basic',
+    async identify(token) {
+      const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}` } });
+      if (!r.data.id) throw new Error('Figma did not return a verified account identity.');
+      return { id: String(r.data.id), username: r.data.handle || r.data.email || null, email: r.data.email || null };
+    }
+  },
+  linear: {
+    label: 'Linear',
+    clientIdEnv: 'LINEAR_OAUTH_CLIENT_ID',
+    clientSecretEnv: 'LINEAR_OAUTH_CLIENT_SECRET',
+    authorizeUrl: 'https://linear.app/oauth/authorize',
+    tokenUrl: 'https://api.linear.app/oauth/token',
+    userUrl: 'https://api.linear.app/graphql',
+    scopes: ['read', 'write'],
+    tokenAuth: 'body',
+    async identify(token) {
+      const r = await axios.post(this.userUrl, { query: 'query { viewer { id name email } }' }, { timeout: 15000, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } });
+      const user = r.data.data?.viewer;
+      if (!user?.id) throw new Error('Linear did not return a verified account identity.');
+      return { id: String(user.id), username: user.name || null, email: user.email || null };
+    }
+  }
+
 };
 
 function b64url(value) { return Buffer.from(value).toString('base64url'); }
@@ -134,7 +246,7 @@ class UserPlatformConnections {
     await this.State.create({ stateHash: sha(state), actor: owner, provider, verifier, expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
     const url = new URL(p.authorizeUrl);
     const params = { client_id: clientId, redirect_uri: redirectUri, response_type: 'code', state, code_challenge: sha(verifier), code_challenge_method: 'S256' };
-    if (provider !== 'supabase') params.scope = p.scopes.join(' ');
+    if (provider !== 'supabase' && p.scopes.length) params.scope = p.scopes.join(' ');
     // Supabase scopes are configured on the registered OAuth app; its docs mark
     // the request-time scope parameter as deprecated.
     Object.assign(params, p.extraAuthorize || {});
