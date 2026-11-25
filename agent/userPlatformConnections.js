@@ -231,7 +231,7 @@ class UserPlatformConnections {
   }
   config(provider) {
     const p = PROVIDERS[provider];
-    if (!p) throw new Error('Unsupported OAuth provider. Available: github, supabase, google, vercel.');
+    if (!p) throw new Error(`Unsupported OAuth provider. Available: ${Object.keys(PROVIDERS).join(', ')}.`);
     const clientId = process.env[p.clientIdEnv], clientSecret = process.env[p.clientSecretEnv];
     if (!clientId || !clientSecret) throw new Error(`${p.label} OAuth is not configured yet. Missing ${p.clientIdEnv} or ${p.clientSecretEnv}.`);
     if (!this.baseUrl || !this.baseUrl.startsWith('https://')) throw new Error('PLATFORM_OAUTH_BASE_URL must be the public HTTPS base URL of JARVIS.');
@@ -245,7 +245,8 @@ class UserPlatformConnections {
     const verifier = b64url(crypto.randomBytes(48));
     await this.State.create({ stateHash: sha(state), actor: owner, provider, verifier, expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
     const url = new URL(p.authorizeUrl);
-    const params = { client_id: clientId, redirect_uri: redirectUri, response_type: 'code', state, code_challenge: sha(verifier), code_challenge_method: 'S256' };
+    const params = { client_id: clientId, redirect_uri: redirectUri, response_type: 'code', state };
+    if (p.pkce !== false) { params.code_challenge = sha(verifier); params.code_challenge_method = 'S256'; }
     if (provider !== 'supabase' && p.scopes.length) params.scope = p.scopes.join(' ');
     // Supabase scopes are configured on the registered OAuth app; its docs mark
     // the request-time scope parameter as deprecated.
@@ -257,7 +258,8 @@ class UserPlatformConnections {
     const { p, clientId, clientSecret, redirectUri } = this.config(provider);
     const pending = await this.State.findOneAndDelete({ stateHash: sha(String(state || '')), provider, expiresAt: { $gt: new Date() } });
     if (!pending) throw new Error('OAuth state is invalid, expired, or already used. Start the connection again.');
-    const body = new URLSearchParams({ grant_type: 'authorization_code', code: String(code || ''), redirect_uri: redirectUri, code_verifier: pending.verifier });
+    const body = new URLSearchParams({ grant_type: 'authorization_code', code: String(code || ''), redirect_uri: redirectUri });
+    if (p.pkce !== false) body.set('code_verifier', pending.verifier);
     let headers = { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' };
     if (p.tokenAuth === 'basic') headers.Authorization = 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
     else { body.set('client_id', clientId); body.set('client_secret', clientSecret); }
