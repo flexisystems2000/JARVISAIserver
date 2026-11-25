@@ -19,6 +19,7 @@ const BUILT_IN_COMMANDS = [
   ['!status','Bot & Group Info','!status','Show bot status'],
   ['!healthgraph','Bot & Group Info','!healthgraph','Show health graph'],
   ['!ginfo','Bot & Group Info','!ginfo','Show group information'],
+  ['!groupstatus','Group Management','!groupstatus [text]','Publish a text status directly to the current group'],
   ['!listadmins','Bot & Group Info','!listadmins','List group admins'],
   ['!listonline','Bot & Group Info','!listonline','List recently active members'],
   ['!getjid','Bot & Group Info','!getjid','Show current chat JID'],
