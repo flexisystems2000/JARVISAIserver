@@ -2532,36 +2532,77 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     activityTracker.set(sender, Date.now());
 
-    // LINK WATCHDOG: deterministic moderation; no AI/model call is involved.
-    // Only incoming group messages are checked. Live metadata protects group
-    // admins, and deletion is attempted only when JARVIS is itself an admin.
+    // LINK WATCHDOG: persistent three-strike moderation for ordinary members.
+    // Group admins are exempt. Warning counts are scoped to this group, just
+    // like anti-status warnings, and still increment if JARVIS lacks admin rights.
     if (jid?.endsWith('@g.us') && !m.key.fromMe && containsLink(earlyBody)) {
         try {
             const senderIsGroupAdmin = await isCurrentWhatsAppGroupAdmin(sock, jid, sender);
             if (!senderIsGroupAdmin) {
-                const metadata = await sock.groupMetadata(jid);
-                const botJids = [sock.user?.id, sock.user?.lid].filter(Boolean);
-                const botParticipant = (metadata.participants || []).find(participant =>
-                    [participant.id, participant.phoneNumber, participant.lid].filter(Boolean)
-                        .some(candidate => botJids.some(botJid => {
-                            try { return areJidsSameUser(candidate, botJid); }
-                            catch (_) { return String(candidate).split('@')[0] === String(botJid).split('@')[0]; }
-                        }))
-                );
-
-                if (!botParticipant?.admin) {
-                    console.warn('[LINK WATCHDOG] Link detected, but JARVIS is not a group admin; cannot delete.');
-                } else {
-                    await sock.sendMessage(jid, { delete: m.key });
-                    console.log(`[LINK WATCHDOG] Deleted a link message from ${sender} in ${jid}`);
-                    await sock.sendMessage(jid, {
-                        text: '🚫 Links are not allowed in this group. Your message was removed.'
-                    }).catch(error => console.warn('[LINK WATCHDOG] Warning message failed:', error.message));
-                    return;
+                if (mongoose.connection.readyState !== 1) {
+                    throw new Error('MongoDB is not connected; cannot persist link warning.');
                 }
+
+                let botIsAdmin = false;
+                try {
+                    const metadata = await sock.groupMetadata(jid);
+                    const botJids = [sock.user?.id, sock.user?.lid].filter(Boolean);
+                    const botParticipant = (metadata.participants || []).find(participant =>
+                        [participant.id, participant.phoneNumber, participant.lid].filter(Boolean)
+                            .some(candidate => botJids.some(botJid => {
+                                try { return areJidsSameUser(candidate, botJid); }
+                                catch (_) { return String(candidate).split('@')[0] === String(botJid).split('@')[0]; }
+                            }))
+                    );
+                    botIsAdmin = Boolean(botParticipant?.admin);
+                } catch (metadataError) {
+                    console.warn('[LINK WATCHDOG] Could not verify JARVIS admin status:', metadataError.message);
+                }
+
+                if (botIsAdmin) {
+                    try {
+                        await sock.sendMessage(jid, { delete: m.key });
+                        console.log('[LINK WATCHDOG] Deleted link message', { groupJid: jid, sender, messageId: m.key.id });
+                    } catch (deleteError) {
+                        console.warn('[LINK WATCHDOG] Could not delete link message:', deleteError.message);
+                    }
+                } else {
+                    console.warn('[LINK WATCHDOG] Link detected; JARVIS is not a group admin, so deletion/removal may be unavailable.');
+                }
+
+                const warningKey = `${jid}:${sender}`;
+                const warningRecord = await Warn.findOneAndUpdate(
+                    { userId: warningKey },
+                    { $inc: { count: 1 } },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                ).lean();
+                const warnCount = Number(warningRecord?.count || 0);
+
+                await sock.sendMessage(jid, {
+                    text: `⚠️ *JARVIS LINK WARNING*\\n\\n@\${String(sender).split('@')[0]}, posting links is not allowed in this group.\\n\\n*Strike: \${warnCount}/3*\\n\\nA third link offence results in removal.`,
+                    mentions: [sender]
+                });
+
+                if (warnCount >= 3) {
+                    if (!botIsAdmin) {
+                        await sock.sendMessage(jid, {
+                            text: '🚫 Third link strike recorded, but I cannot remove the member because JARVIS is not a group admin.'
+                        });
+                    } else {
+                        const removalResult = await sock.groupParticipantsUpdate(jid, [sender], 'remove');
+                        console.log('[LINK WATCHDOG] Third-strike removal result:', JSON.stringify(removalResult));
+                        await sock.sendMessage(jid, {
+                            text: `🚫 @\${String(sender).split('@')[0]} has been removed after 3 link offences.`,
+                            mentions: [sender]
+                        });
+                    }
+                }
+                continue;
             }
         } catch (error) {
-            console.error('[LINK WATCHDOG] Moderation failed safely:', error.message);
+            console.error('[LINK WATCHDOG] Three-strike enforcement failed:', error.message, {
+                groupJid: jid, sender, messageId: m.key.id
+            });
         }
     }
 
