@@ -7,9 +7,42 @@ function compactCatalog(value, maxChars) {
   let items;
   try { items = JSON.parse(String(value || '[]')); } catch (_) { return String(value || '').slice(0, maxChars); }
   if (!Array.isArray(items)) return JSON.stringify(items).slice(0, maxChars);
+  // Put software-building tools near the front. The catalog is capped at
+  // 4,200 characters; registration order previously caused the GitHub tools
+  // (registered later in index.js) to be silently omitted from the planner.
+  const priority = [
+    'github_list_repositories',
+    'github_create_repository',
+    'github_inspect_tree',
+    'github_read_file',
+    'github_repository_download',
+    'github_create_branch',
+    'github_write_file',
+    'github_batch_write_files',
+    'github_search_code',
+    'github_repository_deploy_to_vercel',
+    'github_enable_pages',
+    'github_pages_status',
+    'github_pull_requests',
+    'github_create_pull_request',
+    'github_merge_pull_request',
+    'github_list_workflows',
+    'github_list_workflow_runs',
+    'github_dispatch_workflow',
+    'github_rerun_failed_actions',
+    'platform_list_connectors',
+    'platform_connect_start',
+    'website_check',
+    'website_crawl',
+    'file_create'
+  ];
+  const rank = new Map(priority.map((name, index) => [name, index]));
+  const ordered = [...items].sort((a, b) =>
+    (rank.get(a?.name) ?? 10000) - (rank.get(b?.name) ?? 10000)
+  );
   const kept = [];
-  for (const item of items) {
-    const compact = { name: item?.name, description: String(item?.description || '').slice(0, 140), ...(item?.requiresApproval ? { requiresApproval: true } : {}) };
+  for (const item of ordered) {
+    const compact = { name: item?.name, description: String(item?.description || '').slice(0, 170), ...(item?.requiresApproval ? { requiresApproval: true } : {}) };
     if (JSON.stringify([...kept, compact]).length > maxChars) break;
     kept.push(compact);
   }
