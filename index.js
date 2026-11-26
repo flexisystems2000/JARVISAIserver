@@ -2875,8 +2875,8 @@ We wish you success ahead from *${groupName}* 🎓`,
     // Deterministic personal platform OAuth command. Do not rely on the AI
     // planner to recognise a connection request as a tool call.
     // Trace only connection-command-shaped messages; never log arbitrary chats or API tokens.
-    const isPlatformConnectCandidate = /^!?connect(?:\\s|$)/i.test(earlyBody.trim());
-    const platformConnectMatch = earlyBody.trim().match(/^!?connect\\s+([a-z0-9_-]{2,40})\\s*$/i);
+    const isPlatformConnectCandidate = /^!?connect(?:\s|$)/i.test(earlyBody.trim());
+    const platformConnectMatch = earlyBody.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
     if (isPlatformConnectCandidate) {
         console.log('[PLATFORM OAUTH TRACE] inbound', {
             messageId: m.key?.id || null,
