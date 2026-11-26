@@ -318,11 +318,19 @@ async function saveGroupMessage(message, groupJid, senderJid) {
 async function getGroupConversationContext(groupJid, limit = 45, quotedMessageId = '') {
     if (!groupJid?.endsWith('@g.us') || mongoose.connection.readyState !== 1) return '';
     try {
-        const messages = await GroupMessage.find({ groupJid })
+        const cutoff = new Date(Date.now() - 10 * 60 * 1000);
+        // Remove expired shared discussion so a group becomes a fresh context
+        // after ten minutes without new messages.
+        await GroupMessage.deleteMany({ groupJid, createdAt: { $lt: cutoff } });
+        const messages = await GroupMessage.find({ groupJid, createdAt: { $gte: cutoff } })
             .sort({ createdAt: -1 }).limit(Math.max(5, Math.min(Number(limit) || 45, 80))).lean();
         const ordered = messages.reverse();
         let quoted = null;
-        if (quotedMessageId) quoted = await GroupMessage.findOne({ groupJid, messageId: String(quotedMessageId) }).lean();
+        if (quotedMessageId) {
+            quoted = await GroupMessage.findOne({
+                groupJid, messageId: String(quotedMessageId), createdAt: { $gte: cutoff }
+            }).lean();
+        }
         return formatGroupTranscript(ordered, quoted);
     } catch (error) {
         console.warn('[GROUP-MEMORY] Could not read group context:', error.message);
