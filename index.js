@@ -4506,7 +4506,7 @@ for (const identity of botIdentities) {
     const local = jidLocalPart(identity);
     if (!local) continue;
     const escaped = local.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    aiPromptText = aiPromptText.replace(new RegExp(`@${escaped}(?=\s|$|[.,!?])`, 'g'), '');
+    aiPromptText = aiPromptText.replace(new RegExp(`@${escaped}(?=\\s|$|[.,!?])`, 'g'), '');
 }
 aiPromptText = aiPromptText.replace(/\s+/g, ' ').trim();
 
@@ -8565,7 +8565,7 @@ function escapeJs(value){
         .replace(/\\\\/g,'\\\\\\\\')
         .replace(/'/g,"\\\\'")
         .replace(/"/g,'&quot;')
-        .replace(/\n/g,'\\\n')
+        .replace(/\\n/g,'\\\\n')
         .replace(/\\r/g,'\\\\r');
 
 }
