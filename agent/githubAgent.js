@@ -91,6 +91,63 @@ class GitHubAgent {
     return { success: true, repository: repository.full_name, branch: targetBranch, filesWritten: treeEntries.length, commitSha: commit.sha, commitUrl: commit.html_url || null };
   }
 
+
+  async getPages(owner, repo) {
+    const p = this.repo(owner, repo);
+    try { return (await this.client().get(`/repos/${p.owner}/${p.repo}/pages`)).data; }
+    catch (error) { if (error.response?.status === 404) return null; throw error; }
+  }
+  async enablePages(owner, repo, branch = 'main', path = '/', approved = false) {
+    if (!approved) throw new Error('Explicit approval required before enabling GitHub Pages');
+    await this.assertRepositoryPermission(owner, repo, 'admin');
+    if (typeof branch !== 'string' || !/^[A-Za-z0-9._/-]{1,200}$/.test(branch) || branch.includes('..')) throw new Error('Invalid GitHub Pages publishing branch');
+    if (!['/', '/docs'].includes(path)) throw new Error('GitHub Pages source folder must be / or /docs');
+    const p = this.repo(owner, repo), c = this.client();
+    const payload = { source: { branch, path } };
+    const current = await this.getPages(owner, repo);
+    const response = current
+      ? await c.put(`/repos/${p.owner}/${p.repo}/pages`, payload)
+      : await c.post(`/repos/${p.owner}/${p.repo}/pages`, payload);
+    return { enabled: true, url: response.data.html_url || current?.html_url || null, status: response.data.status || current?.status || 'building', branch, path };
+  }
+  async listWorkflows(owner, repo) {
+    const p = this.repo(owner, repo);
+    const r = await this.client().get(`/repos/${p.owner}/${p.repo}/actions/workflows`, { params: { per_page: 100 } });
+    return (r.data.workflows || []).map(w => ({ id: w.id, name: w.name, path: w.path, state: w.state, url: w.html_url }));
+  }
+  async listWorkflowRuns(owner, repo, branch, perPage = 20) {
+    const p = this.repo(owner, repo);
+    const params = { per_page: Math.max(1, Math.min(Number(perPage) || 20, 100)) };
+    if (branch) params.branch = branch;
+    const r = await this.client().get(`/repos/${p.owner}/${p.repo}/actions/runs`, { params });
+    return (r.data.workflow_runs || []).map(w => ({ id: w.id, name: w.name, event: w.event, status: w.status, conclusion: w.conclusion, branch: w.head_branch, createdAt: w.created_at, url: w.html_url }));
+  }
+  async dispatchWorkflow(owner, repo, workflow, ref = 'main', inputs = {}, approved = false) {
+    if (!approved) throw new Error('Explicit approval required before dispatching a GitHub Actions workflow');
+    const p = this.repo(owner, repo);
+    if (!(typeof workflow === 'string' && (/^\d+$/.test(workflow) || /^[A-Za-z0-9_.-]+\.ya?ml$/i.test(workflow)))) throw new Error('Workflow must be a numeric ID or a workflow YAML filename');
+    if (typeof ref !== 'string' || !/^[A-Za-z0-9._/-]{1,200}$/.test(ref) || ref.includes('..')) throw new Error('Invalid workflow ref');
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs) || Object.keys(inputs).length > 20) throw new Error('Workflow inputs must be an object with at most 20 fields');
+    await this.client().post(`/repos/${p.owner}/${p.repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, { ref, inputs });
+    return { dispatched: true, repository: `${p.owner}/${p.repo}`, workflow, ref };
+  }
+  async createPullRequest(owner, repo, title, head, base, body = '', approved = false) {
+    if (!approved) throw new Error('Explicit approval required before creating a pull request');
+    const p = this.repo(owner, repo);
+    for (const [label, value] of [['title', title], ['head', head], ['base', base]]) if (typeof value !== 'string' || !value.trim() || value.length > 256) throw new Error(`Invalid pull request ${label}`);
+    if (typeof body !== 'string' || body.length > 20000) throw new Error('Pull request body is too long');
+    const r = await this.client().post(`/repos/${p.owner}/${p.repo}/pulls`, { title, head, base, body });
+    return { number: r.data.number, title: r.data.title, state: r.data.state, url: r.data.html_url, head: r.data.head?.ref, base: r.data.base?.ref };
+  }
+  async mergePullRequest(owner, repo, number, method = 'squash', approved = false) {
+    if (!approved) throw new Error('Explicit approval required before merging a pull request');
+    const p = this.repo(owner, repo);
+    if (!Number.isInteger(number) || number < 1) throw new Error('Invalid pull request number');
+    if (!['merge', 'squash', 'rebase'].includes(method)) throw new Error('Invalid pull request merge method');
+    const r = await this.client().put(`/repos/${p.owner}/${p.repo}/pulls/${number}/merge`, { merge_method: method });
+    return { merged: !!r.data.merged, sha: r.data.sha || null, message: r.data.message || '' };
+  }
+
   async listIssues(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/issues`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,pull_request:!!x.pull_request})); }
   async listPullRequests(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/pulls`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,head:x.head.ref,base:x.base.ref})); }
   async createPullRequest(owner,repo,title,head,base,body='') { const p=this.repo(owner,repo); return (await this.client().post(`/repos/${p.owner}/${p.repo}/pulls`,{title,head,base,body})).data; }
