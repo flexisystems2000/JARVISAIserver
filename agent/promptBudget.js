@@ -40,13 +40,19 @@ function compactCatalog(value, maxChars) {
   const ordered = [...items].sort((a, b) =>
     (rank.get(a?.name) ?? 10000) - (rank.get(b?.name) ?? 10000)
   );
-  const kept = [];
-  for (const item of ordered) {
-    const compact = { name: item?.name, description: String(item?.description || '').slice(0, 170), ...(item?.requiresApproval ? { requiresApproval: true } : {}) };
-    if (JSON.stringify([...kept, compact]).length > maxChars) break;
-    kept.push(compact);
+  // Preserve every registered tool name. Reduce descriptions progressively if needed,
+  // rather than stopping at the first overflow and silently hiding later tools.
+  for (const descriptionLimit of [120, 90, 60, 30, 0]) {
+    const kept = ordered.map(item => ({
+      name: item?.name,
+      ...(descriptionLimit ? { description: String(item?.description || '').slice(0, descriptionLimit) } : {}),
+      ...(item?.requiresApproval ? { requiresApproval: true } : {})
+    }));
+    const encoded = JSON.stringify(kept);
+    if (encoded.length <= maxChars) return encoded;
   }
-  return JSON.stringify(kept);
+  // Tool names and approval markers are more important than descriptions.
+  return JSON.stringify(ordered.map(item => ({ name: item?.name, ...(item?.requiresApproval ? { requiresApproval: true } : {}) })));
 }
 
 function compactSchema(value, maxChars) {
@@ -90,7 +96,7 @@ function boundedPrompt({ system = '', catalog = '', history = '', message = '', 
     const preservedRequest = requestText.length > available ? requestText.slice(-available) : requestText;
     return [systemText, policy, `CURRENT USER REQUEST:\n${preservedRequest}`].join('\n\n');
   }
-  const catalogBudget = Math.max(0, Math.min(4200, limit - fixedLength - 300));
+  const catalogBudget = Math.max(0, Math.min(6000, limit - fixedLength - 300));
   const catalogText = compactCatalog(catalog, catalogBudget);
   const historyBudget = Math.max(0, limit - fixedLength - catalogText.length - 160);
   const historyText = historyBudget > 0 ? String(history || '').slice(-historyBudget) : '';
