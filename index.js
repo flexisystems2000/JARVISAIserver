@@ -2934,15 +2934,16 @@ We wish you success ahead from *${groupName}* 🎓`,
             const parsedUrl = new URL(started.url);
             if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
             oauthStage = 'send_whatsapp_reply';
-            // Send the OAuth URL as ordinary WhatsApp text. The previous
-            // templateButtons URL button is not reliably rendered on Android
-            // by this Baileys fork, so keep the actual HTTPS URL visible/clickable.
+            // Use the Baileys fork's nativeFlow CTA URL button so Android
+            // receives a real WhatsApp interactive URL button, not a plain link.
             await sock.sendMessage(jid, {
                 text: '🔐 *Connect ' + label + ' to JARVIS*\n\n' +
-                    'Tap this secure authorisation link to connect your own ' + label + ' account. ' +
-                    'This connection belongs only to your WhatsApp account.\n\n' +
-                    started.url + '\n\n' +
-                    '🔒 Secure authorisation • Link expires in 10 minutes'
+                    'Authorise your own ' + label + ' account using the button below. ' +
+                    'This connection belongs only to your WhatsApp account.',
+                footer: '🔒 Secure authorisation • Link expires in 10 minutes',
+                nativeFlow: [
+                    { text: 'Connect ' + label, url: started.url }
+                ]
             }, { skipFlexiBrand: true });
             console.log('[PLATFORM OAUTH TRACE] WhatsApp authorization reply sent', {
                 messageId: m.key?.id || null,
