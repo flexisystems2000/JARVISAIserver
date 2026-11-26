@@ -895,7 +895,7 @@ agentTools.register({
         const parsedUrl = new URL(started.url);
         if (parsedUrl.protocol !== 'https:') throw new Error('The platform authorisation link must use HTTPS.');
         await context.sock.sendMessage(context.chatId, {
-            text: `🔐 *Connect ${label} to JARVIS*\n\nTap the button below to authorise your own ${label} account. JARVIS will only access what you approve.\n\nThis connection belongs to your WhatsApp account.`,
+                text: \`🔐 *Connect \${label} to JARVIS*\n\nTap the button below to authorise your own \${label} account. This connection belongs only to your WhatsApp account.\`,
             footer: 'Secure authorisation • You can disconnect later',
             templateButtons: [{
                 index: 1,
@@ -3103,7 +3103,7 @@ if (
 
     // Deterministic personal platform OAuth command. Do not rely on the AI
     // planner to recognise a connection request as a tool call.
-    const platformConnectMatch = rawMsgCheck.trim().match(/^!?connect\\s+([a-z0-9_-]{2,40})\\s*$/i);
+    const platformConnectMatch = rawMsgCheck.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
     if (platformConnectMatch) {
         const requestedProvider = platformConnectMatch[1].toLowerCase();
         if (jid?.endsWith('@g.us')) {
