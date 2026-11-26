@@ -14,6 +14,25 @@ function parsePlan(raw) {
 function normalizeToolArguments(tool, args, schema) {
   const normalized = { ...(args && typeof args === 'object' && !Array.isArray(args) ? args : {}) };
   const properties = schema?.properties || {};
+
+  // File creation has one canonical argument: "request". Models sometimes
+  // emit content/file_name/title fields from the downstream file API instead.
+  // Fold those useful details into the natural-language request before strict
+  // schema validation, rather than forwarding unsupported keys to the tool.
+  if (tool === 'file_create' && properties.request) {
+    const parts = [];
+    if (typeof normalized.request === 'string' && normalized.request.trim()) parts.push(normalized.request.trim());
+    const body = normalized.content ?? normalized.description ?? normalized.topic ?? normalized.prompt;
+    if (typeof body === 'string' && body.trim() && body.trim() !== normalized.request?.trim()) parts.push(body.trim());
+    const filename = normalized.file_name ?? normalized.filename;
+    if (typeof filename === 'string' && filename.trim()) parts.push(`Requested filename: ${filename.trim()}.`);
+    if (typeof normalized.title === 'string' && normalized.title.trim()) parts.push(`Document title: ${normalized.title.trim()}.`);
+    const format = normalized.format ?? normalized.file_type;
+    if (typeof format === 'string' && format.trim()) parts.push(`Output format: ${format.trim()}.`);
+    if (parts.length) normalized.request = parts.join('\\n').slice(0, 4000);
+    for (const key of ['content', 'description', 'topic', 'prompt', 'file_name', 'filename', 'title', 'format', 'file_type']) delete normalized[key];
+  }
+
   // The planner sometimes calls the repository field `repository`; the registered GitHub tools use `repo`.
   if (properties.repo && normalized.repo === undefined && typeof normalized.repository === 'string') {
     const value = normalized.repository.trim();
