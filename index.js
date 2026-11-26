@@ -2974,8 +2974,27 @@ We wish you success ahead from *${groupName}* 🎓`,
     // Deterministic personal platform OAuth command. Do not rely on the AI
     // planner to recognise a connection request as a tool call.
     // Trace only connection-command-shaped messages; never log arbitrary chats or API tokens.
-    const isPlatformConnectCandidate = /^!?connect(?:\s|$)/i.test(earlyBody.trim());
-    const platformConnectMatch = earlyBody.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
+    const rawEarlyBody = earlyBody.trim();
+    const mentionedJids = normalizedMessage?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const botMentionIds = [sock.user?.id, sock.user?.lid].filter(Boolean);
+    const isBotMentioned = jid?.endsWith('@g.us') && mentionedJids.some(mentioned =>
+        botMentionIds.some(botJid => {
+            try { return typeof areJidsSameUser === 'function' ? areJidsSameUser(mentioned, botJid) : String(mentioned) === String(botJid); }
+            catch (_) { return String(mentioned) === String(botJid); }
+        })
+    );
+    // WhatsApp may prepend the bot's display name to a group mention's text.
+    // Extract a trailing exact Connect command only when JARVIS was mentioned.
+    const plainPlatformConnectMatch = rawEarlyBody.match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
+    const mentionedPlatformConnectMatch = isBotMentioned
+        ? rawEarlyBody.match(/(?:^|\s)(!?connect\s+[a-z0-9_-]{2,40})\s*$/i)
+        : null;
+    const platformConnectText = plainPlatformConnectMatch
+        ? rawEarlyBody
+        : mentionedPlatformConnectMatch?.[1] || '';
+    const isPlatformConnectCandidate = /^!?connect(?:\s|$)/i.test(platformConnectText) ||
+        (isBotMentioned && /(?:^|\s)!?connect(?:\s|$)/i.test(rawEarlyBody));
+    const platformConnectMatch = platformConnectText.match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
     if (isPlatformConnectCandidate) {
         console.log('[PLATFORM OAUTH TRACE] inbound', {
             messageId: m.key?.id || null,
@@ -3008,25 +3027,46 @@ We wish you success ahead from *${groupName}* 🎓`,
         if (jid?.endsWith('@g.us')) {
             try {
                 const metadata = await sock.groupMetadata(jid);
+                const resolvePhoneJid = async value => {
+                    const candidate = String(value || '').trim();
+                    if (candidate.endsWith('@s.whatsapp.net')) return candidate;
+                    if (/^\d{7,20}$/.test(candidate)) return candidate + '@s.whatsapp.net';
+                    if (candidate.endsWith('@lid')) {
+                        // Use Baileys' authoritative LID -> phone mapping before
+                        // relying on optional group participant metadata fields.
+                        const lidMapping = sock.signalRepository?.lidMapping;
+                        if (typeof lidMapping?.getPNForLID === 'function') {
+                            const mapped = await lidMapping.getPNForLID(candidate);
+                            const mappedValue = String(mapped || '').trim();
+                            if (mappedValue.endsWith('@s.whatsapp.net')) return mappedValue;
+                            if (/^\d{7,20}$/.test(mappedValue)) return mappedValue + '@s.whatsapp.net';
+                        }
+                    }
+                    return '';
+                };
+                const senderPhoneJid = await resolvePhoneJid(sender);
                 const participant = (metadata?.participants || []).find(person =>
                     [person?.id, person?.jid, person?.phoneNumber, person?.lid]
                         .filter(Boolean)
                         .some(candidate => {
+                            const candidateText = String(candidate);
+                            if (candidateText === String(sender) ||
+                                (senderPhoneJid && candidateText === senderPhoneJid)) return true;
                             try {
-                                return typeof areJidsSameUser === 'function'
-                                    ? areJidsSameUser(candidate, sender)
-                                    : String(candidate) === String(sender);
+                                return typeof areJidsSameUser === 'function' &&
+                                    (areJidsSameUser(candidate, sender) ||
+                                     (senderPhoneJid && areJidsSameUser(candidate, senderPhoneJid)));
                             } catch (_) {
-                                return String(candidate) === String(sender);
+                                return false;
                             }
                         })
                 );
-                const rawPhoneJid = [participant?.phoneNumber, participant?.id, participant?.jid]
-                    .find(value => typeof value === 'string' &&
-                        (value.endsWith('@s.whatsapp.net') || /^\d{7,20}$/.test(value)));
-                const resolvedPhoneJid = rawPhoneJid
-                    ? (rawPhoneJid.includes('@') ? rawPhoneJid : `${rawPhoneJid}@s.whatsapp.net`)
-                    : (String(sender || '').endsWith('@s.whatsapp.net') ? sender : '');
+                const resolvedPhoneJid =
+                    await resolvePhoneJid(participant?.phoneNumber) ||
+                    await resolvePhoneJid(participant?.id) ||
+                    await resolvePhoneJid(participant?.jid) ||
+                    await resolvePhoneJid(participant?.lid) ||
+                    senderPhoneJid;
                 if (!resolvedPhoneJid) {
                     console.warn('[PLATFORM OAUTH TRACE] group request could not resolve private phone JID', {
                         messageId: m.key?.id || null,
