@@ -2975,9 +2975,9 @@ We wish you success ahead from *${groupName}* 🎓`,
     // planner to recognise a connection request as a tool call.
     // Trace only connection-command-shaped messages; never log arbitrary chats or API tokens.
     const rawEarlyBody = earlyBody.trim();
-    const mentionedJids = normalizedMessage?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const oauthMentionedJids = normalizedMessage?.extendedTextMessage?.contextInfo?.mentionedJid || [];
     const botMentionIds = [sock.user?.id, sock.user?.lid].filter(Boolean);
-    const isBotMentioned = jid?.endsWith('@g.us') && mentionedJids.some(mentioned =>
+    const isBotMentioned = jid?.endsWith('@g.us') && oauthMentionedJids.some(mentioned =>
         botMentionIds.some(botJid => {
             try { return typeof areJidsSameUser === 'function' ? areJidsSameUser(mentioned, botJid) : String(mentioned) === String(botJid); }
             catch (_) { return String(mentioned) === String(botJid); }
