@@ -92,12 +92,12 @@ test('catalog entries remain compact and omit full schemas', () => {
   assert.equal(Object.hasOwn(catalog[0],'parameters'),false);
 });
 
-test('bounded prompt stays within the configured 32k maximum budget', () => {
+test('bounded prompt stays within the hard 12000 character maximum', () => {
   const old=process.env.JARVIS_AGENT_PROMPT_MAX_CHARS;
   process.env.JARVIS_AGENT_PROMPT_MAX_CHARS='35000';
   try {
     const prompt=boundedPrompt({catalog:'catalog',history:'h'.repeat(50000),message:'user request'});
-    assert.ok(prompt.length<=32000); assert.match(prompt,/CURRENT USER REQUEST/);
+    assert.ok(prompt.length<=12000); assert.match(prompt,/CURRENT USER REQUEST/);
   } finally { if(old===undefined) delete process.env.JARVIS_AGENT_PROMPT_MAX_CHARS; else process.env.JARVIS_AGENT_PROMPT_MAX_CHARS=old; }
 });
 
@@ -106,13 +106,13 @@ test('bounded prompt preserves the tail of an oversized current user request', (
   process.env.JARVIS_AGENT_PROMPT_MAX_CHARS='35000';
   try {
     const prompt=boundedPrompt({message:'x'.repeat(50000)+'FINAL-REQUEST-DETAIL'});
-    assert.ok(prompt.length<=32000); assert.ok(prompt.includes('FINAL-REQUEST-DETAIL'));
+    assert.ok(prompt.length<=12000); assert.ok(prompt.includes('FINAL-REQUEST-DETAIL'));
   } finally { if(old===undefined) delete process.env.JARVIS_AGENT_PROMPT_MAX_CHARS; else process.env.JARVIS_AGENT_PROMPT_MAX_CHARS=old; }
 });
 
 test('bounded prompt trims old conversation before the current request', () => {
   const prompt=boundedPrompt({history:'OLD-CONTEXT-'.repeat(2000),message:'CURRENT-NEEDLE'});
-  assert.ok(prompt.length<=40000); assert.ok(prompt.includes('CURRENT-NEEDLE'));
+  assert.ok(prompt.length<=12000); assert.ok(prompt.includes('CURRENT-NEEDLE'));
 });
 
 test('parser accepts fenced and embedded JSON but rejects arrays', () => {
@@ -165,6 +165,26 @@ test('HTTP 413 prompt compaction keeps the leading policy and latest request wit
   assert.ok(compacted.endsWith('LATEST REQUEST'));
   assert.match(compacted, /compacted after HTTP 413/);
   assert.equal(compactPromptAfter413('short prompt'), null);
+});
+
+test('bounded schema prompts preserve the full system policy, selected schemas and current request', () => {
+  const { boundedSchemaPrompt, MAX_PROMPT_CHARS } = require('../agent/promptBudget');
+  const system = 'CORE-POLICY: Never bypass approvals. Preserve all policy rules.';
+  const schemas = [{ name: 'create_repo', description: 'Create a repository', parameters: { type: 'object', properties: { name: { type: 'string' }, private: { type: 'boolean' } }, required: ['name'], additionalProperties: false } }];
+  const prompt = boundedSchemaPrompt({ system, schemas, message: 'Create my project repository', instruction: 'Return JSON only.' });
+  assert.ok(prompt.length <= MAX_PROMPT_CHARS);
+  assert.ok(prompt.includes(system));
+  assert.ok(prompt.includes('create_repo'));
+  assert.ok(prompt.includes('"required":["name"]'));
+  assert.ok(prompt.includes('Create my project repository'));
+});
+
+test('every oversized prompt compaction retains the latest request marker', () => {
+  const { capPrompt, MAX_PROMPT_CHARS } = require('../agent/promptBudget');
+  const prompt = capPrompt('SYSTEM POLICY'.padEnd(15000, 'p') + 'LATEST-REQUEST-DETAIL');
+  assert.ok(prompt.length <= MAX_PROMPT_CHARS);
+  assert.ok(prompt.startsWith('SYSTEM POLICY'));
+  assert.ok(prompt.endsWith('LATEST-REQUEST-DETAIL'));
 });
 
 test('planner normalizes repository alias to the registered repo argument', async () => {
