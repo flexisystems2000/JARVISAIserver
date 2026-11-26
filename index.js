@@ -297,6 +297,13 @@ async function saveGroupMessage(message, groupJid, senderJid) {
     const createdAt = Number.isFinite(timestamp) && timestamp > 0
         ? new Date(timestamp * 1000) : new Date();
     try {
+        // If the group's last message was over ten minutes ago, clear the
+        // previous discussion before storing this new message.
+        const latest = await GroupMessage.find({ groupJid })
+            .sort({ createdAt: -1 }).limit(1).lean();
+        if (latest.length && Date.now() - new Date(latest[0].createdAt).getTime() > 10 * 60 * 1000) {
+            await GroupMessage.deleteMany({ groupJid });
+        }
         await GroupMessage.updateOne(
             { groupJid, messageId: String(message.key.id) },
             { $setOnInsert: {
@@ -318,19 +325,19 @@ async function saveGroupMessage(message, groupJid, senderJid) {
 async function getGroupConversationContext(groupJid, limit = 45, quotedMessageId = '') {
     if (!groupJid?.endsWith('@g.us') || mongoose.connection.readyState !== 1) return '';
     try {
-        const cutoff = new Date(Date.now() - 10 * 60 * 1000);
-        // Remove expired shared discussion so a group becomes a fresh context
-        // after ten minutes without new messages.
-        await GroupMessage.deleteMany({ groupJid, createdAt: { $lt: cutoff } });
-        const messages = await GroupMessage.find({ groupJid, createdAt: { $gte: cutoff } })
+        const cutoff = Date.now() - 10 * 60 * 1000;
+        const latest = await GroupMessage.find({ groupJid })
+            .sort({ createdAt: -1 }).limit(1).lean();
+        // Expire the entire shared discussion only after ten minutes with
+        // no new group messages; ongoing discussions keep their full history.
+        if (latest.length && new Date(latest[0].createdAt).getTime() < cutoff) {
+            await GroupMessage.deleteMany({ groupJid });
+        }
+        const messages = await GroupMessage.find({ groupJid })
             .sort({ createdAt: -1 }).limit(Math.max(5, Math.min(Number(limit) || 45, 80))).lean();
         const ordered = messages.reverse();
         let quoted = null;
-        if (quotedMessageId) {
-            quoted = await GroupMessage.findOne({
-                groupJid, messageId: String(quotedMessageId), createdAt: { $gte: cutoff }
-            }).lean();
-        }
+        if (quotedMessageId) quoted = await GroupMessage.findOne({ groupJid, messageId: String(quotedMessageId) }).lean();
         return formatGroupTranscript(ordered, quoted);
     } catch (error) {
         console.warn('[GROUP-MEMORY] Could not read group context:', error.message);
