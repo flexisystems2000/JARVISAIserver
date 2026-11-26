@@ -39,9 +39,9 @@ function validateCreateFileRequest(request) {
 
 function isWebsiteProjectRequest(request) {
   const value = String(request || '');
-  const target = /\\b(website|web\\s*site|web\\s*app(?:lication)?|landing\\s*page|multi[- ]page\\s*site)\\b/i;
-  const action = /\\b(build|create|make|develop|design|generate|scaffold|code|implement|produce)\\b/i;
-  const completeness = /\\b(complete|full|functional|responsive|multi[- ]page|HTML\\s*[-+&/]?\\s*CSS|CSS\\s*[-+&/]?\\s*JavaScript)\\b/i;
+  const target = /\b(website|web\s*site|web\s*app(?:lication)?|landing\s*page|multi[- ]page\s*site)\b/i;
+  const action = /\b(build|create|make|develop|design|generate|scaffold|code|implement|produce)\b/i;
+  const completeness = /\b(complete|full|functional|responsive|multi[- ]page|HTML\s*[-+&/]?\s*CSS|CSS\s*[-+&/]?\s*JavaScript)\b/i;
   return target.test(value) && (action.test(value) || completeness.test(value));
 }
 
@@ -81,7 +81,7 @@ function inferCreateFileFormat(request) {
 
 function extractCreateFileName(request) {
   const formats = Object.keys(CREATE_FILE_FORMATS).join('|');
-  const named = String(request || '').match(new RegExp(`(?:filename|file\\s*name|save\\s+as|named|call\\s+it)\\s*[:=]?\\s*["']?([A-Za-z0-9][A-Za-z0-9 _.-]*\\.(?:${formats}))`, 'i'));
+  const named = String(request || '').match(new RegExp(`(?:filename|file\s*name|save\s+as|named|call\s+it)\s*[:=]?\s*["']?([A-Za-z0-9][A-Za-z0-9 _.-]*\\.(?:${formats}))`, 'i'));
   if (named) return path.basename(named[1].trim());
   const any = String(request || '').match(new RegExp(`([A-Za-z0-9][A-Za-z0-9_-]*\\.(?:${formats}))`, 'i'));
   return any ? path.basename(any[1]) : '';
@@ -108,8 +108,11 @@ function buildCreateFilePrompt(request, format, title) {
   if (format === 'pptx') return `${base}\n\nFORMAT RULE: Return only valid JSON in this shape: {"slides":[{"title":"Slide title","bullets":["Point one","Point two"],"body":"Optional short supporting text"}]}. Create a logical presentation with a title slide and concise, presentation-ready slides. No Markdown fences or prose outside JSON.`;
   if (['xml','yaml','yml','css','js','py','php','java','cpp','sql','svg','ts','tsx','jsx','c','h','cs','go','rs','rb','sh','ps1','bat','toml','ini','conf','properties','tex','mdx','jsonl'].includes(format)) return `${base}\n\nFORMAT RULE: Return only valid ${format.toUpperCase()} source/content. Do not add Markdown fences or explanatory prose.`;
   if (format === 'rtf') return `${base}\n\nFORMAT RULE: Return clean plain text paragraphs. Do not use Markdown or RTF control words; the document service will format the content as RTF.`;
-  if (format === 'zip') return `${base}\n\nFORMAT RULE: Return only valid JSON shaped as {\"files\":[{\"path\":\"relative/name.ext\",\"content\":\"file content\"}]}. Include a small useful collection of files. No Markdown fences.`;
-  if (format === 'html') return `${base}\n\nFORMAT RULE: Return only an HTML body fragment using semantic headings, paragraphs, lists and tables as needed. Do not include scripts, event-handler attributes, forms, iframes, embeds, or external resources; the service will sanitise the markup.`;
+  if (format === 'zip') {
+    if (isWebsiteProjectRequest(request)) return `${base}\\n\\nWEBSITE PROJECT FORMAT RULE: Build a complete, working, responsive website project, not an HTML body fragment. Return ONLY valid JSON shaped as {"files":[{"path":"relative/name.ext","content":"complete file source"}]}. Include at minimum index.html, styles.css and script.js as separate files. Use semantic, accessible HTML; link styles.css and script.js correctly from index.html; implement real interactive behaviour in script.js using addEventListener (never inline event-handler attributes); make the layout responsive for mobile and desktop; include sensible metadata, navigation, meaningful page sections, accessible labels and visible focus states. If the request needs multiple pages, create separate HTML pages and link them. Add only useful assets; use CSS shapes/gradients or clearly named local placeholders rather than broken image URLs. Do not depend on external CDNs, remote scripts, or external stylesheets unless explicitly requested. Do not omit CSS or JavaScript. Ensure every referenced local file exists in the ZIP. Use relative paths, no absolute paths or ../ traversal. Keep the project lightweight and ready to open locally or deploy as a static site. No Markdown fences or prose outside JSON.`;
+    return `${base}\\n\\nFORMAT RULE: Return only valid JSON shaped as {"files":[{"path":"relative/name.ext","content":"file content"}]}. Include a small useful collection of files. No Markdown fences.`;
+  }
+  if (format === 'html') return `${base}\\n\\nFORMAT RULE: Return a complete, valid standalone HTML5 document (including doctype, html, head, metadata and body), not a body fragment. You may include responsive CSS in a style element. Do not include JavaScript, inline event-handler attributes, iframes, embeds, or remote dependencies in this single-file HTML format; use a ZIP website project when interactive JavaScript or separate CSS/JS files are needed.`;
   if (format === 'txt') return `${base}\n\nFORMAT RULE: Return clean plain text without Markdown formatting.`;
   if (format === 'md') return `${base}\n\nFORMAT RULE: Return well-structured Markdown with headings and lists where useful.`;
   return `${base}\n\nFORMAT RULE: Return a readable document using Markdown headings and lists. This content will be rendered as ${format.toUpperCase()}.`;
