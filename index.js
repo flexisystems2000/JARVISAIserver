@@ -59,6 +59,7 @@ const quizEngine = require('./quizEngine');
 const paymentHandler = require('./paymentHandler'); // 👈 ADD THIS LINE HERE
 const { sendRichReply } = require('./rich-renderer');
 const { createAgentBrain } = require('./agent/brain');
+const { createXKiroClient } = require('./agent/xkiroClient');
 const { createToolRegistry } = require('./agent/toolRegistry');
 const { createPermissionManager } = require('./agent/permissions');
 const { createAuditLogger } = require('./agent/audit');
@@ -1086,9 +1087,25 @@ agentTools.register({
         return dynamicCommands.create(spec, { approved: true });
     }
 });
+// Command A Reasoning is JARVIS's lightweight internal thinker and ordinary
+// conversation model. Gemini remains behind askAI() for heavy generation tasks.
+const askInternalModel = createXKiroClient({ httpClient: axios });
+let xkiroFallbackNoticeLogged = false;
 const jarvisAgent = createAgentBrain({
     registry: agentTools,
-    askModel: async (prompt, options = {}) => askAI(prompt, null, options),
+    askModel: async (prompt, options = {}) => {
+        try {
+            return await askInternalModel(prompt, options);
+        } catch (error) {
+            // Keep JARVIS available before the key is configured and during
+            // temporary xKiro outages/rate limits. Heavy tasks still use Gemini.
+            if (!xkiroFallbackNoticeLogged) {
+                console.warn('[INTERNAL AI] xKiro unavailable; falling back to Gemini:', String(error.message || error).slice(0, 240));
+                xkiroFallbackNoticeLogged = true;
+            }
+            return askAI(prompt, null, options);
+        }
+    },
     permissions: agentPermissions
 });
 
