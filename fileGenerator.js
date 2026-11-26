@@ -37,8 +37,19 @@ function validateCreateFileRequest(request) {
   return true;
 }
 
+function isWebsiteProjectRequest(request) {
+  const value = String(request || '');
+  const target = /\\b(website|web\\s*site|web\\s*app(?:lication)?|landing\\s*page|multi[- ]page\\s*site)\\b/i;
+  const action = /\\b(build|create|make|develop|design|generate|scaffold|code|implement|produce)\\b/i;
+  const completeness = /\\b(complete|full|functional|responsive|multi[- ]page|HTML\\s*[-+&/]?\\s*CSS|CSS\\s*[-+&/]?\\s*JavaScript)\\b/i;
+  return target.test(value) && (action.test(value) || completeness.test(value));
+}
+
 function inferCreateFileFormat(request) {
   const value = String(request || '');
+  // A website is a project, not a single HTML document. Package its HTML,
+  // CSS, JavaScript and any supporting assets into one downloadable ZIP.
+  if (isWebsiteProjectRequest(value)) return 'zip';
   const extensions = [...value.matchAll(/\.([a-z0-9]{2,5})(?=$|[\s"'`),;])/ig)];
   for (const match of extensions.reverse()) {
     const extension = match[1].toLowerCase();
@@ -152,5 +163,6 @@ module.exports = {
   extractCreateFileName,
   deriveCreateFileTitle,
   buildCreateFilePrompt,
+  isWebsiteProjectRequest,
   validateGeneratedFileContent
 };
