@@ -1,5 +1,7 @@
 'use strict';
-const MAX_PROMPT_CHARS = 12000;
+// Reserve room for the AI Link's fixed identity/formatting prefix so the
+// complete text delivered to Gemini remains within the 12,000-character cap.
+const MAX_PROMPT_CHARS = 11800;
 
 function compactCatalog(value, maxChars) {
   let items;
