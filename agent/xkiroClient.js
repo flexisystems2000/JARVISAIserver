@@ -21,7 +21,7 @@ function createXKiroClient({ httpClient = require('axios'), env = process.env } 
         const apiKey = String(env.XKIRO_API_KEY || '').trim();
         if (!apiKey) throw new Error('XKIRO_API_KEY is not configured.');
 
-        const baseUrl = String(env.XKIRO_BASE_URL || DEFAULT_BASE_URL).trim().replace(/\\/+$/, '');
+        const baseUrl = String(env.XKIRO_BASE_URL || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
         const model = String(env.XKIRO_MODEL || DEFAULT_MODEL).trim();
         const payload = {
             model,
