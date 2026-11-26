@@ -84,13 +84,112 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.get('/auth/platform/callback/:provider', async (req, res) => {
     const provider = String(req.params.provider || '').toLowerCase();
+
+    const escapeHtml = (value) => String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    const renderOAuthPage = ({ success, title, message, providerName = '', account = '', detail = '' }) => {
+        const accent = success ? '#22c55e' : '#f59e0b';
+        const symbol = success ? '✓' : '!';
+        const safeProvider = escapeHtml(providerName);
+        const safeAccount = escapeHtml(account);
+        const safeDetail = escapeHtml(detail);
+        return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#07111f">
+<title>${escapeHtml(title)} · JARVIS AI</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}
+body{margin:0;min-height:100vh;padding:28px 18px;display:grid;place-items:center;
+font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+color:#edf4ff;background:radial-gradient(ellipse at 50% 0%,#17365a 0%,#0b1a2d 42%,#050b14 100%)}
+main{width:min(100%,440px);padding:34px 26px 28px;text-align:center;
+background:rgba(12,25,43,.94);border:1px solid rgba(148,183,220,.2);
+border-radius:26px;box-shadow:0 24px 80px rgba(0,0,0,.38)}
+.brand{font-size:13px;font-weight:800;letter-spacing:.22em;color:#9db6d4}
+.brand span{color:#55d6c2}.symbol{width:76px;height:76px;margin:28px auto 20px;
+display:grid;place-items:center;border-radius:50%;font-size:42px;font-weight:800;
+color:${accent};background:${success ? 'rgba(34,197,94,.13)' : 'rgba(245,158,11,.13)'};
+border:1px solid ${accent}66}
+h1{font-size:26px;line-height:1.2;margin:0 0 12px}
+p{font-size:15px;line-height:1.65;color:#b7c7da;margin:0}
+.platform{margin:24px 0 10px;padding:16px;border-radius:16px;text-align:left;
+background:#091524;border:1px solid rgba(148,183,220,.14)}
+.caption{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#7892af}
+.value{font-size:17px;font-weight:700;margin-top:6px;overflow-wrap:anywhere}
+.account{font-size:14px;color:#b7c7da;margin-top:4px}
+.detail{margin-top:18px;padding:13px;border-radius:12px;background:rgba(255,255,255,.04);
+font-size:13px;color:#a9bfd8;line-height:1.55}
+.footer{margin-top:25px;font-size:12px;color:#7188a4}
+</style>
+</head>
+<body><main>
+<div class="brand">JARVIS <span>AI</span></div>
+<div class="symbol" aria-hidden="true">${symbol}</div>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(message)}</p>
+${providerName ? `<section class="platform"><div class="caption">Connected platform</div><div class="value">${safeProvider}</div>${account ? `<div class="account">Account: ${safeAccount}</div>` : ''}</section>` : ''}
+${detail ? `<div class="detail">${safeDetail}</div>` : ''}
+<div class="footer">Secure platform connection · Flexi Digital Academy</div>
+</main></body></html>`;
+    };
+
     try {
-        if (req.query.error) return res.status(400).send('Authorisation was cancelled or denied. Close this page and start again in WhatsApp.');
+        if (req.query.error) {
+            return res.status(400).type('html').send(renderOAuthPage({
+                success: false,
+                title: 'Connection not completed',
+                message: 'Authorisation was cancelled or denied. No new connection was saved.',
+                detail: 'Return to WhatsApp and send the Connect command again whenever you are ready.'
+            }));
+        }
+
         const result = await userPlatformConnections.callback(provider, req.query.code, req.query.state);
-        return res.status(200).send('JARVIS connection successful. ' + result.provider + ' is connected to the WhatsApp account that started this request. Return to WhatsApp.');
+        let whatsappNotified = false;
+
+        // The OAuth state stores the exact WhatsApp owner. Notify that same
+        // account after the encrypted connection has been saved successfully.
+        if (sock && whatsappConnectionOpen && result.actor) {
+            try {
+                await sock.sendMessage(result.actor, {
+                    text: '✅ *JARVIS connection successful*\n\n' +
+                        'Platform: *' + result.provider + '*\n' +
+                        'Account: *' + result.account + '*\n\n' +
+                        'Your ' + result.provider + ' account is now connected to this WhatsApp account. You can return to JARVIS and use the connected platform.'
+                });
+                whatsappNotified = true;
+            } catch (notifyError) {
+                console.warn('[PLATFORM OAUTH] Connection saved, but WhatsApp confirmation could not be delivered:', String(notifyError.message || notifyError).slice(0, 200));
+            }
+        } else {
+            console.warn('[PLATFORM OAUTH] Connection saved, but WhatsApp is not currently available for confirmation delivery.');
+        }
+
+        return res.status(200).type('html').send(renderOAuthPage({
+            success: true,
+            title: 'You’re connected!',
+            message: 'Your account has been securely connected to JARVIS. The authorisation is complete.',
+            providerName: result.provider,
+            account: result.account,
+            detail: whatsappNotified
+                ? 'A confirmation message has also been sent to your WhatsApp. You can safely return to the chat.'
+                : 'Your connection was saved successfully. JARVIS could not send the WhatsApp confirmation right now; return to WhatsApp and check the connection status.'
+        }));
     } catch (error) {
         console.error('[PLATFORM OAUTH] Callback failed:', provider, String(error.message || error).slice(0, 240));
-        return res.status(400).send('JARVIS could not complete this connection. Return to WhatsApp and start it again.');
+        return res.status(400).type('html').send(renderOAuthPage({
+            success: false,
+            title: 'Connection unsuccessful',
+            message: 'JARVIS could not complete this connection.',
+            detail: 'Return to WhatsApp and start the connection again. If it keeps failing, contact the JARVIS administrator.'
+        }));
     }
 });
 
