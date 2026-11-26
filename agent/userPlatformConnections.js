@@ -11,7 +11,7 @@ const PROVIDERS = {
     authorizeUrl: 'https://github.com/login/oauth/authorize',
     tokenUrl: 'https://github.com/login/oauth/access_token',
     userUrl: 'https://api.github.com/user',
-    scopes: ['read:user', 'repo'],
+    scopes: ['read:user', 'repo', 'workflow'],
     tokenAuth: 'body',
     async identify(token) {
       const r = await axios.get(this.userUrl, { timeout: 15000, headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
