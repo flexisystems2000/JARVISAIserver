@@ -2839,6 +2839,11 @@ We wish you success ahead from *${groupName}* 🎓`,
         normalizedMessage?.videoMessage?.caption ||
         normalizedMessage?.documentMessage?.caption ||
         '';
+    const earlyBodySource = normalizedMessage?.conversation ? 'conversation' :
+        normalizedMessage?.extendedTextMessage?.text ? 'extendedTextMessage.text' :
+        normalizedMessage?.imageMessage?.caption ? 'imageMessage.caption' :
+        normalizedMessage?.videoMessage?.caption ? 'videoMessage.caption' :
+        normalizedMessage?.documentMessage?.caption ? 'documentMessage.caption' : 'empty';
     const earlyCommand = earlyBody.trim().split(/\s+/)[0].toLowerCase();
     const ownerUtilityCommands = new Set([
         '!addxxjarvis',
@@ -2869,28 +2874,82 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     // Deterministic personal platform OAuth command. Do not rely on the AI
     // planner to recognise a connection request as a tool call.
-    const platformConnectMatch = earlyBody.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
+    // Trace only connection-command-shaped messages; never log arbitrary chats or API tokens.
+    const isPlatformConnectCandidate = /^!?connect(?:\\s|$)/i.test(earlyBody.trim());
+    const platformConnectMatch = earlyBody.trim().match(/^!?connect\\s+([a-z0-9_-]{2,40})\\s*$/i);
+    if (isPlatformConnectCandidate) {
+        console.log('[PLATFORM OAUTH TRACE] inbound', {
+            messageId: m.key?.id || null,
+            chatType: jid?.endsWith('@g.us') ? 'group' : 'private',
+            fromMe: Boolean(m.key?.fromMe),
+            bodySource: earlyBodySource,
+            extractedText: earlyBody.trim().slice(0, 120),
+            matched: Boolean(platformConnectMatch)
+        });
+        if (!platformConnectMatch) {
+            console.warn('[PLATFORM OAUTH TRACE] connection-like message did not match command pattern', {
+                messageId: m.key?.id || null,
+                bodySource: earlyBodySource
+            });
+        }
+    }
     if (platformConnectMatch) {
         const requestedProvider = platformConnectMatch[1].toLowerCase();
+        console.log('[PLATFORM OAUTH TRACE] handler matched', {
+            messageId: m.key?.id || null,
+            provider: requestedProvider,
+            chatType: jid?.endsWith('@g.us') ? 'group' : 'private',
+            senderPresent: Boolean(sender)
+        });
         if (jid?.endsWith('@g.us')) {
+            console.log('[PLATFORM OAUTH TRACE] blocked: group chat; private DM required', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider
+            });
             await sock.sendMessage(jid, { text: `🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.` });
             continue;
         }
         if (!PROVIDERS[requestedProvider]) {
+            console.warn('[PLATFORM OAUTH TRACE] unsupported provider', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider
+            });
             await sock.sendMessage(jid, { text: `Unsupported OAuth platform. Available: ${Object.keys(PROVIDERS).map(key => PROVIDERS[key].label).join(', ')}.` });
             continue;
         }
+        let oauthStage = 'begin';
         try {
+            console.log('[PLATFORM OAUTH TRACE] starting provider flow', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider
+            });
             const started = await userPlatformConnections.begin(requestedProvider, sender);
+            oauthStage = 'validate_authorization_url';
+            console.log('[PLATFORM OAUTH TRACE] provider flow created', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider,
+                hasAuthorizationUrl: Boolean(started?.url)
+            });
             const label = PROVIDERS[requestedProvider].label;
             const parsedUrl = new URL(started.url);
             if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
+            oauthStage = 'send_whatsapp_reply';
             await sock.sendMessage(jid, {
                 text: '🔐 Connect ' + label + ' to JARVIS. Tap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
                 footer: 'Secure authorisation • Link expires in 10 minutes',
                 templateButtons: [{ index: 1, urlButton: { displayText: `Connect ${label}`, url: started.url } }]
             }, { skipFlexiBrand: true });
+            console.log('[PLATFORM OAUTH TRACE] WhatsApp authorization reply sent', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider
+            });
         } catch (error) {
+            console.error('[PLATFORM OAUTH TRACE] flow failed', {
+                messageId: m.key?.id || null,
+                provider: requestedProvider,
+                stage: oauthStage,
+                error: String(error.message || error).slice(0, 180)
+            });
             console.error('[PLATFORM OAUTH] Connect command failed:', requestedProvider, String(error.message || error).slice(0, 180));
             await sock.sendMessage(jid, { text: `❌ Could not start ${PROVIDERS[requestedProvider].label} connection. ${String(error.message || 'Please try again.').slice(0, 250)}` });
         }
