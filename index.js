@@ -2934,10 +2934,15 @@ We wish you success ahead from *${groupName}* 🎓`,
             const parsedUrl = new URL(started.url);
             if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
             oauthStage = 'send_whatsapp_reply';
+            // Send the OAuth URL as ordinary WhatsApp text. The previous
+            // templateButtons URL button is not reliably rendered on Android
+            // by this Baileys fork, so keep the actual HTTPS URL visible/clickable.
             await sock.sendMessage(jid, {
-                text: '🔐 Connect ' + label + ' to JARVIS. Tap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
-                footer: 'Secure authorisation • Link expires in 10 minutes',
-                templateButtons: [{ index: 1, urlButton: { displayText: `Connect ${label}`, url: started.url } }]
+                text: '🔐 *Connect ' + label + ' to JARVIS*\n\n' +
+                    'Tap this secure authorisation link to connect your own ' + label + ' account. ' +
+                    'This connection belongs only to your WhatsApp account.\n\n' +
+                    started.url + '\n\n' +
+                    '🔒 Secure authorisation • Link expires in 10 minutes'
             }, { skipFlexiBrand: true });
             console.log('[PLATFORM OAUTH TRACE] WhatsApp authorization reply sent', {
                 messageId: m.key?.id || null,
