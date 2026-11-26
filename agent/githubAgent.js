@@ -148,6 +148,15 @@ class GitHubAgent {
     return { merged: !!r.data.merged, sha: r.data.sha || null, message: r.data.message || '' };
   }
 
+
+  async rerunFailedWorkflowJobs(owner, repo, runId, approved = false) {
+    if (!approved) throw new Error('Explicit approval required before rerunning GitHub Actions jobs');
+    const p = this.repo(owner, repo);
+    if (!Number.isInteger(runId) || runId < 1) throw new Error('Invalid GitHub Actions run ID');
+    const r = await this.client().post(`/repos/${p.owner}/${p.repo}/actions/runs/${runId}/rerun-failed-jobs`);
+    return { success: r.status === 201 || r.status === 202, runId };
+  }
+
   async listIssues(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/issues`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,pull_request:!!x.pull_request})); }
   async listPullRequests(owner,repo,state='open') { const p=this.repo(owner,repo); const r=await this.client().get(`/repos/${p.owner}/${p.repo}/pulls`,{params:{state,per_page:100}}); return r.data.map(x=>({number:x.number,title:x.title,state:x.state,html_url:x.html_url,head:x.head.ref,base:x.base.ref})); }
   async createPullRequest(owner,repo,title,head,base,body='') { const p=this.repo(owner,repo); return (await this.client().post(`/repos/${p.owner}/${p.repo}/pulls`,{title,head,base,body})).data; }
