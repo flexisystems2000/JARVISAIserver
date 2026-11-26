@@ -89,3 +89,45 @@ test('GitHub write operations block common secret and environment file paths', (
   assert.throws(() => agent.assertSafeWritePath('certs/private.pem'), /sensitive file paths/);
   assert.doesNotThrow(() => agent.assertSafeWritePath('src/index.js'));
 });
+
+test('pull request creation cannot bypass explicit approval', async () => {
+  const github = new GitHubAgent({ token: 'test-token', owner: 'sample-owner' });
+  const calls = [];
+  github.client = () => ({ post: async (url, body) => { calls.push({ url, body }); return { data: { number: 7, title: 'Test PR', state: 'open', html_url: 'https://github.com/sample-owner/demo/pull/7', head: { ref: 'feature' }, base: { ref: 'main' } } }; } });
+  await assert.rejects(() => github.createPullRequest('sample-owner', 'demo', 'Title', 'feature', 'main'), /Explicit approval required/i);
+  assert.equal(calls.length, 0);
+  const result = await github.createPullRequest('sample-owner', 'demo', 'Title', 'feature', 'main', 'Body', true);
+  assert.equal(result.number, 7);
+  assert.equal(calls[0].url, '/repos/sample-owner/demo/pulls');
+});
+
+test('repository archive and settings changes require approval and reject unsupported fields', async () => {
+  const github = new GitHubAgent({ token: 'test-token', owner: 'sample-owner' });
+  const calls = [];
+  github.assertRepositoryPermission = async () => ({ full_name: 'sample-owner/demo' });
+  github.client = () => ({ patch: async (url, body) => { calls.push({ url, body }); return { data: { full_name: 'sample-owner/demo', archived: !!body.archived, private: false, default_branch: 'main', html_url: 'https://github.com/sample-owner/demo' } }; } });
+  await assert.rejects(() => github.archiveRepository('sample-owner', 'demo', true), /approval required/i);
+  await assert.rejects(() => github.updateRepository('sample-owner', 'demo', { unexpected: true }, true), /unsupported fields/i);
+  assert.equal(calls.length, 0);
+  const result = await github.archiveRepository('sample-owner', 'demo', true, true);
+  assert.equal(result.archived, true);
+});
+
+test('GitHub repository search passes bounded pagination', async () => {
+  const github = new GitHubAgent({ token: 'test-token', owner: 'sample-owner' });
+  let call;
+  github.client = () => ({ get: async (url, config) => { call = { url, params: config.params }; return { data: { total_count: 0, items: [] } }; } });
+  const result = await github.searchRepositories('jarvis', 15, 2);
+  assert.equal(result.totalCount, 0);
+  assert.equal(call.url, '/search/repositories');
+  assert.deepEqual(call.params, { q: 'jarvis', per_page: 15, page: 2, sort: 'updated' });
+});
+
+test('release and tag creation require explicit approval', async () => {
+  const github = new GitHubAgent({ token: 'test-token', owner: 'sample-owner' });
+  let calls = 0;
+  github.client = () => ({ post: async () => { calls++; return { status: 201, data: {} }; } });
+  await assert.rejects(() => github.createRelease('sample-owner', 'demo', 'v1', 'Release'), /approval required/i);
+  await assert.rejects(() => github.createTag('sample-owner', 'demo', 'v1', 'a'.repeat(40), 'Release tag'), /approval required/i);
+  assert.equal(calls, 0);
+});
