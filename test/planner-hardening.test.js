@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createToolRegistry } = require('../agent/toolRegistry');
 const { createPermissionManager } = require('../agent/permissions');
-const { createAgentBrain, boundedPrompt } = require('../agent/brain');
+const { createAgentBrain, boundedPrompt, normalizeToolArguments } = require('../agent/brain');
 
 function register(registry, name, handler, schema = { type:'object', properties:{}, additionalProperties:false }, permissions=['user']) {
   registry.register({ name, description:`Tool ${name} does a useful task.`, parameters:schema, permissions, handler });
@@ -184,4 +184,42 @@ test('explicit WhatsApp owner context receives owner permissions', async () => {
   register(registry, 'owner_context_tool', async () => 'allowed', undefined, ['owner']);
   const result = await registry.execute('owner_context_tool', {}, { actor: '2222222222@s.whatsapp.net', isOwner: true });
   assert.equal(result.result, 'allowed');
+});
+
+
+test('file creation planner aliases are normalized into the registered request argument', async () => {
+  const registry = createToolRegistry();
+  let received;
+  register(registry, 'file_create', async ({ request }) => { received = request; return { created: true, filename: 'noun.pdf' }; }, {
+    type: 'object',
+    properties: { request: { type: 'string', minLength: 5, maxLength: 4000 } },
+    required: ['request'],
+    additionalProperties: false
+  });
+  const normalized = normalizeToolArguments('file_create', {
+    content: 'Everything about what a noun is',
+    file_name: 'noun.pdf',
+    format: 'pdf'
+  }, registry.describe().find(tool => tool.name === 'file_create')?.parameters || {
+    type: 'object', properties: { request: { type: 'string' } }, required: ['request'], additionalProperties: false
+  });
+  assert.match(normalized.request, /Everything about what a noun is/);
+  assert.match(normalized.request, /noun\.pdf/);
+  assert.match(normalized.request, /pdf/i);
+  assert.deepEqual(Object.keys(normalized), ['request']);
+
+  let calls = 0;
+  const brain = createAgentBrain({ registry, askModel: async () => {
+    calls++;
+    if (calls === 1) return JSON.stringify({
+      action: 'tool', tool: 'file_create',
+      arguments: { content: 'Everything about what a noun is', file_name: 'noun.pdf', format: 'pdf' },
+      confidence: 0.99
+    });
+    return 'The PDF was created.';
+  }});
+  const result = await brain.handle({ message: 'Create a PDF about nouns', actor: 'user' });
+  assert.equal(result.outcomes[0].outcome.result.created, true);
+  assert.match(received, /Everything about what a noun is/);
+  assert.match(received, /noun\.pdf/);
 });
