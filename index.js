@@ -2924,7 +2924,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 );
                 const rawPhoneJid = [participant?.phoneNumber, participant?.id, participant?.jid]
                     .find(value => typeof value === 'string' &&
-                        (value.endsWith('@s.whatsapp.net') || /^\\d{7,20}$/.test(value)));
+                        (value.endsWith('@s.whatsapp.net') || /^\d{7,20}$/.test(value)));
                 const resolvedPhoneJid = rawPhoneJid
                     ? (rawPhoneJid.includes('@') ? rawPhoneJid : `${rawPhoneJid}@s.whatsapp.net`)
                     : (String(sender || '').endsWith('@s.whatsapp.net') ? sender : '');
