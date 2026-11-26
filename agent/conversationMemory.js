@@ -59,14 +59,15 @@ async function getConversationContext(Model, chatJid, userJid, limit = 12) {
   if (!Model || !chatJid || !userJid || typeof Model.find !== 'function') return '';
   const conversationKey = getConversationKey(chatJid, userJid);
   const cutoff = new Date(Date.now() - CONVERSATION_IDLE_TTL_MS);
-  const activeFilter = { conversationKey, createdAt: { $gte: cutoff } };
-
-  // Expire old private context before loading it. A new message after the
-  // idle window therefore starts with a clean conversation.
-  if (typeof Model.deleteMany === 'function') {
-    await Model.deleteMany({ conversationKey, createdAt: { $lt: cutoff } });
+  const latest = await Model.find({ conversationKey })
+    .sort({ createdAt: -1 }).limit(1).lean();
+  // Expire the WHOLE conversation only when the latest activity is older
+  // than ten minutes; active conversations retain their full bounded history.
+  if (latest.length && new Date(latest[0].createdAt).getTime() < cutoff.getTime() &&
+      typeof Model.deleteMany === 'function') {
+    await Model.deleteMany({ conversationKey });
   }
-  const messages = await Model.find(activeFilter)
+  const messages = await Model.find({ conversationKey })
     .sort({ createdAt: -1 })
     .limit(Math.max(2, Math.min(Number(limit) || 12, 20)))
     .lean();
