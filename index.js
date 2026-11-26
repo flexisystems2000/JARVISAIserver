@@ -2982,9 +2982,9 @@ We wish you success ahead from *${groupName}* 🎓`,
             const parsedUrl = new URL(started.url);
             if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
             oauthStage = 'send_whatsapp_reply';
-            // Use the Baileys fork's nativeFlow CTA URL button so Android
-            // receives a real WhatsApp interactive URL button, not a plain link.
-            await sock.sendMessage(jid, {
+            // Use the same private-chat destination resolved above. For group
+            // requests this delivers the native WhatsApp button to the requester's DM.
+            await sock.sendMessage(deliveryJid, {
                 text: '🔐 *Connect ' + label + ' to JARVIS*\n\n' +
                     'Authorise your own ' + label + ' account using the button below. ' +
                     'This connection belongs only to your WhatsApp account.',
