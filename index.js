@@ -687,7 +687,7 @@ agentTools.register({
 });
 
 agentTools.register({
-    name: 'file_create', description: 'Create a requested PDF, Word, Excel, PowerPoint, CSV, text, data, code, SVG or ZIP file and send it to the current WhatsApp chat.',
+    name: 'file_create', description: 'Create a file and send it to this WhatsApp chat. Pass the full task, subject, format and optional filename in the single required request argument.',
     parameters: { type: 'object', properties: { request: { type: 'string', minLength: 5, maxLength: 4000 } }, required: ['request'], additionalProperties: false }, permissions: ['user'],
     handler: async ({ request }, context) => {
         if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
