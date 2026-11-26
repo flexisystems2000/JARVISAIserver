@@ -2901,20 +2901,68 @@ We wish you success ahead from *${groupName}* 🎓`,
             chatType: jid?.endsWith('@g.us') ? 'group' : 'private',
             senderPresent: Boolean(sender)
         });
+        // Group requests are allowed, but OAuth is always delivered privately.
+        // Resolve a canonical phone-number JID so the OAuth token is stored under
+        // the same actor identity used by the user's private-chat agent requests.
+        let connectionActor = sender;
+        let deliveryJid = jid;
         if (jid?.endsWith('@g.us')) {
-            console.log('[PLATFORM OAUTH TRACE] blocked: group chat; private DM required', {
-                messageId: m.key?.id || null,
-                provider: requestedProvider
-            });
-            await sock.sendMessage(jid, { text: `🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.` });
-            continue;
+            try {
+                const metadata = await sock.groupMetadata(jid);
+                const participant = (metadata?.participants || []).find(person =>
+                    [person?.id, person?.jid, person?.phoneNumber, person?.lid]
+                        .filter(Boolean)
+                        .some(candidate => {
+                            try {
+                                return typeof areJidsSameUser === 'function'
+                                    ? areJidsSameUser(candidate, sender)
+                                    : String(candidate) === String(sender);
+                            } catch (_) {
+                                return String(candidate) === String(sender);
+                            }
+                        })
+                );
+                const rawPhoneJid = [participant?.phoneNumber, participant?.id, participant?.jid]
+                    .find(value => typeof value === 'string' &&
+                        (value.endsWith('@s.whatsapp.net') || /^\\d{7,20}$/.test(value)));
+                const resolvedPhoneJid = rawPhoneJid
+                    ? (rawPhoneJid.includes('@') ? rawPhoneJid : `${rawPhoneJid}@s.whatsapp.net`)
+                    : (String(sender || '').endsWith('@s.whatsapp.net') ? sender : '');
+                if (!resolvedPhoneJid) {
+                    console.warn('[PLATFORM OAUTH TRACE] group request could not resolve private phone JID', {
+                        messageId: m.key?.id || null,
+                        provider: requestedProvider
+                    });
+                    await sock.sendMessage(jid, {
+                        text: '🔒 I received your connection request, but could not securely resolve your private WhatsApp chat. Please DM JARVIS and send Connect ' + (PROVIDERS[requestedProvider]?.label || requestedProvider) + ' there.'
+                    });
+                    continue;
+                }
+                connectionActor = resolvedPhoneJid;
+                deliveryJid = resolvedPhoneJid;
+                console.log('[PLATFORM OAUTH TRACE] group request routed to owner DM', {
+                    messageId: m.key?.id || null,
+                    provider: requestedProvider,
+                    actorResolved: true
+                });
+            } catch (resolveError) {
+                console.error('[PLATFORM OAUTH TRACE] could not resolve group participant for DM delivery', {
+                    messageId: m.key?.id || null,
+                    provider: requestedProvider,
+                    error: String(resolveError.message || resolveError).slice(0, 160)
+                });
+                await sock.sendMessage(jid, {
+                    text: '🔒 I received your connection request, but could not open your private chat. Please DM JARVIS and send Connect ' + (PROVIDERS[requestedProvider]?.label || requestedProvider) + ' there.'
+                });
+                continue;
+            }
         }
         if (!PROVIDERS[requestedProvider]) {
             console.warn('[PLATFORM OAUTH TRACE] unsupported provider', {
                 messageId: m.key?.id || null,
                 provider: requestedProvider
             });
-            await sock.sendMessage(jid, { text: `Unsupported OAuth platform. Available: ${Object.keys(PROVIDERS).map(key => PROVIDERS[key].label).join(', ')}.` });
+            await sock.sendMessage(deliveryJid, { text: `Unsupported OAuth platform. Available: ${Object.keys(PROVIDERS).map(key => PROVIDERS[key].label).join(', ')}.` });
             continue;
         }
         let oauthStage = 'begin';
@@ -2923,7 +2971,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 messageId: m.key?.id || null,
                 provider: requestedProvider
             });
-            const started = await userPlatformConnections.begin(requestedProvider, sender);
+            const started = await userPlatformConnections.begin(requestedProvider, connectionActor);
             oauthStage = 'validate_authorization_url';
             console.log('[PLATFORM OAUTH TRACE] provider flow created', {
                 messageId: m.key?.id || null,
@@ -2957,7 +3005,7 @@ We wish you success ahead from *${groupName}* 🎓`,
                 error: String(error.message || error).slice(0, 180)
             });
             console.error('[PLATFORM OAUTH] Connect command failed:', requestedProvider, String(error.message || error).slice(0, 180));
-            await sock.sendMessage(jid, { text: `❌ Could not start ${PROVIDERS[requestedProvider].label} connection. ${String(error.message || 'Please try again.').slice(0, 250)}` });
+            await sock.sendMessage(deliveryJid, { text: `❌ Could not start ${PROVIDERS[requestedProvider].label} connection. ${String(error.message || 'Please try again.').slice(0, 250)}` });
         }
         continue;
     }
