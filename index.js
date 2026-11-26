@@ -3107,7 +3107,7 @@ if (
     if (platformConnectMatch) {
         const requestedProvider = platformConnectMatch[1].toLowerCase();
         if (jid?.endsWith('@g.us')) {
-            await sock.sendMessage(jid, { text: '🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.' });
+            await sock.sendMessage(jid, { text: `🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.` });
             continue;
         }
         if (!PROVIDERS[requestedProvider]) {
