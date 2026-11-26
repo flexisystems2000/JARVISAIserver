@@ -2726,6 +2726,24 @@ We wish you success ahead from *${groupName}* 🎓`,
     }
     if (!m?.message) continue;
 
+    // Normalize WhatsApp message envelopes before command parsing. Baileys may
+    // wrap user text inside ephemeral, view-once, document-caption, or edited
+    // message containers. Keep the original m.message intact for protocol and
+    // message-key handling; use normalizedMessage only for content extraction.
+    let normalizedMessage = m.message;
+    const messageWrappers = [
+        'ephemeralMessage',
+        'viewOnceMessage',
+        'viewOnceMessageV2',
+        'viewOnceMessageV2Extension',
+        'documentWithCaptionMessage',
+        'editedMessage'
+    ];
+    for (let depth = 0; depth < 8; depth++) {
+        const wrapperKey = messageWrappers.find(key => normalizedMessage?.[key]?.message);
+        if (!wrapperKey) break;
+        normalizedMessage = normalizedMessage[wrapperKey].message;
+    }
 
     // Status mentions arrive as a wrapped protocolMessage (type 25), not as
     // group_mention_notification message stubs. Handle them before normal
@@ -2815,10 +2833,11 @@ We wish you success ahead from *${groupName}* 🎓`,
         }
     }
     const earlyBody =
-        m.message?.conversation ||
-        m.message?.extendedTextMessage?.text ||
-        m.message?.imageMessage?.caption ||
-        m.message?.videoMessage?.caption ||
+        normalizedMessage?.conversation ||
+        normalizedMessage?.extendedTextMessage?.text ||
+        normalizedMessage?.imageMessage?.caption ||
+        normalizedMessage?.videoMessage?.caption ||
+        normalizedMessage?.documentMessage?.caption ||
         '';
     const earlyCommand = earlyBody.trim().split(/\s+/)[0].toLowerCase();
     const ownerUtilityCommands = new Set([
@@ -2987,11 +3006,11 @@ if (
 ) {
 
     const incomingText =
-        m.message?.conversation ||
-        m.message?.extendedTextMessage?.text ||
-        m.message?.imageMessage?.caption ||
-        m.message?.videoMessage?.caption ||
-        m.message?.documentMessage?.caption ||
+        normalizedMessage?.conversation ||
+        normalizedMessage?.extendedTextMessage?.text ||
+        normalizedMessage?.imageMessage?.caption ||
+        normalizedMessage?.videoMessage?.caption ||
+        normalizedMessage?.documentMessage?.caption ||
         '';
 
     if (incomingText.trim()) {
@@ -3051,7 +3070,7 @@ if (
        // ==========================================
     // JARVIS ONLINE STATUS CHECK
     // ==========================================
-    const rawMsgCheck = m.message.conversation || m.message.extendedTextMessage?.text || "";
+    const rawMsgCheck = normalizedMessage.conversation || normalizedMessage.extendedTextMessage?.text || normalizedMessage.imageMessage?.caption || normalizedMessage.videoMessage?.caption || normalizedMessage.documentMessage?.caption || "";
 
     // API tokens are handled before the AI router. Only accept these commands
     // in a private DM; never add the submitted secret to prompts, chat memory,
