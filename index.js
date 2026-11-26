@@ -1044,22 +1044,22 @@ agentTools.register({
     name: 'github_verify_repository_admin',
     description: 'Verify that the authenticated GitHub account has administrator permission on a specific repository. Identity alone is not treated as repository administration.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
-    handler: async ({ owner, repo }) => {
-        const identity = await platformAuth.verify('github');
-        const repository = await githubAgent.assertRepositoryPermission(owner, repo, 'admin');
-        return { verified: true, platformAccount: identity.account, repository: repository.full_name, permissions: repository.permissions };
+    permissions: ['user'],
+    handler: async ({ owner, repo }, context) => {
+        const github = await githubFor(context);
+        const profile = (await github.client().get('/user')).data;
+        const repository = await github.assertRepositoryPermission(owner, repo, 'admin');
+        return { verified: true, platformAccount: profile.login, repository: repository.full_name, permissions: repository.permissions };
     }
 });
 agentTools.register({
     name: 'github_security_audit',
     description: 'Perform a read-only static security review of a GitHub repository accessible to the configured GitHub token. Detects likely committed secrets and tracked environment files; does not exploit systems.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
-    handler: async ({ owner, repo, branch }) => {
-        // Verify the provider identity before using repository credentials.
-        await platformAuth.verify('github');
-        return auditGitHubRepository(githubAgent, owner, repo, branch);
+    permissions: ['user'],
+    handler: async ({ owner, repo, branch }, context) => {
+        const github = await githubFor(context);
+        return auditGitHubRepository(github, owner, repo, branch);
     }
 });
 const dynamicCommands = new DynamicCommandBuilder({ registry: agentTools });
