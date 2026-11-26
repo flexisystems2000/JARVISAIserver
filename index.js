@@ -2867,6 +2867,37 @@ We wish you success ahead from *${groupName}* 🎓`,
 
     const sender = m.key.participant || (m.key.fromMe ? sock.user?.id : m.key.remoteJid);
 
+    // Deterministic personal platform OAuth command. Do not rely on the AI
+    // planner to recognise a connection request as a tool call.
+    const platformConnectMatch = earlyBody.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
+    if (platformConnectMatch) {
+        const requestedProvider = platformConnectMatch[1].toLowerCase();
+        if (jid?.endsWith('@g.us')) {
+            await sock.sendMessage(jid, { text: `🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.` });
+            continue;
+        }
+        if (!PROVIDERS[requestedProvider]) {
+            await sock.sendMessage(jid, { text: `Unsupported OAuth platform. Available: ${Object.keys(PROVIDERS).map(key => PROVIDERS[key].label).join(', ')}.` });
+            continue;
+        }
+        try {
+            const started = await userPlatformConnections.begin(requestedProvider, sender);
+            const label = PROVIDERS[requestedProvider].label;
+            const parsedUrl = new URL(started.url);
+            if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
+            await sock.sendMessage(jid, {
+                text: '🔐 Connect ' + label + ' to JARVIS. Tap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
+                footer: 'Secure authorisation • Link expires in 10 minutes',
+                templateButtons: [{ index: 1, urlButton: { displayText: `Connect ${label}`, url: started.url } }]
+            }, { skipFlexiBrand: true });
+        } catch (error) {
+            console.error('[PLATFORM OAUTH] Connect command failed:', requestedProvider, String(error.message || error).slice(0, 180));
+            await sock.sendMessage(jid, { text: `❌ Could not start ${PROVIDERS[requestedProvider].label} connection. ${String(error.message || 'Please try again.').slice(0, 250)}` });
+        }
+        continue;
+    }
+
+
     // Never accept or retain API credentials posted in a group.
     if (jid?.endsWith('@g.us') && /^!connect-token\b/i.test(earlyBody.trim())) {
         try { await sock.sendMessage(jid, { delete: m.key }); } catch (_) {}
@@ -3119,36 +3150,6 @@ if (
         continue;
     }
     const msgLower = rawMsgCheck.toLowerCase().trim();
-
-    // Deterministic personal platform OAuth command. Do not rely on the AI
-    // planner to recognise a connection request as a tool call.
-    const platformConnectMatch = rawMsgCheck.trim().match(/^!?connect\s+([a-z0-9_-]{2,40})\s*$/i);
-    if (platformConnectMatch) {
-        const requestedProvider = platformConnectMatch[1].toLowerCase();
-        if (jid?.endsWith('@g.us')) {
-            await sock.sendMessage(jid, { text: `🔒 Platform accounts can only be connected in a private DM with JARVIS. Please send Connect ${PROVIDERS[requestedProvider]?.label || requestedProvider} there.` });
-            continue;
-        }
-        if (!PROVIDERS[requestedProvider]) {
-            await sock.sendMessage(jid, { text: `Unsupported OAuth platform. Available: ${Object.keys(PROVIDERS).map(key => PROVIDERS[key].label).join(', ')}.` });
-            continue;
-        }
-        try {
-            const started = await userPlatformConnections.begin(requestedProvider, sender);
-            const label = PROVIDERS[requestedProvider].label;
-            const parsedUrl = new URL(started.url);
-            if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
-            await sock.sendMessage(jid, {
-                text: '🔐 Connect ' + label + ' to JARVIS. Tap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
-                footer: 'Secure authorisation • Link expires in 10 minutes',
-                templateButtons: [{ index: 1, urlButton: { displayText: `Connect ${label}`, url: started.url } }]
-            }, { skipFlexiBrand: true });
-        } catch (error) {
-            console.error('[PLATFORM OAUTH] Connect command failed:', requestedProvider, String(error.message || error).slice(0, 180));
-            await sock.sendMessage(jid, { text: `❌ Could not start ${PROVIDERS[requestedProvider].label} connection. ${String(error.message || 'Please try again.').slice(0, 250)}` });
-        }
-        continue;
-    }
 
     // Operational commands: text commands and common natural-language aliases.
     // Keep this block before the general conversational router so diagnostics are deterministic.
