@@ -3120,7 +3120,7 @@ if (
             const parsedUrl = new URL(started.url);
             if (parsedUrl.protocol !== 'https:') throw new Error('The authorisation link must use HTTPS.');
             await sock.sendMessage(jid, {
-                text: `🔐 *Connect ${label} to JARVIS*\\n\\nTap the button below to authorise your own ${label} account. This connection belongs only to your WhatsApp account.`,
+                text: '🔐 *Connect ' + label + ' to JARVIS*\n\nTap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
                 footer: 'Secure authorisation • Link expires in 10 minutes',
                 templateButtons: [{ index: 1, urlButton: { displayText: `Connect ${label}`, url: started.url } }]
             }, { skipFlexiBrand: true });
