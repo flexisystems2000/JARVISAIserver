@@ -1841,7 +1841,7 @@ async function askAI(prompt, base64Media = null, options = {}) {
         const status = err.response?.status || null;
         const gatewayDetail = String(err.response?.data?.error || err.response?.data?.message || err.message || 'Unknown gateway error').slice(0, 300);
         console.error('[AI GATEWAY] Request failed:', status || err.code || gatewayDetail);
-        if (options.throwOnError) {
+        if (options.throwOnError || options.responseFormat === 'json') {
             const failure = new Error(status
                 ? `AI gateway rejected the request (HTTP ${status}): ${gatewayDetail}`
                 : `AI gateway request failed: ${gatewayDetail}`);
