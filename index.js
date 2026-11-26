@@ -1838,7 +1838,17 @@ async function askAI(prompt, base64Media = null, options = {}) {
         if (!res.data?.success) throw new Error(res.data?.error || 'AI gateway returned an unsuccessful response.');
         return res.data?.result || '🤖 No response from AI';
     } catch (err) {
-        console.error('[AI GATEWAY] Request failed:', err.response?.status || err.code || err.message);
+        const status = err.response?.status || null;
+        const gatewayDetail = String(err.response?.data?.error || err.response?.data?.message || err.message || 'Unknown gateway error').slice(0, 300);
+        console.error('[AI GATEWAY] Request failed:', status || err.code || gatewayDetail);
+        if (options.throwOnError) {
+            const failure = new Error(status
+                ? `AI gateway rejected the request (HTTP ${status}): ${gatewayDetail}`
+                : `AI gateway request failed: ${gatewayDetail}`);
+            failure.status = status;
+            failure.code = err.code;
+            throw failure;
+        }
         return '⚠️ AI service unavailable. Please try again shortly.';
     }
 }
@@ -1878,6 +1888,7 @@ async function createFileForChat({ request, chatId, actor, sock, quotedMessage =
     const extension = format === 'yml' ? 'yaml' : format;
     const safeTitle = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 70) || 'JARVIS_File';
     const filename = requestedName || `${safeTitle}.${extension}`;
+    console.info(`[FILE_CREATE] Started format=${format} actorPresent=${!!actor}`);
     let content = '';
     let files = null;
     let validationError = null;
@@ -1885,34 +1896,48 @@ async function createFileForChat({ request, chatId, actor, sock, quotedMessage =
         const prompt = attempt === 0
             ? buildCreateFilePrompt(request, format, title)
             : buildCreateFilePrompt(request, format, title) + '\n\nREPAIR REQUIRED: Your previous output failed validation: ' + String(validationError?.message || 'invalid format') + '. Regenerate the complete content in the exact required format. Return only the corrected content.';
-        const generated = await askAIWithMemory(chatId, actor, prompt);
-        if (!generated || generated.startsWith('⚠️ AI service unavailable')) throw new Error('AI content generation failed.');
+        // File generation is a focused task: do not prepend the full chat system
+        // prompt and saved conversation, which can exceed the AI gateway's limit.
+        console.info(`[FILE_CREATE] Generating content attempt=${attempt + 1} promptChars=${prompt.length}`);
+        const generated = await askAI(prompt, null, { throwOnError: true });
+        if (!generated || typeof generated !== 'string' || !generated.trim()) throw new Error('AI gateway returned empty document content.');
         try {
             const validated = validateGeneratedFileContent(generated, format);
             content = validated.content;
             files = validated.files;
             validationError = null;
+            console.info(`[FILE_CREATE] Content validated format=${format} chars=${content.length}`);
             break;
         } catch (error) {
             validationError = error;
+            console.warn(`[FILE_CREATE] Content validation failed attempt=${attempt + 1}: ${String(error.message).slice(0, 240)}`);
             if (attempt === 1) throw new Error('Could not create a valid ' + format.toUpperCase() + ' file after one repair attempt: ' + error.message);
         }
     }
     if (validationError) throw validationError;
     const apiKey = String(process.env.PIPER_API_KEY || '').trim();
     if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
-    const response = await axios.post(`${PIPER_DOCUMENT_API_URL}/files/generate`, { filename, title, content, ...(files ? { files } : {}) }, {
-        timeout: PIPER_DOCUMENT_TIMEOUT_MS, maxContentLength: 20 * 1024 * 1024, maxBodyLength: 20 * 1024 * 1024,
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
-    });
+    console.info(`[FILE_CREATE] Sending to document service format=${format} contentChars=${content.length}`);
+    let response;
+    try {
+        response = await axios.post(`${PIPER_DOCUMENT_API_URL}/files/generate`, { filename, title, content, ...(files ? { files } : {}) }, {
+            timeout: PIPER_DOCUMENT_TIMEOUT_MS, maxContentLength: 20 * 1024 * 1024, maxBodyLength: 20 * 1024 * 1024,
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
+        });
+    } catch (error) {
+        console.error('[FILE_CREATE] Document service request failed:', error.response?.status || error.code || error.message);
+        throw new Error(`Document service request failed${error.response?.status ? ` (HTTP ${error.response.status})` : ''}: ${String(error.response?.data?.error || error.message).slice(0, 240)}`);
+    }
     if (!response.data?.success || !response.data?.fileBase64) throw new Error(response.data?.error || 'File service returned no generated file.');
     const buffer = Buffer.from(response.data.fileBase64, 'base64');
     if (!buffer.length) throw new Error('The generated file was empty.');
     if (format === 'pdf' && buffer.subarray(0, 5).toString('ascii') !== '%PDF-') throw new Error('The file service returned an invalid PDF payload.');
     if (['docx','xlsx','pptx','zip'].includes(format) && buffer.subarray(0, 4).toString('hex') !== '504b0304') throw new Error('The file service returned an invalid Office/ZIP archive.');
     if (format === 'rtf' && !buffer.toString('utf8', 0, 6).startsWith('{\\rtf')) throw new Error('The file service returned an invalid RTF payload.');
+    console.info(`[FILE_CREATE] File validated filename=${response.data.filename || filename} bytes=${buffer.length}; sending to WhatsApp`);
     await sock.sendMessage(chatId, { document: buffer, mimetype: response.data.mimeType || CREATE_FILE_FORMATS[format] || 'application/octet-stream', fileName: response.data.filename || filename,
         caption: `✅ *JARVIS File Creator*\n\nYour ${format.toUpperCase()} file is ready.` }, quotedMessage ? { quoted: quotedMessage } : undefined);
+    console.info(`[FILE_CREATE] WhatsApp delivery completed filename=${response.data.filename || filename}`);
     return { created: true, filename: response.data.filename || filename, format, bytes: buffer.length };
 }
 
