@@ -8045,7 +8045,7 @@ button{
 
     <div class="status" id="systemStatus">
         <span class="status-dot"></span>
-        <span id="statusText">CHECKING CONNECTION...</span>
+        <span id="statusText">SYSTEM OFFLINE</span>
     </div>
 </div>
 
@@ -8955,43 +8955,44 @@ async function loadStatus(){
         if (!response.ok) throw new Error('Status check failed');
         const data = await response.json();
 
+        // Preserve the dashboard's original meaning:
+        // SYSTEM ONLINE means WhatsApp is actually connected.
         if (data.whatsappConnected) {
-            statusText.textContent = 'SERVER ONLINE • WHATSAPP CONNECTED';
+            statusText.textContent = 'SYSTEM ONLINE';
             status.style.color = '#7dffb3';
             if (pairStatus) pairStatus.textContent = 'CONNECTED';
             if (pairButton) {
                 pairButton.disabled = true;
                 pairButton.textContent = 'ALREADY CONNECTED';
             }
-        } else if (data.registered) {
-            statusText.textContent = 'SERVER ONLINE • WHATSAPP RECONNECTING';
-            status.style.color = '#ffd166';
-            if (pairStatus) pairStatus.textContent = 'RECONNECTING';
-            if (pairButton) {
-                pairButton.disabled = true;
-                pairButton.textContent = 'RECONNECTING...';
-            }
-        } else if (data.serverOnline) {
-            statusText.textContent = 'SERVER ONLINE • PAIRING REQUIRED';
-            status.style.color = '#ffd166';
-            if (pairStatus && pairStatus.textContent !== 'REQUESTING' && pairStatus.textContent !== 'CODE READY') {
-                pairStatus.textContent = 'PAIRING REQUIRED';
-            }
-            if (pairButton) {
-                pairButton.disabled = false;
-                pairButton.textContent = 'GET PAIRING CODE';
-            }
         } else {
-            statusText.textContent = 'SERVER STARTING...';
-            status.style.color = '#ffd166';
+            statusText.textContent = 'SYSTEM OFFLINE';
+            status.style.color = '#ff8198';
+
+            if (data.registered) {
+                if (pairStatus && pairStatus.textContent !== 'REQUESTING' && pairStatus.textContent !== 'CODE READY') {
+                    pairStatus.textContent = 'RECONNECTING';
+                }
+                if (pairButton) {
+                    pairButton.disabled = true;
+                    pairButton.textContent = 'RECONNECTING...';
+                }
+            } else {
+                if (pairStatus && pairStatus.textContent !== 'REQUESTING' && pairStatus.textContent !== 'CODE READY') {
+                    pairStatus.textContent = 'PAIRING REQUIRED';
+                }
+                if (pairButton) {
+                    pairButton.disabled = false;
+                    pairButton.textContent = 'GET PAIRING CODE';
+                }
+            }
         }
     } catch (error) {
-        statusText.textContent = 'STATUS CHECK UNAVAILABLE';
+        statusText.textContent = 'SYSTEM OFFLINE';
         status.style.color = '#ff8198';
         if (pairButton) pairButton.disabled = true;
     }
 }
-
 
 /* ============================================================
    MOCK PROCESSING GRAPH
