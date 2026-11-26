@@ -1,5 +1,7 @@
 'use strict';
 
+const CONVERSATION_IDLE_TTL_MS = 10 * 60 * 1000;
+
 function getConversationKey(chatJid, userJid) {
   return `${String(chatJid || 'unknown-chat')}::${String(userJid || 'unknown-user')}`;
 }
@@ -55,7 +57,16 @@ async function saveConversationTurn(Model, input) {
 
 async function getConversationContext(Model, chatJid, userJid, limit = 12) {
   if (!Model || !chatJid || !userJid || typeof Model.find !== 'function') return '';
-  const messages = await Model.find({ conversationKey: getConversationKey(chatJid, userJid) })
+  const conversationKey = getConversationKey(chatJid, userJid);
+  const cutoff = new Date(Date.now() - CONVERSATION_IDLE_TTL_MS);
+  const activeFilter = { conversationKey, createdAt: { $gte: cutoff } };
+
+  // Expire old private context before loading it. A new message after the
+  // idle window therefore starts with a clean conversation.
+  if (typeof Model.deleteMany === 'function') {
+    await Model.deleteMany({ conversationKey, createdAt: { $lt: cutoff } });
+  }
+  const messages = await Model.find(activeFilter)
     .sort({ createdAt: -1 })
     .limit(Math.max(2, Math.min(Number(limit) || 12, 20)))
     .lean();
