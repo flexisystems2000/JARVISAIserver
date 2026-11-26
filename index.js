@@ -2012,6 +2012,8 @@ async function downloadMedia(message) {
 let sock;
 let channelQuizScheduler = null;
 let whatsappConnectionOpen = false;
+let whatsappRegistered = false;
+let pairingCodeRequestInFlight = false;
 
 // ============================================================
 // 💬 JARVIS DASHBOARD CHAT STORAGE
@@ -2342,6 +2344,7 @@ function installGlobalOutgoingRenderer(socket) {
 // --- BOT START ---
 async function startJARVIS() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    whatsappRegistered = Boolean(state.creds?.registered);
     const { version } = await fetchLatestBaileysVersion();
 
     sock = makeWASocket({
@@ -2364,7 +2367,10 @@ async function startJARVIS() {
     sock.sendFlexiBrandedMedia = (jid, content, options = {}) =>
         sendFlexiBrandedMedia(sock, jid, content, options);
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+        whatsappRegistered = Boolean(state.creds?.registered);
+        await saveCreds();
+    });
 
     // Keep the basic call-event alert as a fallback when Gemini Live is not configured.
     const notifiedCallIds = new Map();
@@ -6812,13 +6818,22 @@ app.get('/api/logs', (req, res) => {
 // ============================================================
 
 app.get('/api/status', (req, res) => {
-    const connected = !!sock && !!sock.user;
+    const connected = Boolean(whatsappConnectionOpen && sock?.user);
+    const registered = Boolean(whatsappRegistered || sock?.user);
     const memory = process.memoryUsage();
     const dbConnected = mongoose.connection.readyState === 1;
     const checks = [connected, dbConnected, true, memory.heapUsed / Math.max(memory.heapTotal, 1) < 0.9];
     const health = Math.round(checks.filter(Boolean).length / checks.length * 100);
+    res.set('Cache-Control', 'no-store');
     res.json({
-        connected, online: connected, status: connected ? 'connected' : 'waiting',
+        serverOnline: true,
+        connected,
+        whatsappConnected: connected,
+        registered,
+        pairingRequired: !registered,
+        online: true,
+        status: connected ? 'connected' : registered ? 'reconnecting' : 'pairing_required',
+        whatsappStatus: connected ? 'connected' : registered ? 'reconnecting' : sock ? 'pairing_required' : 'starting',
         health, healthLabel: health >= 95 ? 'Excellent' : health >= 85 ? 'Healthy' : health >= 70 ? 'Degraded' : health >= 40 ? 'Unstable' : 'Critical',
         checks: { whatsapp: connected, mongodb: dbConnected, aiBridge: true, memoryHeadroom: Math.max(0, Math.min(100, Math.round((1 - memory.heapUsed / Math.max(memory.heapTotal, 1)) * 100))) },
         memory: { heapUsedMB: Math.round(memory.heapUsed / 1048576), heapTotalMB: Math.round(memory.heapTotal / 1048576), rssMB: Math.round(memory.rss / 1048576) },
@@ -8030,7 +8045,7 @@ button{
 
     <div class="status" id="systemStatus">
         <span class="status-dot"></span>
-        <span id="statusText">SYSTEM ONLINE</span>
+        <span id="statusText">CHECKING CONNECTION...</span>
     </div>
 </div>
 
@@ -8389,26 +8404,28 @@ async function requestPairCode(){
 
     try{
 
-        const response =
-            await fetch(
-                '/pair?number=' +
-                encodeURIComponent(number)
-            );
+        if (!/^\d{10,15}$/.test(number)) {
+            throw new Error('Enter a valid WhatsApp number with country code (10–15 digits).');
+        }
 
-        const text =
-            await response.text();
+        const response = await fetch(
+            '/pair?number=' + encodeURIComponent(number),
+            { cache: 'no-store' }
+        );
+        const data = await response.json();
 
-        code.textContent = text;
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'WhatsApp could not generate a pairing code.');
+        }
 
+        code.textContent = data.code;
         pairStatus.textContent = 'CODE READY';
 
     }catch(error){
 
         console.error(error);
 
-        code.textContent =
-            'Unable to generate pairing code.';
-
+        code.textContent = error.message || 'Unable to generate pairing code.';
         pairStatus.textContent = 'ERROR';
 
     }finally{
@@ -8928,54 +8945,51 @@ async function loadEventLogs(){
 ============================================================ */
 
 async function loadStatus(){
+    const statusText = document.getElementById('statusText');
+    const status = document.getElementById('systemStatus');
+    const pairButton = document.getElementById('pairButton');
+    const pairStatus = document.getElementById('pairStatus');
 
-    try{
+    try {
+        const response = await fetch('/api/status', { cache: 'no-store' });
+        if (!response.ok) throw new Error('Status check failed');
+        const data = await response.json();
 
-        const response =
-            await fetch('/api/status');
-
-        const data =
-            await response.json();
-
-        const statusText =
-            document.getElementById('statusText');
-
-        const status =
-            document.getElementById('systemStatus');
-
-        const connected =
-            Boolean(
-                data.connected ||
-                data.online ||
-                data.status === 'connected'
-            );
-
-        if(connected){
-
-            statusText.textContent =
-                'SYSTEM ONLINE';
-
-            status.style.color =
-                '#7dffb3';
-
-        }else{
-
-            statusText.textContent =
-                'SYSTEM OFFLINE';
-
-            status.style.color =
-                '#ff8198';
-
+        if (data.whatsappConnected) {
+            statusText.textContent = 'SERVER ONLINE • WHATSAPP CONNECTED';
+            status.style.color = '#7dffb3';
+            if (pairStatus) pairStatus.textContent = 'CONNECTED';
+            if (pairButton) {
+                pairButton.disabled = true;
+                pairButton.textContent = 'ALREADY CONNECTED';
+            }
+        } else if (data.registered) {
+            statusText.textContent = 'SERVER ONLINE • WHATSAPP RECONNECTING';
+            status.style.color = '#ffd166';
+            if (pairStatus) pairStatus.textContent = 'RECONNECTING';
+            if (pairButton) {
+                pairButton.disabled = true;
+                pairButton.textContent = 'RECONNECTING...';
+            }
+        } else if (data.serverOnline) {
+            statusText.textContent = 'SERVER ONLINE • PAIRING REQUIRED';
+            status.style.color = '#ffd166';
+            if (pairStatus && pairStatus.textContent !== 'REQUESTING' && pairStatus.textContent !== 'CODE READY') {
+                pairStatus.textContent = 'PAIRING REQUIRED';
+            }
+            if (pairButton) {
+                pairButton.disabled = false;
+                pairButton.textContent = 'GET PAIRING CODE';
+            }
+        } else {
+            statusText.textContent = 'SERVER STARTING...';
+            status.style.color = '#ffd166';
         }
-
-    }catch(error){
-
-        document.getElementById('statusText')
-            .textContent =
-            'SYSTEM OFFLINE';
-
+    } catch (error) {
+        statusText.textContent = 'STATUS CHECK UNAVAILABLE';
+        status.style.color = '#ff8198';
+        if (pairButton) pairButton.disabled = true;
     }
-
 }
 
 
@@ -9101,16 +9115,49 @@ statusTimer =
 
 // ... (rest of your code above)
 
-// ---------------- PAIR ----------------
+// ---------------- WHATSAPP PAIRING ----------------
 app.get('/pair', async (req, res) => {
-    const num = req.query.number?.replace(/[^0-9]/g,'');
-    if(!sock) return res.send("Bot starting...");
+    res.set('Cache-Control', 'no-store');
+    const num = String(req.query.number || '').replace(/[^0-9]/g, '');
 
-    try{
+    if (!/^\d{10,15}$/.test(num)) {
+        return res.status(400).json({ success: false, error: 'Enter a valid WhatsApp number with country code (10–15 digits, numbers only).' });
+    }
+    if (!sock) {
+        return res.status(503).json({ success: false, error: 'JARVIS is still starting. Wait a few seconds and try again.' });
+    }
+    if (whatsappRegistered || sock.user) {
+        return res.status(409).json({ success: false, error: 'This JARVIS session is already paired. A new pairing code is not required.' });
+    }
+    if (pairingCodeRequestInFlight) {
+        return res.status(429).json({ success: false, error: 'A pairing-code request is already in progress. Please wait a moment.' });
+    }
+    if (typeof sock.requestPairingCode !== 'function') {
+        return res.status(503).json({ success: false, error: 'The current WhatsApp connection is not ready to request a pairing code yet.' });
+    }
+
+    pairingCodeRequestInFlight = true;
+    try {
+        // Give the newly-created Baileys socket a moment to initialise its
+        // websocket before asking WhatsApp for a pairing code.
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        if (whatsappRegistered || sock?.user) {
+            return res.status(409).json({ success: false, error: 'The WhatsApp session became paired. No new code is needed.' });
+        }
         const code = await sock.requestPairingCode(num);
-        res.send(code);
-    }catch(e){
-        res.send("Error generating code");
+        return res.json({ success: true, code: String(code) });
+    } catch (error) {
+        const safeMessage = String(error?.message || 'Unknown pairing error')
+            .replace(/https?:\/\/\S+/gi, '[URL]')
+            .replace(/[\r\n\t]+/g, ' ')
+            .slice(0, 240);
+        console.error('[PAIRING] Pairing-code request failed:', safeMessage);
+        return res.status(502).json({
+            success: false,
+            error: safeMessage || 'WhatsApp could not generate a pairing code. Please retry.'
+        });
+    } finally {
+        pairingCodeRequestInFlight = false;
     }
 });
 
