@@ -38,9 +38,9 @@ test('format-specific prompts request valid machine-readable content', () => {
   assert.match(buildCreateFilePrompt('Create JSON', 'json', 'Data'), /only valid JSON/);
   assert.match(buildCreateFilePrompt('Create a ZIP', 'zip', 'Archive'), /"files"/);
   const websitePrompt = buildCreateFilePrompt('Build a complete responsive website', 'zip', 'Website');
-  assert.match(websitePrompt, /index\\.html/);
-  assert.match(websitePrompt, /styles\\.css/);
-  assert.match(websitePrompt, /script\\.js/);
+  assert.ok(websitePrompt.includes('index.html'));
+  assert.ok(websitePrompt.includes('styles.css'));
+  assert.ok(websitePrompt.includes('script.js'));
   assert.match(websitePrompt, /Do not omit CSS or JavaScript/);
 });
 
