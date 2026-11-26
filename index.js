@@ -895,7 +895,7 @@ agentTools.register({
         const parsedUrl = new URL(started.url);
         if (parsedUrl.protocol !== 'https:') throw new Error('The platform authorisation link must use HTTPS.');
         await context.sock.sendMessage(context.chatId, {
-                text: \`🔐 *Connect \${label} to JARVIS*\n\nTap the button below to authorise your own \${label} account. This connection belongs only to your WhatsApp account.\`,
+                text: '🔐 *Connect ' + label + ' to JARVIS*\n\nTap the button below to authorise your own ' + label + ' account. This connection belongs only to your WhatsApp account.',
             footer: 'Secure authorisation • You can disconnect later',
             templateButtons: [{
                 index: 1,
