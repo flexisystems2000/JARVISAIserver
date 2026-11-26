@@ -1090,7 +1090,12 @@ agentTools.register({
 // Command A Reasoning is JARVIS's lightweight internal thinker and ordinary
 // conversation model. Gemini remains behind askAI() for heavy generation tasks.
 const askInternalModel = createXKiroClient({ httpClient: axios });
-let xkiroFallbackNoticeLogged = false;
+let xkiroFallbackNoticeLogged = !String(process.env.XKIRO_API_KEY || '').trim();
+if (xkiroFallbackNoticeLogged) {
+    console.warn('[INTERNAL AI] XKIRO_API_KEY is not configured; Gemini fallback will keep JARVIS available.');
+} else {
+    console.log('[INTERNAL AI] xKiro enabled with model:', process.env.XKIRO_MODEL || 'cohere/command-a-reasoning');
+}
 const jarvisAgent = createAgentBrain({
     registry: agentTools,
     askModel: async (prompt, options = {}) => {
