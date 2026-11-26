@@ -37,6 +37,11 @@ test('format-specific prompts request valid machine-readable content', () => {
   assert.match(buildCreateFilePrompt('Create HTML', 'html', 'Page'), /complete, valid standalone HTML5 document/);
   assert.match(buildCreateFilePrompt('Create JSON', 'json', 'Data'), /only valid JSON/);
   assert.match(buildCreateFilePrompt('Create a ZIP', 'zip', 'Archive'), /"files"/);
+  const websitePrompt = buildCreateFilePrompt('Build a complete responsive website', 'zip', 'Website');
+  assert.match(websitePrompt, /index\\.html/);
+  assert.match(websitePrompt, /styles\\.css/);
+  assert.match(websitePrompt, /script\\.js/);
+  assert.match(websitePrompt, /Do not omit CSS or JavaScript/);
 });
 
 test('unsupported filename extensions are rejected', () => {
