@@ -699,6 +699,16 @@ const githubAgent = new GitHubAgent();
 const vercelAgent = new VercelAgent();
 const platformAuth = new PlatformAuth();
 const userPlatformConnections = new UserPlatformConnections({ mongoose, baseUrl: process.env.PLATFORM_OAUTH_BASE_URL });
+const githubFor = async (context = {}) => {
+    const actor = String(context.requestedBy || context.actor || '');
+    if (!actor) throw new Error('A WhatsApp user identity is required for GitHub access.');
+    const token = await userPlatformConnections.accessToken(actor, 'github');
+    const agent = new GitHubAgent({ token, owner: '' });
+    const profile = await agent.client().get('/user');
+    agent.owner = String(profile.data.login || '');
+    if (!agent.owner) throw new Error('GitHub did not return the connected account username.');
+    return agent;
+};
 const userApiTokenConnections = new UserApiTokenConnections({ mongoose });
 agentTools.register({
     name: 'image_generate',
@@ -800,127 +810,69 @@ agentTools.register({
 });
 agentTools.register({
     name: 'github_list_repositories',
-    description: 'List repositories accessible to the configured GitHub token.',
+    description: 'List repositories visible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
-    permissions: ['admin'],
-    handler: async () => githubAgent.listRepositories()
+    permissions: ['user'],
+    handler: async (_args, context) => (await githubFor(context)).listRepositories()
 });
 agentTools.register({
     name: 'github_create_repository',
-    description: 'Create a private-by-default GitHub repository under the authenticated user or configured GITHUB_OWNER. Requires explicit owner approval.',
+    description: 'Create a repository under the current WhatsApp user’s connected GitHub account. Private by default; requires approval.',
     parameters: { type: 'object', properties: { name: { type: 'string', minLength: 1, maxLength: 100 }, description: { type: 'string', maxLength: 350 }, isPrivate: { type: 'boolean' } }, required: ['name'], additionalProperties: false },
-    permissions: ['owner'],
+    permissions: ['user'],
     requiresApproval: true,
-    handler: async ({ name, description = '', isPrivate = true }) => githubAgent.createRepository({ name, description, isPrivate, approved: true })
+    handler: async ({ name, description = '', isPrivate = true }, context) => (await githubFor(context)).createRepository({ name, description, isPrivate, approved: true })
 });
 agentTools.register({
     name: 'github_inspect_tree',
-    description: 'List paths in a public GitHub repository tree. Private repositories require an administrator.',
+    description: 'List paths in a repository accessible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' } }, required: ['repo'], additionalProperties: false },
     permissions: ['user'],
-    handler: async (args, context) => {
-        const metadata = await githubAgent.getRepository(args.owner, args.repo);
-        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository inspection requires an authorised JARVIS administrator.');
-        return githubAgent.getTree(args.owner, args.repo, args.branch);
-    }
+    handler: async (args, context) => (await githubFor(context)).getTree(args.owner, args.repo, args.branch)
 });
 agentTools.register({
     name: 'github_read_file',
-    description: 'Read a file from a public GitHub repository. Private repositories require an administrator.',
+    description: 'Read a file from a repository accessible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, ref: { type: 'string' } }, required: ['repo','path'], additionalProperties: false },
     permissions: ['user'],
-    handler: async (args, context) => {
-        const metadata = await githubAgent.getRepository(args.owner, args.repo);
-        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository file access requires an authorised JARVIS administrator.');
-        return githubAgent.readFile(args.owner, args.repo, args.path, args.ref);
-    }
+    handler: async (args, context) => (await githubFor(context)).readFile(args.owner, args.repo, args.path, args.ref)
 });
 agentTools.register({
     name: 'github_repository_download',
-    description: 'Download a repository archive from GitHub and send it to the current WhatsApp chat. Public repositories are available to users; private repositories require an administrator.',
+    description: 'Download a repository archive accessible to the current WhatsApp user’s connected GitHub account and send it to this chat.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', minLength: 1, maxLength: 100 }, branch: { type: 'string', maxLength: 200 } }, required: ['repo'], additionalProperties: false },
     permissions: ['user'],
     handler: async ({ owner, repo, branch }, context) => {
         if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
-        const metadata = await githubAgent.getRepository(owner, repo);
-        if (metadata.private && !context.isAdmin && !context.isOwner) throw new Error('Private repository downloads require an authorised JARVIS administrator.');
-        const archive = await githubAgent.downloadRepositoryArchive(owner, repo, branch || metadata.default_branch);
+        const github = await githubFor(context);
+        const metadata = await github.getRepository(owner, repo);
+        const archive = await github.downloadRepositoryArchive(owner, repo, branch || metadata.default_branch);
         const filename = `${String(repo).replace(/[^A-Za-z0-9_.-]/g, '-')}-${String(archive.branch).replace(/[^A-Za-z0-9_.-]/g, '-')}.tar.gz`;
-        await context.sock.sendMessage(context.chatId, {
-            document: archive.buffer, mimetype: 'application/gzip', fileName: filename,
-            caption: `📦 *GitHub repository downloaded*\n\nRepository: ${archive.repository}\nBranch: ${archive.branch}\nArchive size: ${archive.size} bytes`
-        });
+        await context.sock.sendMessage(context.chatId, { document: archive.buffer, mimetype: 'application/gzip', fileName: filename, caption: `📦 *GitHub repository downloaded*\n\nRepository: ${archive.repository}\nBranch: ${archive.branch}\nArchive size: ${archive.size} bytes` });
         return { downloaded: true, repository: archive.repository, branch: archive.branch, filename, size: archive.size };
     }
 });
 agentTools.register({
-    name: 'website_create_and_deploy',
-    description: 'Generate a complete website from a natural-language specification and deploy a supported static website to Vercel, or deploy supplied static files. Production deployment requires explicit approval. Framework projects that need a build are not sent through the static uploader.',
-    parameters: { type: 'object', properties: { repo: { type: 'string', maxLength: 100 }, request: { type: 'string', minLength: 10, maxLength: 10000 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', maxLength: 240 }, content: { type: 'string', maxLength: 1000000 } }, required: ['path','content'], additionalProperties: false } } }, required: ['repo'], additionalProperties: false },
-    permissions: ['admin'],
-    requiresApproval: true,
-    handler: async ({ repo, request, files }, context) => {
-        if (request) {
-            const coding = new CodingAgent({ vercel: vercelAgent, askModel: prompt => askAIWithMemory(context.chatId, context.actor, prompt) });
-            return coding.createAndDeploy({ request, projectName: repo, approved: true });
-        }
-        if (!Array.isArray(files) || !files.length) throw new Error('Provide a website specification or a list of website files.');
-        return vercelAgent.deployFiles({ name: repo, files, production: true });
-    }
-});
-agentTools.register({
-    name: 'coding_project_create',
-    description: 'Build a complete multi-file software project from a natural-language request (website, full-stack app, API, Python/Node project, script, library, data project or source files), validate it, save a project record and deliver all files as a ZIP archive. Does not deploy or execute untrusted project code.',
-    parameters: { type: 'object', properties: { request: { type: 'string', minLength: 10, maxLength: 10000 }, projectName: { type: 'string', maxLength: 80 } }, required: ['request'], additionalProperties: false },
-    permissions: ['user'],
-    handler: async ({ request, projectName }, context) => {
-        if (!context.sock || !context.chatId) throw new Error('WhatsApp chat context is unavailable.');
-        const coding = new CodingAgent({ vercel: vercelAgent, askModel: prompt => askAIWithMemory(context.chatId, context.actor, prompt) });
-        const project = await coding.createProject({ request, projectName });
-        const apiKey = String(process.env.PIPER_API_KEY || '').trim();
-        if (!apiKey) throw new Error('PIPER_API_KEY is missing in the JARVIS hosting environment.');
-        const filename = project.name + '.zip';
-        const response = await axios.post(PIPER_DOCUMENT_API_URL + '/files/generate', {
-            filename, title: project.name, files: project.projectFiles
-        }, {
-            timeout: PIPER_DOCUMENT_TIMEOUT_MS, maxContentLength: 20 * 1024 * 1024, maxBodyLength: 20 * 1024 * 1024,
-            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey }
-        });
-        if (!response.data?.success || !response.data?.fileBase64) throw new Error(response.data?.error || 'Project archive service returned no ZIP file.');
-        const buffer = Buffer.from(response.data.fileBase64, 'base64');
-        if (buffer.subarray(0, 4).toString('hex') !== '504b0304') throw new Error('Project archive service returned an invalid ZIP file.');
-        await context.sock.sendMessage(context.chatId, {
-            document: buffer, mimetype: 'application/zip', fileName: response.data.filename || filename,
-            caption: '✅ *JARVIS Coding Agent*\n\nProject: ' + project.name + '\nType: ' + project.projectType + '\nFiles: ' + project.fileCount + '\n\nThe project files are packaged in this ZIP. No code was executed or deployed.'
-        });
-        return { created: true, project: project.name, projectType: project.projectType, fileCount: project.fileCount, filename: response.data.filename || filename };
-    }
-});
-agentTools.register({
     name: 'github_repository_deploy_to_vercel',
-    description: 'Read an authorised GitHub repository and deploy its source files to Vercel. Requires explicit approval.',
+    description: 'Deploy a repository accessible to the current WhatsApp user’s connected GitHub account to the configured Vercel account. Requires approval.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 100 } }, required: ['repo'], additionalProperties: false },
-    permissions: ['admin'], requiresApproval: true,
-    handler: async ({ owner, repo, branch }) => {
-      const metadata = await githubAgent.getRepository(owner, repo);
-      const tree = await githubAgent.getTree(owner, repo, branch || metadata.default_branch);
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, branch }, context) => {
+      const github = await githubFor(context);
+      const metadata = await github.getRepository(owner, repo);
+      const tree = await github.getTree(owner, repo, branch || metadata.default_branch);
       const excluded = /(^|\/)(node_modules|\.next|dist|build)(\/|$)/i;
       const sensitive = /(^|\/)(?:\.env(?:\..*)?|\.git|id_rsa|id_ed25519|secrets?\.(?:json|ya?ml)|credentials?\.(?:json|ya?ml))$/i;
       const eligible = tree.filter(item => item.type === 'blob' && !excluded.test(item.path));
       if (!eligible.length || eligible.length > 100) throw new Error('Repository must contain between 1 and 100 deployable files.');
-      // VercelAgent repeats this check for direct uploads from every entry point.
       const files = []; const textFiles = [];
       const textExtensions = new Set(['html','htm','css','js','mjs','cjs','json','md','txt','xml','yaml','yml','svg','ts','tsx','jsx','vue','svelte','php','py','java','cpp','sql','toml','webmanifest']);
       for (const item of eligible) {
         if (sensitive.test(item.path)) throw new Error(`Deployment blocked because the repository contains a sensitive file: ${item.path}`);
         if (item.size > 1000000) throw new Error(`Repository file ${item.path} exceeds the 1 MB limit.`);
         const extension = item.path.split('.').pop().toLowerCase();
-        if (textExtensions.has(extension)) {
-          const content = await githubAgent.readFile(owner, repo, item.path, branch || metadata.default_branch);
-          files.push({ path: item.path, content }); textFiles.push({ path: item.path, content });
-        } else {
-          files.push({ path: item.path, contentBase64: await githubAgent.readFileBase64(owner, repo, item.path, branch || metadata.default_branch) });
-        }
+        if (textExtensions.has(extension)) { const content = await github.readFile(owner, repo, item.path, branch || metadata.default_branch); files.push({ path: item.path, content }); textFiles.push({ path: item.path, content }); }
+        else files.push({ path: item.path, contentBase64: await github.readFileBase64(owner, repo, item.path, branch || metadata.default_branch) });
       }
       validateProjectFiles(textFiles, { maxFiles: 100, maxFileBytes: 1000000, maxTotalBytes: 8000000 });
       const deployment = await vercelAgent.deployFiles({ name: repo, files, production: true });
@@ -929,48 +881,87 @@ agentTools.register({
 });
 agentTools.register({
     name: 'github_write_file',
-    description: 'Create or update a file in an authorized GitHub repository. Requires repository write permission and explicit approval by the JARVIS owner/system admin or an admin of the requesting group.',
+    description: 'Create or update a file in a repository accessible to the current WhatsApp user’s connected GitHub account. Requires explicit approval.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, content: { type: 'string', maxLength: 50000 }, message: { type: 'string', maxLength: 200 }, branch: { type: 'string' } }, required: ['repo','path','content','message'], additionalProperties: false },
-    permissions: ['admin'],
-    requiresApproval: true,
-    handler: async args => githubAgent.writeFile(args.owner, args.repo, args.path, args.content, args.message, args.branch, true)
+    permissions: ['user'], requiresApproval: true,
+    handler: async (args, context) => (await githubFor(context)).writeFile(args.owner, args.repo, args.path, args.content, args.message, args.branch, true)
 });
 agentTools.register({
     name: 'github_batch_write_files',
-    description: 'Upload or replace up to 100 files in one GitHub commit on a selected branch. Requires repository write permission and explicit approval.',
+    description: 'Upload or replace up to 100 files in one commit to a repository accessible to the current WhatsApp user’s connected GitHub account. Requires explicit approval.',
     parameters: { type: 'object', properties: { owner: { type: 'string', maxLength: 100 }, repo: { type: 'string', maxLength: 100 }, branch: { type: 'string', maxLength: 200 }, message: { type: 'string', minLength: 1, maxLength: 200 }, files: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 240 }, content: { type: 'string', maxLength: 1000000 }, contentBase64: { type: 'string', maxLength: 1400000 } }, required: ['path'], additionalProperties: false } } }, required: ['repo','message','files'], additionalProperties: false },
-    permissions: ['admin'],
-    requiresApproval: true,
-    handler: async ({ owner, repo, branch, message, files }) => githubAgent.batchWriteFiles(owner, repo, files, message, branch, true)
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, branch, message, files }, context) => (await githubFor(context)).batchWriteFiles(owner, repo, files, message, branch, true)
 });
 agentTools.register({
     name: 'github_delete_file',
-    description: 'Delete a file from an authorized GitHub repository. Requires repository administrator permission and explicit approval by the JARVIS owner/system admin or an admin of the requesting group.',
+    description: 'Delete a file from a repository accessible to the current WhatsApp user’s connected GitHub account. Requires repository admin permission and explicit approval.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, path: { type: 'string' }, message: { type: 'string', maxLength: 200 }, branch: { type: 'string' } }, required: ['repo','path','message'], additionalProperties: false },
-    permissions: ['admin'],
-    requiresApproval: true,
-    handler: async args => githubAgent.deleteFile(args.owner, args.repo, args.path, args.message, args.branch, true)
+    permissions: ['user'], requiresApproval: true,
+    handler: async (args, context) => (await githubFor(context)).deleteFile(args.owner, args.repo, args.path, args.message, args.branch, true)
 });
 agentTools.register({
     name: 'github_search_code',
-    description: 'Search source code in repositories accessible to the configured GitHub account.',
+    description: 'Search source code in repositories accessible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-    permissions: ['admin'],
-    handler: async ({ query }) => githubAgent.searchCode(query)
+    permissions: ['user'],
+    handler: async ({ query }, context) => (await githubFor(context)).searchCode(query)
 });
 agentTools.register({
     name: 'github_issues',
-    description: 'List issues for a repository.',
+    description: 'List issues for a repository accessible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
-    handler: async args => githubAgent.listIssues(args.owner,args.repo,args.state)
+    permissions: ['user'],
+    handler: async (args, context) => (await githubFor(context)).listIssues(args.owner,args.repo,args.state)
 });
 agentTools.register({
     name: 'github_pull_requests',
-    description: 'List pull requests for a repository.',
+    description: 'List pull requests for a repository accessible to the current WhatsApp user’s connected GitHub account.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, state: { type: 'string', enum: ['open','closed','all'] } }, required: ['repo'], additionalProperties: false },
-    permissions: ['owner'],
-    handler: async args => githubAgent.listPullRequests(args.owner,args.repo,args.state)
+    permissions: ['user'],
+    handler: async (args, context) => (await githubFor(context)).listPullRequests(args.owner,args.repo,args.state)
+});
+agentTools.register({
+    name: 'github_create_pull_request',
+    description: 'Create a pull request between two branches in a repository accessible to the current WhatsApp user. Requires explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, title: { type: 'string', minLength: 1, maxLength: 256 }, head: { type: 'string', minLength: 1, maxLength: 256 }, base: { type: 'string', minLength: 1, maxLength: 256 }, body: { type: 'string', maxLength: 20000 } }, required: ['repo','title','head','base'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, title, head, base, body = '' }, context) => (await githubFor(context)).createPullRequest(owner, repo, title, head, base, body, true)
+});
+agentTools.register({
+    name: 'github_enable_pages',
+    description: 'Enable or update GitHub Pages for a repository accessible to the current WhatsApp user. Requires repository administrator permission and explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string', maxLength: 200 }, path: { type: 'string', enum: ['/','/docs'] } }, required: ['repo'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, branch = 'main', path = '/' }, context) => (await githubFor(context)).enablePages(owner, repo, branch, path, true)
+});
+agentTools.register({
+    name: 'github_list_workflows',
+    description: 'List GitHub Actions workflows configured in a repository accessible to the current WhatsApp user.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' } }, required: ['repo'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ owner, repo }, context) => (await githubFor(context)).listWorkflows(owner, repo)
+});
+agentTools.register({
+    name: 'github_list_workflow_runs',
+    description: 'List recent GitHub Actions runs for a repository, optionally filtered by branch.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string' }, perPage: { type: 'integer', minimum: 1, maximum: 100 } }, required: ['repo'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ owner, repo, branch, perPage }, context) => (await githubFor(context)).listWorkflowRuns(owner, repo, branch, perPage)
+});
+agentTools.register({
+    name: 'github_dispatch_workflow',
+    description: 'Trigger a workflow_dispatch GitHub Actions workflow in a repository. Requires explicit approval and a workflow configured with workflow_dispatch.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, workflow: { type: 'string', maxLength: 200 }, ref: { type: 'string', maxLength: 200 }, inputs: { type: 'object' } }, required: ['repo','workflow','ref'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, workflow, ref, inputs = {} }, context) => (await githubFor(context)).dispatchWorkflow(owner, repo, workflow, ref, inputs, true)
+});
+agentTools.register({
+    name: 'github_merge_pull_request',
+    description: 'Merge a pull request after checks and reviews are confirmed. Requires explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, number: { type: 'integer', minimum: 1 }, method: { type: 'string', enum: ['merge','squash','rebase'] } }, required: ['repo','number'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, number, method = 'squash' }, context) => (await githubFor(context)).mergePullRequest(owner, repo, number, method, true)
 });
 agentTools.register({
     name: 'platform_list_connectors',
