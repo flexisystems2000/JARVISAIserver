@@ -34,7 +34,7 @@ test('file names and titles are extracted safely', () => {
 test('format-specific prompts request valid machine-readable content', () => {
   assert.match(buildCreateFilePrompt('Make a spreadsheet', 'xlsx', 'Spreadsheet'), /valid JSON tabular data/);
   assert.match(buildCreateFilePrompt('Make slides', 'pptx', 'Slides'), /"slides"/);
-  assert.match(buildCreateFilePrompt('Create HTML', 'html', 'Page'), /sanitise the markup/);
+  assert.match(buildCreateFilePrompt('Create HTML', 'html', 'Page'), /complete, valid standalone HTML5 document/);
   assert.match(buildCreateFilePrompt('Create JSON', 'json', 'Data'), /only valid JSON/);
   assert.match(buildCreateFilePrompt('Create a ZIP', 'zip', 'Archive'), /"files"/);
 });
