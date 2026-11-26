@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { CREATE_FILE_FORMATS, validateCreateFileRequest, inferCreateFileFormat, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, validateGeneratedFileContent } = require('../fileGenerator');
+const { CREATE_FILE_FORMATS, validateCreateFileRequest, inferCreateFileFormat, extractCreateFileName, deriveCreateFileTitle, buildCreateFilePrompt, isWebsiteProjectRequest, validateGeneratedFileContent } = require('../fileGenerator');
 
 test('file generator supports document, office, data, code, vector and archive formats', () => {
   for (const format of ['pdf','docx','xlsx','pptx','csv','txt','md','html','json','xml','yaml','yml','css','js','py','php','java','cpp','sql','svg','zip','rtf','ts','tsx','jsx','c','h','cs','go','rs','rb','sh','ps1','bat','toml','ini','conf','properties','tex','mdx','jsonl']) assert.ok(CREATE_FILE_FORMATS[format], `Missing ${format}`);
@@ -16,6 +16,10 @@ test('file format inference honours extensions and natural descriptions', () => 
   assert.equal(inferCreateFileFormat('Create a Python script'), 'py');
   assert.equal(inferCreateFileFormat('Create a CSS file'), 'css');
   assert.equal(inferCreateFileFormat('Create a ZIP archive'), 'zip');
+  assert.equal(inferCreateFileFormat('Build a complete responsive HTML CSS JavaScript website'), 'zip');
+  assert.equal(inferCreateFileFormat('Create a multi-page website for my school'), 'zip');
+  assert.equal(inferCreateFileFormat('Create an HTML page explaining websites'), 'html');
+  assert.equal(isWebsiteProjectRequest('Build a complete responsive website'), true);
   assert.equal(inferCreateFileFormat('Create a TypeScript file'), 'ts');
   assert.equal(inferCreateFileFormat('Create an RTF document'), 'rtf');
   assert.equal(inferCreateFileFormat('Create a document about algebra'), 'pdf');
