@@ -957,6 +957,37 @@ agentTools.register({
     handler: async ({ owner, repo, workflow, ref, inputs = {} }, context) => (await githubFor(context)).dispatchWorkflow(owner, repo, workflow, ref, inputs, true)
 });
 agentTools.register({
+    name: 'github_create_branch',
+    description: 'Create a branch in a repository accessible to the current WhatsApp user’s connected GitHub account. Requires explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, branch: { type: 'string', minLength: 1, maxLength: 200 }, from: { type: 'string', maxLength: 200 } }, required: ['repo','branch'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, branch, from = 'main' }, context) => {
+        if (!/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes('..')) throw new Error('Invalid branch name.');
+        const github = await githubFor(context);
+        await github.assertRepositoryPermission(owner, repo, 'push');
+        const result = await github.createBranch(owner, repo, branch, from);
+        return { created: true, branch, repository: `${owner || github.owner}/${repo}`, sha: result.object?.sha || null };
+    }
+});
+agentTools.register({
+    name: 'github_pages_status',
+    description: 'Check whether GitHub Pages is enabled and retrieve its current publishing configuration and URL.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' } }, required: ['repo'], additionalProperties: false },
+    permissions: ['user'],
+    handler: async ({ owner, repo }, context) => {
+        const github = await githubFor(context);
+        const pages = await github.getPages(owner, repo);
+        return pages ? { enabled: true, url: pages.html_url || null, status: pages.status || null, source: pages.source || null, buildType: pages.build_type || null } : { enabled: false };
+    }
+});
+agentTools.register({
+    name: 'github_rerun_failed_actions',
+    description: 'Rerun failed jobs from a GitHub Actions run. Requires explicit approval.',
+    parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, runId: { type: 'integer', minimum: 1 } }, required: ['repo','runId'], additionalProperties: false },
+    permissions: ['user'], requiresApproval: true,
+    handler: async ({ owner, repo, runId }, context) => (await githubFor(context)).rerunFailedWorkflowJobs(owner, repo, runId, true)
+});
+agentTools.register({
     name: 'github_merge_pull_request',
     description: 'Merge a pull request after checks and reviews are confirmed. Requires explicit approval.',
     parameters: { type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, number: { type: 'integer', minimum: 1 }, method: { type: 'string', enum: ['merge','squash','rebase'] } }, required: ['repo','number'], additionalProperties: false },
