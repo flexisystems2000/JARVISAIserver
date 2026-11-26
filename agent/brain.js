@@ -94,6 +94,21 @@ function normalizeToolArguments(tool, args, schema) {
     for (const key of ['content', 'description', 'topic', 'prompt', 'file_name', 'filename', 'title', 'format', 'file_type']) delete normalized[key];
   }
 
+  // GitHub contents writes require a commit message. Models sometimes omit this
+  // metadata even after schema discovery; derive a safe, descriptive message
+  // from the requested path instead of failing an otherwise complete build.
+  if ((schema?.required || []).includes('message') && properties.message && !(typeof normalized.message === 'string' && normalized.message.trim())) {
+    const target = typeof normalized.path === 'string' && normalized.path.trim()
+      ? normalized.path.trim()
+      : Array.isArray(normalized.files) && normalized.files.length
+        ? `${normalized.files.length} project file(s)`
+        : typeof normalized.repo === 'string' && normalized.repo.trim()
+          ? normalized.repo.trim()
+          : 'project files';
+    const verb = tool.includes('delete') ? 'Delete' : 'Update';
+    normalized.message = `${verb} ${target}`.slice(0, 200);
+  }
+
   // The planner sometimes calls the repository field `repository`; the registered GitHub tools use `repo`.
   if (properties.repo && normalized.repo === undefined && typeof normalized.repository === 'string') {
     const value = normalized.repository.trim();
@@ -156,6 +171,7 @@ function createAgentBrain({ registry, askModel } = {}) {
       };
       try { validateSteps(steps); }
       catch (error) {
+        console.warn('[AGENT] Tool argument validation failed:', { tool: steps[0]?.tool || null, reason: error.message });
         if (plan.action !== 'tool' || steps.length !== 1 || !toolMap.has(steps[0]?.tool)) throw new Error(`Invalid plan after one correction attempt: ${error.message}`);
         const correctionPrompt = boundedSchemaPrompt({ system: SYSTEM, schemas: [toolMap.get(steps[0].tool)], message, instruction: `The proposed arguments failed validation: ${error.message}. Correct them once and return one action=tool JSON object.` });
         const corrected = parsePlan(await askModel(correctionPrompt, { responseFormat: 'json' }));
@@ -163,9 +179,12 @@ function createAgentBrain({ registry, askModel } = {}) {
         steps = [{ tool: corrected.tool, arguments: normalizeToolArguments(corrected.tool, corrected.arguments || {}, toolMap.get(corrected.tool).parameters) }];
         try { validateSteps(steps); } catch (secondError) { throw new Error(`Invalid plan after one correction attempt: ${secondError.message}`); }
       }
+      console.info('[AGENT] Validated plan:', steps.map(step => ({ tool: step.tool, argumentKeys: Object.keys(step.arguments || {}) })));
       const outcomes = [];
       for (const step of steps) {
+        console.info(`[AGENT] Executing tool=${step.tool} argumentKeys=${Object.keys(step.arguments || {}).join(',')}`);
         const outcome = await registry.execute(step.tool, step.arguments || {}, context);
+        console.info(`[AGENT] Tool completed tool=${step.tool} success=${outcome?.success !== false}`);
         outcomes.push({ tool: step.tool, outcome });
         if (outcome?.success === false && outcome?.result?.approvalRequired) {
           const reply = ['website_create_and_deploy', 'github_repository_deploy_to_vercel'].includes(step.tool)
