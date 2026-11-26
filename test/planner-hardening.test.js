@@ -92,12 +92,12 @@ test('catalog entries remain compact and omit full schemas', () => {
   assert.equal(Object.hasOwn(catalog[0],'parameters'),false);
 });
 
-test('bounded prompt stays within the configured 32k maximum budget', () => {
+test('bounded prompt stays within the configured 6k default budget', () => {
   const old=process.env.JARVIS_AGENT_PROMPT_MAX_CHARS;
   process.env.JARVIS_AGENT_PROMPT_MAX_CHARS='35000';
   try {
     const prompt=boundedPrompt({catalog:'catalog',history:'h'.repeat(50000),message:'user request'});
-    assert.ok(prompt.length<=32000); assert.match(prompt,/CURRENT USER REQUEST/);
+    assert.ok(prompt.length<=10000); assert.match(prompt,/CURRENT USER REQUEST/);
   } finally { if(old===undefined) delete process.env.JARVIS_AGENT_PROMPT_MAX_CHARS; else process.env.JARVIS_AGENT_PROMPT_MAX_CHARS=old; }
 });
 
@@ -112,7 +112,7 @@ test('bounded prompt preserves the tail of an oversized current user request', (
 
 test('bounded prompt trims old conversation before the current request', () => {
   const prompt=boundedPrompt({history:'OLD-CONTEXT-'.repeat(2000),message:'CURRENT-NEEDLE'});
-  assert.ok(prompt.length<=40000); assert.ok(prompt.includes('CURRENT-NEEDLE'));
+  assert.ok(prompt.length<=6000); assert.ok(prompt.includes('CURRENT-NEEDLE'));
 });
 
 test('parser accepts fenced and embedded JSON but rejects arrays', () => {
